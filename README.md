@@ -10,8 +10,8 @@ and their functional specifications to suit my needs with no notice.
 
 ## Repository Layout
 
-- **boost-converter/** – example notebooks for boost converters (e.g. `LM3478MM_design.ipynb`).
-- **flyback-converter/** – notebooks for flyback converters (e.g. `LT8300_design.ipynb`).
+- **boost_converter/** – example notebooks for boost converters (e.g. `LM3478MM_design.ipynb`).
+- **flyback_converter/** – notebooks for flyback converters (e.g. `LT8300_design.ipynb`).
 - **utils/** – general utilities such as `rounding.py` and supporting notebooks.
 
 ## Installing Requirements
@@ -33,7 +33,7 @@ Start Jupyter and open the notebook of interest:
 jupyter notebook
 ```
 
-The notebooks can be found under `boost-converter/`, `flyback-converter/` and
+The notebooks can be found under `boost_converter/`, `flyback_converter/` and
 `utils/`.
 
 ## Using the Utility Module

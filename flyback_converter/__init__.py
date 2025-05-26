@@ -1,6 +1,5 @@
-from importlib import import_module
+"""Flyback converter design utilities."""
 
-_pkg = import_module('flyback-converter')
+from . import lt8300
 
-lt8300 = _pkg.lt8300
-__all__ = ['lt8300']
+__all__ = ["lt8300"]

@@ -1,7 +1,5 @@
-from importlib import import_module
+"""Boost converter design utilities."""
 
-# Alias package to allow importing boost_converter.lm3478
-_pkg = import_module('boost-converter')
+from . import lm3478
 
-lm3478 = _pkg.lm3478
-__all__ = ['lm3478']
+__all__ = ["lm3478"]
