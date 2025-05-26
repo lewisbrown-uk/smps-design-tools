@@ -4,6 +4,10 @@ Design tools for switched-mode power supplies.  The repository contains a set of
 Jupyter notebooks for common converter topologies and a small utility module
 used by those notebooks.
 
+I maintain these for my own use and make no guarantees as to their quality or
+suitability for any purpose.  I may change the signatures of the libraries 
+and their functional specifications to suit my needs with no notice.
+
 ## Repository Layout
 
 - **boost-converter/** – example notebooks for boost converters (e.g. `LM3478MM_design.ipynb`).
