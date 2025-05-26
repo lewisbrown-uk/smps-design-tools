@@ -130,8 +130,6 @@ def resistor_divider(V_in, V_out, I_min, I_max, e_series=12, num_results=10, imp
             for exp_b in range(0, 8):
                 Rt = R1 * 10**exp_t
                 Rb = R2 * 10**exp_b
-                if Rt == 4.3e6 and Rb == 18e3:
-                    pass
                 V = V_in * Rb/(Rt+Rb)
                 I = V_in/(Rt+Rb)
                 if implied_V_in:
