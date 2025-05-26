@@ -41,6 +41,15 @@ in your own scripts or notebooks as follows:
 from utils.rounding import resistor_divider, closest_E_series_value
 ```
 
+## Testing
+
+Install the dependencies listed in `requirements.txt` and run `pytest`:
+
+```bash
+pip install -r requirements.txt
+pytest
+```
+
 ## License
 
 This project is released to the public domain under [The Unlicense](LICENSE).
