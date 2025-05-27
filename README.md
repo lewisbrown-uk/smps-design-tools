@@ -12,6 +12,8 @@ and their functional specifications to suit my needs with no notice.
 
 - **boost_converter/** – example notebooks for boost converters (e.g. `LM3478MM_design.ipynb`).
 - **flyback_converter/** – notebooks for flyback converters (e.g. `LT8300_design.ipynb`).
+- **controllers/** – dataclass definitions for supported controllers.
+- **topologies/** – generic design equations shared across controllers.
 - **utils/** – general utilities such as `rounding.py` and supporting notebooks.
 
 ## Installing Requirements
