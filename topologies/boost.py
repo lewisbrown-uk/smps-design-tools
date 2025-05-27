@@ -1,10 +1,12 @@
-"""Design formulas for the LM3478 boost converter."""
+"""Generic boost-converter design equations."""
 
 import math
+from typing import Optional
+from controllers import Controller
 
 
 def duty_cycle(V_in: float, V_out: float, V_q: float = 0.0, V_f: float = 0.0) -> float:
-    """Calculate continuous conduction mode duty cycle."""
+    """Continuous conduction mode duty cycle."""
     return 1 - (V_in - V_q) / (V_out + V_f)
 
 
@@ -28,13 +30,20 @@ def diode_peak_current(I_L_peak: float, D: float, I_out: float) -> float:
     return I_L_peak - D * I_out
 
 
-def sense_resistor(V_sense: float, ratio_V_sl: float, I_limit: float, D: float) -> float:
-    """Calculate sense resistor value for a desired current limit."""
+def sense_resistor(controller: Controller, I_limit: float, D: float) -> float:
+    """Sense resistor value for the desired current limit."""
+    if controller.V_sense is None or controller.ratio_V_sl is None:
+        raise ValueError("Controller lacks sense-resistor parameters")
+    V_sense = controller.V_sense
+    ratio_V_sl = controller.ratio_V_sl
     return (V_sense - (D * V_sense * ratio_V_sl)) / I_limit
 
 
-def sense_resistor_limit(V_sl: float, f_sw: float, L: float, V_out: float, V_in: float) -> float:
+def sense_resistor_limit(controller: Controller, f_sw: float, L: float, V_out: float, V_in: float) -> float:
     """Maximum sense resistor before external slope compensation is required."""
+    if controller.V_sl is None:
+        raise ValueError("Controller lacks slope compensation voltage")
+    V_sl = controller.V_sl
     return (2 * V_sl * f_sw * L) / (V_out - 2 * V_in)
 
 
