@@ -44,7 +44,7 @@ LT8300 = Controller(
 LM5156 = Controller(
     name="LM5156",
     topologies=("boost", "flyback",),
-    v_ref=1.0,
+    V_ref=1.0,
     V_sense=100e-3,
     f_sw_range=(100e3, 2.2e6),
 )

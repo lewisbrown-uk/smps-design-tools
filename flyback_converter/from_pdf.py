@@ -6,50 +6,16 @@ Compute boundary and steady-state parameters for a flyback converter
 in DCM and CCM, per the equations in the Flyback.pdf (stades Flyback DCM2).
 """
 
-import math
 import argparse
-
-def boundary_duty_cycle(Vin, Vout, Nps):
-    """
-    D_BOUND = Nps * Vout / (Nps * Vout + Vin)
-    """
-    return (Nps * Vout) / (Nps * Vout + Vin)
-
-def dt_cycle(D, Fsw):
-    """
-    dt = D / F_sw
-    """
-    return D / Fsw
-
-def peak_current(Vin, Lp, D, Fsw):
-    """
-    I_PK = (Vin/Lp) * dt = Vin * D / (Lp * Fsw)
-    """
-    return Vin * D / (Lp * Fsw)
-
-def energy_inductor(Lp, Ipk):
-    """
-    E = 1/2 * Lp * Ipk^2
-    """
-    return 0.5 * Lp * Ipk**2
-
-def boundary_power(Vin, D, Lp, Fsw):
-    """
-    P_BOUNDARY = Vin^2 * D^2 / (2 * Lp * Fsw)
-    """
-    return Vin**2 * D**2 / (2 * Lp * Fsw)
-
-def voltage_ratio_DCM(D, Rload, Lp, Fsw):
-    """
-    Vout/Vin (DCM) = D * sqrt(Rload / (2 * Lp * Fsw))
-    """
-    return D * math.sqrt(Rload / (2 * Lp * Fsw))
-
-def voltage_ratio_CCM(D, Nps):
-    """
-    Vout/Vin (CCM) = (D / Nps) / (1 - D)
-    """
-    return (D / Nps) / (1 - D)
+from topologies.flyback import (
+    boundary_duty_cycle,
+    dt_cycle,
+    peak_current,
+    energy_inductor,
+    boundary_power,
+    voltage_ratio_DCM,
+    voltage_ratio_CCM,
+)
 
 def main():
     p = argparse.ArgumentParser(description="Flyback converter boundary & ratio calcs")
