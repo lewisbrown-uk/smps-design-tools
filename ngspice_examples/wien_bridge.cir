@@ -1,0 +1,36 @@
+* Diode-limited Wien bridge oscillator
+* f0 = 1 / (2*pi*R*C) = 1 kHz  (R=10k, C=15.915n)  -> 100 cycles = 100 ms
+
+* --- Wien positive-feedback network: out -> non-inverting input (np) ---
+* Series arm (high-pass): R1 in series with C1
+* Shunt arm (low-pass):   R2 in parallel with C2
+R1   out  ns   10k
+C1   ns   np   15.915n  IC=0
+R2   np   0    10k
+C2   np   0    15.915n  IC=10m       ; small power-on charge on shunt cap kicks startup
+
+* --- Negative feedback with antiparallel diode amplitude clamp ---
+* Small-signal gain = 1 + (Rfa+Rfb)/Rg = 1 + 22k/10k = 3.2  (just above 3 for startup)
+* Diodes clamp the voltage across Rfb to ~Vd, lowering effective gain to ~3
+Rg   nn   0    10k
+Rfa  nn   fb   10k
+Rfb  fb   out  12k
+D1   fb   out  Dmod
+D2   out  fb   Dmod
+
+* --- Behavioural op-amp: A0=1e5, +/-15 V rails, 100 kHz pole, unity-gain buffer ---
+Bgain oe   0   V = max(-15, min(15, 1e5*(V(np)-V(nn))))
+Rop   oe   oa  1k
+Cop   oa   0   1.59n     IC=0
+Ebuf  out  0   oa  0     1.0
+
+.model Dmod D(IS=1e-14 N=1)
+
+.tran 10u 100m UIC
+
+.control
+run
+wrdata wien_tran.data v(out) v(np) v(fb)
+.endcontrol
+
+.end
