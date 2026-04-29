@@ -58,10 +58,10 @@ C_HF  = 1.6e-9              # HF rolloff at 1/(2*pi*R_PID*C_HF) = 100 Hz
 
 T_END = 5.000
 
-# TLV9104 input offset voltage: typ +/-0.4 mV, max +/-4 mV. We use the worst
-# case to expose integrator-windup-from-offset.
+# TLV9104 input offset voltage: typ +/-0.3 mV, max +/-1.5 mV (datasheet).
+# Use worst case to expose integrator-windup-from-offset.
 OPAMP = ("uopamp_lvl2 Avol=3.16meg GBW=1meg Rin=100g Rout=10 "
-         "Iq=600u Ilimit=1 Vrail=100m Vmax=20 Vos=4m")
+         "Iq=600u Ilimit=1 Vrail=100m Vmax=20 Vos=1.5m")
 
 
 def make_netlist(data_path: Path) -> str:
