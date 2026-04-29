@@ -61,3 +61,45 @@ if rows:
                      "overshoot", "t_95tar", "t_set5K", "V_ctl"])
 else:
     print("(loop_bw_sweep.csv not found)")
+print()
+
+print("=" * 78)
+print("Bang-bang (option C) sweep — V_preset x T_ramp at high preset values")
+print("=" * 78)
+rows = load(HERE / "bang_bang_sweep.csv")
+if rows:
+    nice = [{
+        "V_preset": fmt_float(r["v_preset"], "{:.2f}V"),
+        "T_ramp":   fmt_float(float(r["t_ramp"]) * 1e3, "{:.0f}ms"),
+        "T_peak":   fmt_float(r["T_peak"], "{:.0f}K"),
+        "T_final":  fmt_float(r["T_final"], "{:.0f}K"),
+        "overshoot": fmt_float(r["T_overshoot"], "{:+.0f}K"),
+        "t_95tar":  fmt_float(float(r["t_95target"]) * 1e3, "{:.0f}ms"),
+        "t_set5K":  fmt_float(float(r["t_settle_5K"]) * 1e3, "{:.0f}ms"),
+        "V_ctl":    fmt_float(r["v_ctl_final"], "{:+.3f}V"),
+    } for r in rows]
+    fmt_table(nice, ["V_preset", "T_ramp", "T_peak", "T_final",
+                     "overshoot", "t_95tar", "t_set5K", "V_ctl"])
+else:
+    print("(bang_bang_sweep.csv not found)")
+print()
+
+print("=" * 78)
+print("Pre-heat boost (option D) sweep — P_boost x t_boost")
+print("=" * 78)
+rows = load(HERE / "preheat_sweep.csv")
+if rows:
+    nice = [{
+        "P_boost": fmt_float(float(r["p_boost"]) * 1e3, "{:.0f}mW"),
+        "t_boost": fmt_float(float(r["t_boost"]) * 1e3, "{:.0f}ms"),
+        "T_peak":  fmt_float(r["T_peak"], "{:.0f}K"),
+        "T_final": fmt_float(r["T_final"], "{:.0f}K"),
+        "overshoot": fmt_float(r["T_overshoot"], "{:+.0f}K"),
+        "t_95tar":  fmt_float(float(r["t_95target"]) * 1e3, "{:.0f}ms"),
+        "t_set5K":  fmt_float(float(r["t_settle_5K"]) * 1e3, "{:.0f}ms"),
+        "V_ctl":    fmt_float(r["v_ctl_final"], "{:+.3f}V"),
+    } for r in rows]
+    fmt_table(nice, ["P_boost", "t_boost", "T_peak", "T_final",
+                     "overshoot", "t_95tar", "t_set5K", "V_ctl"])
+else:
+    print("(preheat_sweep.csv not found)")
