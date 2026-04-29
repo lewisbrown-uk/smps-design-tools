@@ -13,8 +13,13 @@ def fmt_table(rows, keys):
         print(line([r[k] for k in keys]))
 
 def fmt_float(x, fmt="{:.2f}"):
-    try: return fmt.format(float(x))
-    except: return str(x)
+    try:
+        v = float(x)
+        if v != v:  # NaN
+            return "—"
+        return fmt.format(v)
+    except:
+        return str(x)
 
 def load(p):
     if not p.exists(): return None
