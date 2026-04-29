@@ -1,0 +1,15 @@
+* Single-pole RC high-pass filter
+* fc = 1 / (2*pi*R*C) = 1 / (2*pi * 1k * 159.15n) ~= 1 kHz
+
+Vin in 0 AC 1
+C1  in  out 159.15n
+R1  out 0   1k
+
+.ac dec 40 1 1Meg
+
+.control
+run
+wrdata highpass_ac.data v(out)
+.endcontrol
+
+.end
