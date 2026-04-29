@@ -49,6 +49,10 @@ C_AP = 100e-9
 # Loop integrator (~5 Hz bandwidth)
 R_INT = 100e3
 C_INT = 1.0 / (2 * np.pi * 5.0 * R_INT)
+# PID extras: R_P in series with C_INT in feedback path adds proportional
+# term; C_D in parallel with R_INT in input path adds derivative term.
+R_PID = 1e6                 # Kp ~ R_PID/R_INT = 10
+C_PID = 1e-9                # Kd = R_PID * C_PID = 1 ms (~1% of tau_th)
 
 T_END = 2.500
 
@@ -132,16 +136,17 @@ XU_dem vplus n_dem_minus vcc vee n_demout {OPAMP}
 * V_ctl_raw = -1/(R*C) * integral(V_demout). Cold filament: V_demout < 0,
 * so V_ctl_raw integrates positive. We want V_ctl negative when cold so
 * the JFET stays pinched off. Wire B_invert to flip sign.
-R_intin n_demout n_int_minus {R_INT:.6g}
-* IC and anti-windup limit chosen to bound max filament drive. At
-* V_ctl = -1.0 V the JFET R_DS ~= 1 kohm (using J201 Vto=-1.5,
-* Beta=1e-3 in the linear region), giving an all-pass corner near
-* 1.6 kHz and ~55% of the maximum bridge differential. That delivers
-* roughly 1.5x the steady-state filament power -- enough for fast
-* warm-up but with bounded overshoot instead of running at full rail.
-* IC on the cap = V(n_int_minus) - V(v_int_out) = 0 - (+1.0) = -1.0
-* sets V(v_int_out) = +1.0 at t=0 -> V_ctl = -1.0.
-C_intfb n_int_minus v_int_out {C_INT:.6e}  IC=-1.0
+* PID compensator (single-op-amp form):
+*   Input: R_INT || C_PID  (the parallel cap adds derivative action)
+*   Feedback: R_PID in series with C_INT (the series R adds proportional)
+* Transfer function: H(s) = -(R_PID + 1/sC_INT)(1 + sR_INT*C_PID) / R_INT
+*   Ki = 1/(R_INT * C_INT)         integrator (DC dominates)
+*   Kp = R_PID/R_INT + C_PID/C_INT proportional (mid-band)
+*   Kd = R_PID * C_PID             derivative (HF, fights overshoot)
+R_intin  n_demout n_int_minus {R_INT:.6g}
+C_intin  n_demout n_int_minus {C_PID:.6e}
+R_intfb  n_int_pidp v_int_out {R_PID:.6g}
+C_intfb  n_int_minus n_int_pidp {C_INT:.6e}  IC=-1.0
 XU_int 0 n_int_minus vcc vee v_int_out {OPAMP}
 
 * Anti-windup: clamp v_int_out at [0, +1.0] V to match the V_ctl range.
