@@ -25,7 +25,8 @@ fs = 200_000
 t = np.arange(t_raw[0], t_raw[-1], 1 / fs)
 x = np.interp(t, t_raw, vout_raw)
 
-# STFT: 50 ms window -> 25 Hz frequency resolution
+# 40 ms window (40 cycles at 1 kHz, 25 Hz bin) -- keep the bin narrow
+# enough that fundamental leakage is well below the harmonic levels.
 nperseg = 8192
 hop = 256
 win = hann(nperseg, sym=False)
@@ -42,7 +43,8 @@ freqs = stft.f
 f_lim = 5_000
 f_mask = freqs <= f_lim
 
-fig, (ax_t, ax_s) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+fig, (ax_t, ax_s) = plt.subplots(2, 1, figsize=(11, 7), sharex=True,
+                                 gridspec_kw=dict(height_ratios=[1, 2]))
 
 ax_t.plot(t * 1e3, x, lw=0.5)
 ax_t.set_ylabel("V(out) [V]")
@@ -51,14 +53,14 @@ ax_t.set_title(
     "(THD minimum, settled THD+N $=-38.09$ dB)"
 )
 ax_t.grid(True, alpha=0.4)
-ax_t.set_xlim(0, t[-1] * 1e3)
+ax_t.set_xlim(t_frames[0] * 1e3, t_frames[-1] * 1e3)
 
 vmax = mag_db.max()
 im = ax_s.pcolormesh(
     t_frames * 1e3,
     freqs[f_mask],
     mag_db[f_mask],
-    shading="auto",
+    shading="nearest",
     cmap="viridis",
     vmin=vmax - 80,
     vmax=vmax,
@@ -66,7 +68,7 @@ im = ax_s.pcolormesh(
 ax_s.set_xlabel("Time [ms]")
 ax_s.set_ylabel("Frequency [Hz]")
 ax_s.set_ylim(0, f_lim)
-ax_s.set_xlim(0, t[-1] * 1e3)
+ax_s.set_xlim(t_frames[0] * 1e3, t_frames[-1] * 1e3)
 cbar = fig.colorbar(im, ax=ax_s, pad=0.01)
 cbar.set_label("Magnitude [dB]")
 
