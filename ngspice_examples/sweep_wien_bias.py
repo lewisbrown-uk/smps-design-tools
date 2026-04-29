@@ -61,6 +61,8 @@ def make_netlist(alpha: float, data_path: Path, tstep: str = "10u") -> str:
         )
     return f"""* Wien bridge oscillator with BJT-divider amplitude clamp (alpha={alpha:.3f})
 
+.include {(HERE/'uopamp.lib').as_posix()}
+
 R1   out  ns   10k
 C1   ns   np   15.915n  IC=0
 R2   np   0    10k
@@ -72,10 +74,9 @@ Rfb  fb   out  12k
 {q1}
 {q2}
 {bias}
-Bgain oe   0   V = max(-15, min(15, 1e5*(V(np)-V(nn))))
-Rop   oe   oa  1k
-Cop   oa   0   1.59n     IC=0
-Ebuf  out  0   oa  0     1.0
+* Op-amp: universal Level-1 macromodel, fast audio-class settings
+* (Avol=10k, GBW=100M -> dominant pole at 10 kHz, well above f0=1 kHz)
+XU1  np nn out uopamp_lvl1 Avol=10k GBW=100meg Rin=100k Rout=30
 
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
 + ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1

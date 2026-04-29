@@ -53,6 +53,8 @@ def make_netlist(fc_hz: float, data_path: Path) -> str:
     return f"""* Wien bridge oscillator (biased BJT, alpha=0.301) + Sallen-Key LP
 * fc = {fc_hz:.1f} Hz, R = {R_FILT/1e3:.1f}k, C_a = {ca*1e9:.4f}n, C_b = {cb*1e9:.4f}n
 
+.include {(HERE/'uopamp.lib').as_posix()}
+
 * --- Wien bridge oscillator ---
 R1   out  ns   10k
 C1   ns   np   15.915n  IC=0
@@ -69,21 +71,16 @@ Rbot1 b1  out {RBOT:.6g}
 Rtop2 out b2  {RTOP:.6g}
 Rbot2 b2  fb  {RBOT:.6g}
 
-Bgain oe   0   V = max(-15, min(15, 1e5*(V(np)-V(nn))))
-Rop   oe   oa  1k
-Cop   oa   0   1.59n     IC=0
-Ebuf  out  0   oa  0     1.0
+* Oscillator op-amp: realistic Level-1 (Avol=10k, GBW=100M -> fp=10 kHz)
+XU1  np nn out uopamp_lvl1 Avol=10k GBW=100meg Rin=100k Rout=30
 
 * --- Sallen-Key 2nd-order Butterworth low-pass (unity gain) ---
 RA    out  nfa   {R_FILT:.6g}
 RB    nfa  nfb   {R_FILT:.6g}
 CB    nfb  0     {cb:.6g}    IC=0
 CA    nfa  vfilt {ca:.6g}    IC=0
-* Op-amp follower around the SK loop
-Bgf   oef  0    V = max(-15, min(15, 1e5*(V(nfb)-V(vfilt))))
-Rfo   oef  oaf  1k
-Cfo   oaf  0    1.59n        IC=0
-Ebuff vfilt 0   oaf 0  1.0
+* SK follower op-amp: same model
+XU2  nfb vfilt vfilt uopamp_lvl1 Avol=10k GBW=100meg Rin=100k Rout=30
 
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
 + ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1

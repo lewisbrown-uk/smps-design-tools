@@ -1,51 +1,38 @@
 * Wien bridge oscillator with BJT amplitude clamp + base bias divider
 *
-* Each clamp transistor has its base biased between collector and emitter
-* by a symmetric resistive divider, so V_BE = alpha * V_CE where
-*   alpha = Rbot / (Rtop + Rbot).
-* The BJT therefore turns on at V_CE = V_BE,on / alpha rather than at
-* V_BE,on, giving (a) a higher clipping voltage and (b) a softer knee
-* (transconductance scales as alpha/V_T), which is what produces the
-* low-distortion sine wave.
-*
-* alpha = 0.30 is the THD-minimum found by sweep_wien_bias.py:
-*   peak V(out) ~ 4.75 V, settled THD+N ~ 1.25% (-38 dB).
-* Total divider impedance Rtot = Rtop+Rbot = 240k is large enough that
-* the two parallel dividers (120k) only perturb the negative-feedback
-* divider (Rfb=12k) by ~1%.
+* alpha = 0.30 is the THD-minimum found by sweep_wien_bias.py.
+* Op-amp is Ste Kulov's universal Level-1 macromodel, parameterized to
+* a realistic fast-audio-op-amp regime (Avol=10k, GBW=100M, fp=10 kHz).
 
-* --- Wien positive-feedback network: out -> non-inverting input (np) ---
+.include uopamp.lib
+
+* --- Wien positive-feedback network ---
 R1   out  ns   10k
 C1   ns   np   15.915n  IC=0
 R2   np   0    10k
-C2   np   0    15.915n  IC=10m       ; small power-on charge kicks startup
+C2   np   0    15.915n  IC=10m
 
 * --- Negative-feedback path with biased-BJT amplitude clamp ---
 Rg   nn   0    10k
 Rfa  nn   fb   10k
 Rfb  fb   out  12k
-* Q1 conducts when V(fb) > V(out) + V_BE,on/alpha
 Q1   fb   b1   out  Q2N3904
-Rtop1 fb  b1   168k                  ; (1-alpha)*Rtot
-Rbot1 b1  out  72k                   ; alpha*Rtot
-* Q2 conducts when V(out) > V(fb) + V_BE,on/alpha
+Rtop1 fb  b1   168k
+Rbot1 b1  out  72k
 Q2   out  b2   fb   Q2N3904
 Rtop2 out b2   168k
 Rbot2 b2  fb   72k
 
-* --- Behavioural op-amp: A0=1e5, +/-15 V rails, 100 kHz pole, buffer ---
-Bgain oe   0   V = max(-15, min(15, 1e5*(V(np)-V(nn))))
-Rop   oe   oa  1k
-Cop   oa   0   1.59n     IC=0
-Ebuf  out  0   oa  0     1.0
+* --- Op-amp ---
+XU1  np nn out uopamp_lvl1
++    Avol=10k GBW=100meg Rin=100k Rout=30
 
-* Standard Motorola 2N3904 SPICE model.
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
 + ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
 + CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p MJE=.2593 VJE=.75
 + TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
 
-.tran 10u 100m UIC
+.tran 1u 100m UIC
 
 .control
 run
