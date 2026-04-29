@@ -56,10 +56,12 @@ R_PID = 1e6                 # Kp ~ R_PID/R_INT = 10
 C_PID = 1e-9                # Kd = R_PID * C_PID = 1 ms (~1% of tau_th)
 C_HF  = 1.6e-9              # HF rolloff at 1/(2*pi*R_PID*C_HF) = 100 Hz
 
-T_END = 2.500
+T_END = 5.000
 
+# TLV9104 input offset voltage: typ +/-0.4 mV, max +/-4 mV. We use the worst
+# case to expose integrator-windup-from-offset.
 OPAMP = ("uopamp_lvl2 Avol=3.16meg GBW=1meg Rin=100g Rout=10 "
-         "Iq=600u Ilimit=1 Vrail=100m Vmax=20")
+         "Iq=600u Ilimit=1 Vrail=100m Vmax=20 Vos=4m")
 
 
 def make_netlist(data_path: Path) -> str:
@@ -106,7 +108,10 @@ XU_ap n_ap_plus n_ap_minus vcc vee v_ap {OPAMP}
 B_fil v_osc node_A I = (V(v_osc) - V(node_A)) / (R_amb * (V(T_node)/T_amb)^1.2)
 R_sen node_A v_ap {R_SENSE:.6g}
 * Reference arm: V_osc -> R_top_ref -> node_B -> R_sense_ref -> V_ap
-R_top_ref v_osc node_B {R_OP:.6g}
+* R_top_ref deliberately set 1% off-nominal to mimic real resistor tolerance
+* and ensure the bridge has a non-zero error signal at zero drive (otherwise
+* the regulator has a chicken-and-egg cold-start trap with no IC on integrator).
+R_top_ref v_osc node_B {R_OP * 0.99:.6g}
 R_bot_ref node_B v_ap  {R_SENSE:.6g}
 
 * === Filament thermal subnet ===
@@ -148,7 +153,10 @@ XU_dem vplus n_dem_minus vcc vee n_demout {OPAMP}
 R_intin  n_demout n_int_minus {R_INT:.6g}
 C_intin  n_demout n_int_minus {C_PID:.6e}
 R_intfb  n_int_pidp v_int_out {R_PID:.6g}
-C_intfb  n_int_minus n_int_pidp {C_INT:.6e}  IC=-1.0
+* Realistic startup: cap begins uncharged (no IC). Loop self-starts from
+* the intentional 1% bridge mismatch above + Vos drift in the demod and
+* integrator op-amps.
+C_intfb  n_int_minus n_int_pidp {C_INT:.6e}  IC=0
 * HF rolloff cap: in parallel with R_PID to limit HF gain and suppress
 * the f0 ripple from V_demod that the D term would otherwise pump
 * through to V_ctl.
