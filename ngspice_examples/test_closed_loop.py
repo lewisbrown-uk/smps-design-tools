@@ -211,7 +211,9 @@ B_ctl v_ctl 0 V = max(-1.0, min(0, -V(v_int_out)))
 * via a low-Z path, forcing the integrator output into the neighbourhood
 * of its expected steady state. After T_RAMP the switch opens and the
 * loop takes over. T_RAMP=0 disables (loop starts from zero).
-.model swSS SW(VT=0 VH=0.1 RON=0.01 ROFF=1G)
+* VT=0.5 / VH=0 makes the switch trip cleanly at V_ss=0.5 (i.e., closed when
+* V_ss = 1 during the ramp, opens when V_ss = 0 after).
+.model swSS SW(VT=0.5 VH=0 RON=0.01 ROFF=1G)
 V_preset_src v_preset_node 0 {v_preset:.4f}
 V_ss vss 0 PWL(0 1 {max(t_ramp - 1e-6, 0):.6e} 1 {t_ramp:.6e} 0 1 0)
 S_ss v_int_out v_preset_node vss 0 swSS
@@ -250,6 +252,11 @@ def run_one(label, v_preset=0.0, t_ramp=0.0, r_int_scale=1.0,
         print(result.stderr[-2000:]); print(result.stdout[-2000:])
         raise RuntimeError(f"ngspice failed for {label}")
     d = np.loadtxt(dat)
+    # Free disk: remove the 800-MB .data file as soon as we have the array
+    try:
+        dat.unlink()
+    except OSError:
+        pass
     return dict(
         t      = d[:, 0],
         v_osc  = d[:, 1],
