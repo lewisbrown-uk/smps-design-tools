@@ -3,5 +3,6 @@ __pycache__/
 *.ipynb_checkpoints
 ngspice_examples/_bias_sweep/
 ngspice_examples/_dt_sweep/
+ngspice_examples/_lp_sweep/
 ngspice_examples/*.data
 
