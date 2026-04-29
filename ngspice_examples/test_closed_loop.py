@@ -78,9 +78,13 @@ T_RAMP   = 0.0
 def make_netlist(data_path: Path,
                  v_preset: float = None,
                  t_ramp: float = None,
-                 r_int_scale: float = 1.0) -> str:
+                 r_int_scale: float = 1.0,
+                 p_boost: float = 0.0,
+                 t_boost: float = 0.0) -> str:
     """Generate the closed-loop netlist.
     r_int_scale: scales R_INT and R_PID together (1/scale = bandwidth scale).
+    p_boost: extra power [W] injected into thermal node for pre-heat (option D).
+    t_boost: duration of the pre-heat boost [s].
     """
     if v_preset is None: v_preset = V_PRESET
     if t_ramp   is None: t_ramp   = T_RAMP
@@ -89,6 +93,14 @@ def make_netlist(data_path: Path,
     c_int = C_INT_BASE
     c_pid = C_PID_BASE
     c_hf  = C_HF_BASE
+    # Optional pre-heat boost line (added at end of netlist body)
+    boost_line = ""
+    if p_boost > 0 and t_boost > 0:
+        boost_line = (
+            f"\n* Option D: pre-heat boost {p_boost*1e3:.1f} mW for {t_boost*1e3:.0f} ms\n"
+            f"V_boost_en vboost_en 0 PWL(0 1 {max(t_boost-1e-6,0):.6e} 1 {t_boost:.6e} 0 1 0)\n"
+            f"B_boost 0 T_node I = {p_boost:.6e} * (V(vboost_en) > 0.5)\n"
+        )
     return f"""* Closed-loop VFD-filament regulator with thermal model
 
 .include {(HERE/'uopamp.lib').as_posix()}
@@ -203,7 +215,7 @@ B_ctl v_ctl 0 V = max(-1.0, min(0, -V(v_int_out)))
 V_preset_src v_preset_node 0 {v_preset:.4f}
 V_ss vss 0 PWL(0 1 {max(t_ramp - 1e-6, 0):.6e} 1 {t_ramp:.6e} 0 1 0)
 S_ss v_int_out v_preset_node vss 0 swSS
-
+{boost_line}
 * === 2N3904 ===
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
 + ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
@@ -222,14 +234,16 @@ wrdata {data_path.as_posix()} v(v_osc) v(v_ap) v(node_A) v(node_B) v(n_diff) v(n
 """
 
 
-def run_one(label, v_preset=0.0, t_ramp=0.0, r_int_scale=1.0):
+def run_one(label, v_preset=0.0, t_ramp=0.0, r_int_scale=1.0,
+            p_boost=0.0, t_boost=0.0):
     """Run one closed-loop sim with the given soft-start params, return dict of arrays."""
     if shutil.which("ngspice") is None:
         raise RuntimeError("ngspice not found")
     cir = WORK / f"closedloop_{label}.cir"
     dat = WORK / f"closedloop_{label}.data"
     cir.write_text(make_netlist(dat, v_preset=v_preset, t_ramp=t_ramp,
-                                r_int_scale=r_int_scale))
+                                r_int_scale=r_int_scale,
+                                p_boost=p_boost, t_boost=t_boost))
     result = subprocess.run(["ngspice", "-b", cir.name], cwd=WORK,
                             capture_output=True, text=True)
     if result.returncode != 0:
@@ -311,7 +325,7 @@ def plot_run(run, out_path, title):
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["single", "sweep_b", "sweep_a"], default="single")
+    parser.add_argument("--mode", choices=["single", "sweep_b", "sweep_a", "sweep_c", "sweep_d"], default="single")
     parser.add_argument("--v_preset", type=float, default=0.0)
     parser.add_argument("--t_ramp", type=float, default=0.0)
     parser.add_argument("--r_int_scale", type=float, default=1.0)
@@ -455,6 +469,92 @@ def main():
         fig.savefig(HERE / "loop_bw_sweep_traces.png", dpi=120); plt.close(fig)
         print(f"Wrote {HERE/'loop_bw_sweep_traces.png'}")
         print(f"Wrote {HERE/'loop_bw_sweep.csv'}")
+
+
+    if args.mode == "sweep_c":
+        # Bang-bang regime: V_preset close to 1.0 V (V_ctl pinned at -1.0 V
+        # = max bridge drive during the ramp), sweep T_ramp.
+        v_presets = [0.85, 0.95, 1.00]
+        t_ramps   = [0.030, 0.060, 0.100, 0.150]
+        rows = []
+        runs_for_plot = {}
+        for v_p in v_presets:
+            for t_r in t_ramps:
+                label = f"c_vp{int(v_p*100):03d}_tr{int(t_r*1e3):03d}"
+                print(f"Running {label}: V_preset={v_p:.2f} V, T_ramp={t_r*1e3:.0f} ms", flush=True)
+                r = run_one(label, v_preset=v_p, t_ramp=t_r)
+                m = metrics(r)
+                m["v_preset"], m["t_ramp"] = v_p, t_r
+                rows.append(m)
+                runs_for_plot[(v_p, t_r)] = r
+                print(f"  T_peak={m['T_peak']:.1f}K  T_final={m['T_final']:.1f}K  "
+                      f"t_95tar={m['t_95target']*1e3:.0f}ms  t_set5K={m['t_settle_5K']*1e3:.0f}ms  "
+                      f"overshoot={m['T_overshoot']:.1f}K", flush=True)
+        import csv
+        keys = ["v_preset", "t_ramp", "T_peak", "T_final", "T_overshoot",
+                "t_95target", "t_settle_5K", "t_settle_10K", "v_ctl_final", "R_final"]
+        with open(HERE / "bang_bang_sweep.csv", "w") as fh:
+            w = csv.DictWriter(fh, fieldnames=keys); w.writeheader()
+            for r in rows: w.writerow({k: r[k] for k in keys})
+
+        # Overlay plot: T(t) for V_preset=1.0 across all t_ramps
+        fig, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+        ax_T, ax_ctl = axes
+        for (v_p, t_r), r in sorted(runs_for_plot.items()):
+            if abs(v_p - 1.0) < 0.01:
+                ax_T.plot(r["t"]*1e3, r["T"], lw=1.0, label=f"V_preset=1.0 V, T_ramp={t_r*1e3:.0f} ms")
+                ax_ctl.plot(r["t"]*1e3, r["v_ctl"], lw=0.4)
+        ax_T.axhline(T_OP_TARGET, color="0.5", linestyle="--", label=f"target = {T_OP_TARGET:.0f} K")
+        ax_T.set_ylabel("T [K]"); ax_T.grid(True, alpha=0.4); ax_T.legend(loc="lower right")
+        ax_T.set_title("Bang-bang regime: T(t) vs T_ramp at V_preset = 1.0 V (full pinch-off)")
+        ax_ctl.set_ylabel("V_ctl [V]"); ax_ctl.grid(True, alpha=0.4); ax_ctl.set_xlabel("Time [ms]")
+        fig.tight_layout()
+        fig.savefig(HERE / "bang_bang_sweep_traces.png", dpi=120); plt.close(fig)
+        print(f"Wrote {HERE/'bang_bang_sweep_traces.png'}", flush=True)
+        print(f"Wrote {HERE/'bang_bang_sweep.csv'}", flush=True)
+
+    if args.mode == "sweep_d":
+        # Pre-heat boost (option D): inject extra power into the thermal node
+        # for the first t_boost seconds, on top of the standard loop drive.
+        # Sweep P_boost. Use the soft-start sweet spot from sweep_b.
+        v_p, t_r = 0.55, 0.100
+        configs = [(0.0, 0.0),  # baseline
+                   (0.020, 0.050),
+                   (0.050, 0.050),
+                   (0.020, 0.100),
+                   (0.050, 0.100)]
+        rows = []; runs_for_plot = {}
+        for p_b, t_b in configs:
+            label = f"d_pb{int(p_b*1000):03d}_tb{int(t_b*1e3):03d}" if p_b > 0 else "d_baseline"
+            print(f"Running {label}: P_boost={p_b*1e3:.0f} mW, t_boost={t_b*1e3:.0f} ms", flush=True)
+            r = run_one(label, v_preset=v_p, t_ramp=t_r, p_boost=p_b, t_boost=t_b)
+            m = metrics(r)
+            m["p_boost"], m["t_boost"] = p_b, t_b
+            rows.append(m); runs_for_plot[(p_b, t_b)] = r
+            print(f"  T_peak={m['T_peak']:.1f}K  T_final={m['T_final']:.1f}K  "
+                  f"t_95tar={m['t_95target']*1e3:.0f}ms  t_set5K={m['t_settle_5K']*1e3:.0f}ms  "
+                  f"overshoot={m['T_overshoot']:.1f}K", flush=True)
+        import csv
+        keys = ["p_boost", "t_boost", "T_peak", "T_final", "T_overshoot",
+                "t_95target", "t_settle_5K", "t_settle_10K", "v_ctl_final", "R_final"]
+        with open(HERE / "preheat_sweep.csv", "w") as fh:
+            w = csv.DictWriter(fh, fieldnames=keys); w.writeheader()
+            for r in rows: w.writerow({k: r[k] for k in keys})
+
+        fig, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+        ax_T, ax_ctl = axes
+        for (p_b, t_b), r in sorted(runs_for_plot.items()):
+            label = "no pre-heat" if p_b == 0 else f"P_boost={p_b*1e3:.0f} mW, t_boost={t_b*1e3:.0f} ms"
+            ax_T.plot(r["t"]*1e3, r["T"], lw=1.0, label=label)
+            ax_ctl.plot(r["t"]*1e3, r["v_ctl"], lw=0.4)
+        ax_T.axhline(T_OP_TARGET, color="0.5", linestyle="--", label=f"target = {T_OP_TARGET:.0f} K")
+        ax_T.set_ylabel("T [K]"); ax_T.grid(True, alpha=0.4); ax_T.legend(loc="lower right")
+        ax_T.set_title(f"Pre-heat boost: T(t) (V_preset={v_p:.2f} V, T_ramp={t_r*1e3:.0f} ms baseline)")
+        ax_ctl.set_ylabel("V_ctl [V]"); ax_ctl.grid(True, alpha=0.4); ax_ctl.set_xlabel("Time [ms]")
+        fig.tight_layout()
+        fig.savefig(HERE / "preheat_sweep_traces.png", dpi=120); plt.close(fig)
+        print(f"Wrote {HERE/'preheat_sweep_traces.png'}", flush=True)
+        print(f"Wrote {HERE/'preheat_sweep.csv'}", flush=True)
 
 
 if __name__ == "__main__":
