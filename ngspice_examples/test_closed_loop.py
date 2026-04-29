@@ -138,7 +138,17 @@ R_intin n_demout n_int_minus {R_INT:.6g}
 C_intfb n_int_minus v_int_out {C_INT:.6e}  IC=-1.5
 XU_int 0 n_int_minus vcc vee v_int_out {OPAMP}
 
-* Map integrator output to JFET-friendly range [-1.5, 0]: invert and clamp.
+* Anti-windup: hard-clamp v_int_out at [0, +1.5] V so the integrator
+* can't accumulate beyond the V_ctl saturation range. When V_demod sign
+* reverses, the integrator immediately starts unwinding. Without this
+* we saw a 380 K T overshoot (filament-life-killing) due to wind-up
+* during the 150 ms when V_ctl is at -1.5 V clamp.
+B_aw v_int_out 0 I = (V(v_int_out) > 1.5) * (V(v_int_out) - 1.5) * 1e3
++                  + (V(v_int_out) < 0) * V(v_int_out) * 1e3
+
+* Map integrator output to JFET-friendly range [-1.5, 0]: invert.
+* The clamp on B_ctl now mostly redundant since v_int_out is already
+* bounded -- keep it as a safety net.
 B_ctl v_ctl 0 V = max(-1.5, min(0, -V(v_int_out)))
 
 * === 2N3904 ===
