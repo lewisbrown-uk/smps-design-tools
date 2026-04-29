@@ -49,10 +49,12 @@ C_AP = 100e-9
 # Loop integrator (~5 Hz bandwidth)
 R_INT = 100e3
 C_INT = 1.0 / (2 * np.pi * 5.0 * R_INT)
-# PID extras: R_P in series with C_INT in feedback path adds proportional
-# term; C_D in parallel with R_INT in input path adds derivative term.
+# PID extras: R_PID in series with C_INT (proportional term),
+# C_PID in parallel with R_INT (derivative term),
+# C_HF in parallel with R_PID (HF rolloff to suppress f0 ripple bleed-through).
 R_PID = 1e6                 # Kp ~ R_PID/R_INT = 10
 C_PID = 1e-9                # Kd = R_PID * C_PID = 1 ms (~1% of tau_th)
+C_HF  = 1.6e-9              # HF rolloff at 1/(2*pi*R_PID*C_HF) = 100 Hz
 
 T_END = 2.500
 
@@ -147,6 +149,10 @@ R_intin  n_demout n_int_minus {R_INT:.6g}
 C_intin  n_demout n_int_minus {C_PID:.6e}
 R_intfb  n_int_pidp v_int_out {R_PID:.6g}
 C_intfb  n_int_minus n_int_pidp {C_INT:.6e}  IC=-1.0
+* HF rolloff cap: in parallel with R_PID to limit HF gain and suppress
+* the f0 ripple from V_demod that the D term would otherwise pump
+* through to V_ctl.
+C_hf     n_int_pidp v_int_out {C_HF:.6e}     IC=0
 XU_int 0 n_int_minus vcc vee v_int_out {OPAMP}
 
 * Anti-windup: clamp v_int_out at [0, +1.0] V to match the V_ctl range.
