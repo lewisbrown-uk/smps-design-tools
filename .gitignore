@@ -8,5 +8,6 @@ ngspice_examples/_temp_sweep/
 ngspice_examples/_demod_test/
 ngspice_examples/_bridge_test/
 ngspice_examples/_filament_test/
+ngspice_examples/_closedloop_test/
 ngspice_examples/*.data
 
