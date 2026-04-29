@@ -47,10 +47,10 @@ R_AP = 1.59e3
 C_AP = 100e-9
 
 # Loop integrator (~5 Hz bandwidth)
-R_INT = 1e6
+R_INT = 100e3
 C_INT = 1.0 / (2 * np.pi * 5.0 * R_INT)
 
-T_END = 0.800
+T_END = 2.500
 
 OPAMP = ("uopamp_lvl2 Avol=3.16meg GBW=1meg Rin=100g Rout=10 "
          "Iq=600u Ilimit=1 Vrail=100m Vmax=20")
@@ -133,15 +133,13 @@ XU_dem vplus n_dem_minus vcc vee n_demout {OPAMP}
 * so V_ctl_raw integrates positive. We want V_ctl negative when cold so
 * the JFET stays pinched off. Wire B_invert to flip sign.
 R_intin n_demout n_int_minus {R_INT:.6g}
-C_intfb n_int_minus v_int_out {C_INT:.6e}  IC=0
+* IC on the cap = V(n_int_minus) - V(v_int_out) = 0 - (+1.5) = -1.5
+* gives V(v_int_out) = +1.5 at t=0, which through B_ctl maps to V_ctl = -1.5.
+C_intfb n_int_minus v_int_out {C_INT:.6e}  IC=-1.5
 XU_int 0 n_int_minus vcc vee v_int_out {OPAMP}
 
 * Map integrator output to JFET-friendly range [-1.5, 0]: invert and clamp.
 B_ctl v_ctl 0 V = max(-1.5, min(0, -V(v_int_out)))
-
-* Cold-start: V_int_out = +1.5 -> V_ctl = -1.5 (JFET pinched off,
-* full bridge drive, fast filament warmup).
-.ic V(v_int_out)=1.5
 
 * === 2N3904 ===
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
