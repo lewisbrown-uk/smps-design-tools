@@ -30,9 +30,10 @@ WORK.mkdir(exist_ok=True)
 R_TOT = 240e3                # total divider impedance per transistor
 
 SWEEPS = {
-    "broad": [1.00, 0.90, 0.80, 0.70, 0.60, 0.50,
-              0.40, 0.35, 0.30, 0.25, 0.20],
-    "fine":  list(np.round(np.arange(0.25, 0.351, 0.01), 3)),
+    "broad":  [1.00, 0.90, 0.80, 0.70, 0.60, 0.50,
+               0.40, 0.35, 0.30, 0.25, 0.20],
+    "fine":   list(np.round(np.arange(0.25, 0.351, 0.01),  3)),
+    "finer":  list(np.round(np.arange(0.29, 0.3101, 0.001), 4)),
 }
 
 
