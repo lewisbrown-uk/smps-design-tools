@@ -6,6 +6,15 @@ Circuit configuration is fixed at the THD-minimum / TLV9104 design point:
   - 4th-order Butterworth Sallen-Key at fc = 1.2 kHz
   - TLV9104-class op-amps (Avol=3.16M, GBW=1MHz, Vrail=100mV), +/-5 V
 
+Component temperature coefficients (selected via --tc):
+  - "ideal" (zero TC on R and C): purely shows BJT/op-amp model TCs.
+    Frequency drifts only ~7 ppm/degC (BJT junction caps + op-amp).
+  - "realistic" (default): typical "good audio design" parts.
+       resistors:  TC1 = +50 ppm/degC  (1% metal film, e.g. Vishay CRCW)
+       capacitors: TC1 = -150 ppm/degC (polypropylene film)
+    f0 = 1/(2 pi R C), so TC_f = -(TC_R + TC_C) = +100 ppm/degC.
+    Across -40 to +125 degC -> ~16.5 Hz drift on a 1 kHz f0.
+
 For each temperature in TEMPS, regenerate the netlist with .option temp=T,
 run ngspice, and measure with the lock-in:
   - oscillator output amplitude and THD+N
@@ -35,6 +44,7 @@ THD; or replace the 2N3904 BJTs with Schottky diodes (lower V_F and
 flatter TC).
 """
 from __future__ import annotations
+import argparse
 import shutil
 import subprocess
 from pathlib import Path
@@ -57,32 +67,42 @@ FC = 1200.0
 
 TEMPS = [-40, -25, -10, 0, 10, 25, 40, 55, 70, 85, 100, 125]
 
+# Linear temperature coefficients for R and C elements.
+# Two presets: "ideal" (zero TC) and "realistic" (good audio design).
+TC_PRESETS = {
+    "ideal":     {"R": 0.0,    "C": 0.0},
+    "realistic": {"R": 50e-6,  "C": -150e-6},  # 50 ppm/degC, -150 ppm/degC
+}
 
-def make_netlist(temp_c: float, data_path: Path) -> str:
+
+def make_netlist(temp_c: float, data_path: Path, tc: dict) -> str:
     Q1 = 1.0 / (2 * np.cos(np.pi / 8))
     Q2 = 1.0 / (2 * np.cos(3 * np.pi / 8))
     cb1 = 1.0 / (2 * np.pi * R_FILT * FC * (2 * Q1))
     ca1 = (2 * Q1) ** 2 * cb1
     cb2 = 1.0 / (2 * np.pi * R_FILT * FC * (2 * Q2))
     ca2 = (2 * Q2) ** 2 * cb2
+    rtc = f"tc1={tc['R']:.3e}"
+    ctc = f"tc1={tc['C']:.3e}"
     return f"""* Wien bridge (alpha=0.301) + 4th-order SK Butterworth, T = {temp_c} degC
+* R tc1 = {tc['R']*1e6:.0f} ppm/degC, C tc1 = {tc['C']*1e6:.0f} ppm/degC
 
 .include {(HERE/'uopamp.lib').as_posix()}
 
-R1   out  ns   10k
-C1   ns   np   15.915n  IC=0
-R2   np   0    10k
-C2   np   0    15.915n  IC=10m
+R1   out  ns   10k       {rtc}
+C1   ns   np   15.915n  IC=0  {ctc}
+R2   np   0    10k       {rtc}
+C2   np   0    15.915n  IC=10m  {ctc}
 
-Rg   nn   0    10k
-Rfa  nn   fb   10k
-Rfb  fb   out  12k
+Rg   nn   0    10k       {rtc}
+Rfa  nn   fb   10k       {rtc}
+Rfb  fb   out  12k       {rtc}
 Q1   fb   b1   out  Q2N3904
 Q2   out  b2   fb   Q2N3904
-Rtop1 fb  b1  {RTOP:.6g}
-Rbot1 b1  out {RBOT:.6g}
-Rtop2 out b2  {RTOP:.6g}
-Rbot2 b2  fb  {RBOT:.6g}
+Rtop1 fb  b1  {RTOP:.6g}  {rtc}
+Rbot1 b1  out {RBOT:.6g}  {rtc}
+Rtop2 out b2  {RTOP:.6g}  {rtc}
+Rbot2 b2  fb  {RBOT:.6g}  {rtc}
 
 Vcc  vcc 0  5
 Vee  vee 0 -5
@@ -90,17 +110,17 @@ Vee  vee 0 -5
 XU1  np nn vcc vee out uopamp_lvl2
 +    Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20
 
-RA1   out  nfa1   {R_FILT:.6g}
-RB1   nfa1 nfb1   {R_FILT:.6g}
-CB1   nfb1 0      {cb1:.6g}    IC=0
-CA1   nfa1 vfilt1 {ca1:.6g}    IC=0
+RA1   out  nfa1   {R_FILT:.6g}  {rtc}
+RB1   nfa1 nfb1   {R_FILT:.6g}  {rtc}
+CB1   nfb1 0      {cb1:.6g}    IC=0  {ctc}
+CA1   nfa1 vfilt1 {ca1:.6g}    IC=0  {ctc}
 XU2  nfb1 vfilt1 vcc vee vfilt1 uopamp_lvl2
 +    Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20
 
-RA2   vfilt1 nfa2  {R_FILT:.6g}
-RB2   nfa2   nfb2  {R_FILT:.6g}
-CB2   nfb2   0     {cb2:.6g}   IC=0
-CA2   nfa2   vfilt {ca2:.6g}   IC=0
+RA2   vfilt1 nfa2  {R_FILT:.6g}  {rtc}
+RB2   nfa2   nfb2  {R_FILT:.6g}  {rtc}
+CB2   nfb2   0     {cb2:.6g}   IC=0  {ctc}
+CA2   nfa2   vfilt {ca2:.6g}   IC=0  {ctc}
 XU3  nfb2 vfilt vcc vee vfilt uopamp_lvl2
 +    Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20
 
@@ -147,10 +167,10 @@ def lockin_thd(t_raw, x_raw, t_window=(0.05, 0.085), fs=1_000_000):
     return A1, thd, f0
 
 
-def run_one(temp_c: float):
-    cir = WORK / f"temp_{temp_c:+.0f}.cir"
-    dat = WORK / f"temp_{temp_c:+.0f}.data"
-    cir.write_text(make_netlist(temp_c, dat))
+def run_one(temp_c: float, tc: dict, suffix: str):
+    cir = WORK / f"temp_{suffix}_{temp_c:+.0f}.cir"
+    dat = WORK / f"temp_{suffix}_{temp_c:+.0f}.data"
+    cir.write_text(make_netlist(temp_c, dat, tc))
     subprocess.run(["ngspice", "-b", cir.name], cwd=WORK,
                    check=True, capture_output=True, text=True)
     d = np.loadtxt(dat)
@@ -158,15 +178,24 @@ def run_one(temp_c: float):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tc", choices=TC_PRESETS.keys(), default="realistic",
+                        help="component temperature coefficient preset")
+    args = parser.parse_args()
+    tc = TC_PRESETS[args.tc]
+
     if shutil.which("ngspice") is None:
         raise RuntimeError("ngspice not found")
 
+    print(f"TC preset '{args.tc}': R = {tc['R']*1e6:+.0f} ppm/degC, "
+          f"C = {tc['C']*1e6:+.0f} ppm/degC")
+
     rows = []
     for T in TEMPS:
-        t, vout, vfilt = run_one(T)
+        t, vout, vfilt = run_one(T, tc, args.tc)
         a_osc, thd_osc, f0 = lockin_thd(t, vout)
         a_flt, thd_flt, _ = lockin_thd(t, vfilt)
-        print(f"T={T:+4.0f} degC  f0={f0:7.2f} Hz  "
+        print(f"T={T:+4.0f} degC  f0={f0:8.3f} Hz  "
               f"osc: {a_osc:5.3f} V {20*np.log10(thd_osc):+6.2f} dB  "
               f"filt: {a_flt:5.3f} V {20*np.log10(thd_flt):+6.2f} dB")
         rows.append((T, f0, a_osc, thd_osc, a_flt, thd_flt))
@@ -187,13 +216,20 @@ def main():
     ax_a.set_ylabel("Settled fundamental amplitude [V]")
     ax_a.set_title(
         r"Wien bridge ($\alpha=0.301$) + 4th-order Butterworth SK ($f_c=1.2$ kHz)"
-        "\nTemperature sweep, TLV9104-class op-amps, $\\pm5\\,$V supplies"
+        f"\nTemperature sweep, TLV9104-class op-amps, "
+        f"$R_\\mathrm{{TC}}={tc['R']*1e6:+.0f}$, "
+        f"$C_\\mathrm{{TC}}={tc['C']*1e6:+.0f}\\,$ppm$/^\\circ$C"
     )
     ax_a.grid(True, alpha=0.4)
     ax_a.legend()
 
     ax_f.plot(T, f0, "o-", color="C1")
     ax_f.set_ylabel("Oscillation frequency [Hz]")
+    # Show fractional drift in ppm on a secondary y-axis
+    ax_f2 = ax_f.twinx()
+    f0_25 = np.interp(25.0, T, f0)
+    ax_f2.plot(T, (f0/f0_25 - 1) * 1e6, "o-", color="C1", alpha=0)  # invisible, just to set scale
+    ax_f2.set_ylabel("Drift from 25 degC [ppm]")
     ax_f.grid(True, alpha=0.4)
 
     ax_d.plot(T, thd_osc_db, "o-", color="C0", label="oscillator")
@@ -204,7 +240,8 @@ def main():
     ax_d.legend()
 
     fig.tight_layout()
-    out = HERE / "wien_temp_sweep.png"
+    suffix = "" if args.tc == "realistic" else f"_{args.tc}"
+    out = HERE / f"wien_temp_sweep{suffix}.png"
     fig.savefig(out, dpi=120)
     print(f"\nWrote {out}")
 
@@ -216,7 +253,7 @@ def main():
     print(f"Filter amplitude TC: {slope_flt:+.3f} mV/degC")
     print(f"Frequency TC: {slope_f:+.4f} Hz/degC ({slope_f/f0.mean()*1e6:+.1f} ppm/degC)")
 
-    csv = HERE / "wien_temp_sweep.csv"
+    csv = HERE / f"wien_temp_sweep{suffix}.csv"
     np.savetxt(csv, arr, delimiter=",",
                header="T_C,f0_Hz,amp_osc_V,thd_osc,amp_filt_V,thd_filt",
                comments="")
