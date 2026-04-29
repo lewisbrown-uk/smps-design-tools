@@ -13,6 +13,7 @@ divider barely shunts the negative-feedback path (Rfb = 12 kohm, two
 dividers in parallel give 120 kohm shunt -> ~1% perturbation).
 """
 from __future__ import annotations
+import argparse
 import shutil
 import subprocess
 from pathlib import Path
@@ -27,7 +28,12 @@ WORK = HERE / "_bias_sweep"
 WORK.mkdir(exist_ok=True)
 
 R_TOT = 240e3                # total divider impedance per transistor
-ALPHAS = [1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.35, 0.30, 0.25, 0.20]
+
+SWEEPS = {
+    "broad": [1.00, 0.90, 0.80, 0.70, 0.60, 0.50,
+              0.40, 0.35, 0.30, 0.25, 0.20],
+    "fine":  list(np.round(np.arange(0.25, 0.351, 0.01), 3)),
+}
 
 
 def make_netlist(alpha: float, data_path: Path) -> str:
@@ -135,11 +141,18 @@ def lockin_thd(t_raw: np.ndarray, x_raw: np.ndarray, t_window=(0.05, 0.085)
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sweep", choices=SWEEPS.keys(), default="broad",
+                        help="which alpha set to sweep")
+    args = parser.parse_args()
+    alphas = SWEEPS[args.sweep]
+    suffix = "" if args.sweep == "broad" else f"_{args.sweep}"
+
     if shutil.which("ngspice") is None:
         raise RuntimeError("ngspice not found in PATH")
 
     results = []
-    for a in ALPHAS:
+    for a in alphas:
         try:
             t, x = run_one(a)
             amp, thd = lockin_thd(t, x)
@@ -164,8 +177,8 @@ def main() -> None:
               label=r"$3\,V_{BE,\mathrm{on}}/\alpha$")
     ax_a.set_ylabel("Settled peak V(out) [V]")
     ax_a.set_title(
-        "Wien bridge with BJT clamp + bias divider\n"
-        r"sweep of $\alpha = R_\mathrm{bot}/(R_\mathrm{top}+R_\mathrm{bot})$, "
+        f"Wien bridge with BJT clamp + bias divider ({args.sweep} sweep)\n"
+        r"$\alpha = R_\mathrm{bot}/(R_\mathrm{top}+R_\mathrm{bot})$, "
         f"$R_\\mathrm{{tot}}={R_TOT/1e3:.0f}\\,$k$\\Omega$"
     )
     ax_a.grid(True, alpha=0.4)
@@ -175,15 +188,14 @@ def main() -> None:
     ax_d.set_xlabel(r"Bias ratio $\alpha = R_\mathrm{bot}/R_\mathrm{tot}$")
     ax_d.set_ylabel("Settled THD+N [dB]")
     ax_d.grid(True, which="both", alpha=0.4)
-    ax_d.invert_xaxis()  # alpha=1.0 (diode-connected) on the left
+    ax_d.invert_xaxis()  # higher alpha (diode-connected end) on the left
 
     fig.tight_layout()
-    out = HERE / "wien_bias_sweep.png"
+    out = HERE / f"wien_bias_sweep{suffix}.png"
     fig.savefig(out, dpi=120)
     print(f"\nWrote {out}")
 
-    # Save table
-    table = HERE / "wien_bias_sweep.csv"
+    table = HERE / f"wien_bias_sweep{suffix}.csv"
     np.savetxt(table, arr, delimiter=",",
                header="alpha,peak_V,thd_fraction", comments="")
     print(f"Wrote {table}")
