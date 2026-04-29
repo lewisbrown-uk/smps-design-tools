@@ -17,6 +17,14 @@
 * v1.1 (2019-11-23): lvl2 reverted from voltage-controlled switches to
 *                    semiconductor diodes for ngspice convergence; Vsource
 *                    offsets compensated for the new junctions.
+*
+* CAVEAT (2026-04, observed in this repo): the {Ilimit-545m} offsets in
+* V9/V10 of lvl2 only cancel the diode V_BE drop correctly when
+* Ilimit >= 545 mA. With Ilimit below that the V9/V10 sources go
+* negative, and the current-limit clamp fires at sub-100 mV differentials
+* between the gain node and the output -- which strangles oscillator
+* startup. Workaround: pick Ilimit >= 545 mA when modelling small-signal
+* op-amps where the actual current limit isn't being exercised.
 *****************************************
 
 

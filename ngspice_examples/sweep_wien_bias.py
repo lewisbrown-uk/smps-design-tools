@@ -74,10 +74,11 @@ Rfb  fb   out  12k
 {q1}
 {q2}
 {bias}
-* Op-amp: NE5532-class universal Level-1 macromodel
-* (Avol=100k, GBW=10M -> dominant pole at 100 Hz; loop satisfies
-* Barkhausen at ~993 Hz where the Wien phase compensates the op-amp lag)
-XU1  np nn out uopamp_lvl1 Avol=100k GBW=10meg Rin=100k Rout=30
+* Op-amp: NE5532-class Level-2 macromodel (Ilimit raised to 1A to
+* dodge the macromodel offset-compensation bug -- see uopamp.lib).
+Vcc  vcc 0  15
+Vee  vee 0 -15
+XU1  np nn vcc vee out uopamp_lvl2 Avol=100k GBW=10meg Rin=100k Rout=30 Iq=8m Ilimit=1 Vrail=1.4 Vmax=40
 
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
 + ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
