@@ -36,8 +36,12 @@ SWEEPS = {
     "finer":  list(np.round(np.arange(0.29, 0.3101, 0.001), 4)),
 }
 
+# Default tstep per sweep -- finer sweeps need finer resolution to keep the
+# lock-in measurement floor below the THD variation we want to see.
+TSTEPS = {"broad": "10u", "fine": "10u", "finer": "1u"}
 
-def make_netlist(alpha: float, data_path: Path) -> str:
+
+def make_netlist(alpha: float, data_path: Path, tstep: str = "10u") -> str:
     """Wien bridge with BJT clamps biased by symmetric dividers (ratio alpha)."""
     rtop = (1 - alpha) * R_TOT
     rbot = alpha * R_TOT
@@ -78,7 +82,7 @@ Ebuf  out  0   oa  0     1.0
 + CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p MJE=.2593 VJE=.75
 + TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
 
-.tran 10u 100m UIC
+.tran {tstep} 100m UIC
 
 .control
 run
@@ -89,10 +93,11 @@ wrdata {data_path.as_posix()} v(out)
 """
 
 
-def run_one(alpha: float) -> tuple[np.ndarray, np.ndarray]:
-    cir = WORK / f"wien_alpha_{alpha:.3f}.cir"
-    dat = WORK / f"wien_alpha_{alpha:.3f}.data"
-    cir.write_text(make_netlist(alpha, dat))
+def run_one(alpha: float, tstep: str = "10u") -> tuple[np.ndarray, np.ndarray]:
+    tag = f"wien_alpha_{alpha:.4f}_{tstep}"
+    cir = WORK / f"{tag}.cir"
+    dat = WORK / f"{tag}.data"
+    cir.write_text(make_netlist(alpha, dat, tstep=tstep))
     subprocess.run(
         ["ngspice", "-b", cir.name],
         cwd=WORK,
@@ -104,10 +109,9 @@ def run_one(alpha: float) -> tuple[np.ndarray, np.ndarray]:
     return d[:, 0], d[:, 1]
 
 
-def lockin_thd(t_raw: np.ndarray, x_raw: np.ndarray, t_window=(0.05, 0.085)
-               ) -> tuple[float, float]:
+def lockin_thd(t_raw: np.ndarray, x_raw: np.ndarray, t_window=(0.05, 0.085),
+               fs: float = 50_000) -> tuple[float, float]:
     """Return (peak_amplitude, THD+N) over the steady-state window via lock-in."""
-    fs = 50_000
     t = np.arange(t_raw[0], t_raw[-1], 1 / fs)
     x = np.interp(t, t_raw, x_raw)
 
@@ -148,19 +152,27 @@ def main() -> None:
     args = parser.parse_args()
     alphas = SWEEPS[args.sweep]
     suffix = "" if args.sweep == "broad" else f"_{args.sweep}"
+    tstep = TSTEPS[args.sweep]
+    # Match lock-in fs to the simulation print rate so we don't downsample.
+    suffix_lookup = {"10u": 100_000, "1u": 1_000_000, "100n": 10_000_000}
+    fs = suffix_lookup.get(tstep, 100_000)
 
     if shutil.which("ngspice") is None:
         raise RuntimeError("ngspice not found in PATH")
 
+    print(f"Sweep '{args.sweep}': {len(alphas)} points, "
+          f"tstep={tstep}, lock-in fs={fs/1e3:.0f} kS/s")
+
     results = []
     for a in alphas:
         try:
-            t, x = run_one(a)
-            amp, thd = lockin_thd(t, x)
-            print(f"alpha={a:.3f}  peak={amp:.3f} V   THD+N={thd*100:.3f} %")
+            t, x = run_one(a, tstep=tstep)
+            amp, thd = lockin_thd(t, x, fs=fs)
+            print(f"alpha={a:.4f}  peak={amp:.3f} V   THD+N={thd*100:.4f} %  "
+                  f"({20*np.log10(thd):+.3f} dB)")
             results.append((a, amp, thd))
         except subprocess.CalledProcessError as e:
-            print(f"alpha={a:.3f}  FAILED: {e.stderr[-200:]}")
+            print(f"alpha={a:.4f}  FAILED: {e.stderr[-200:]}")
             results.append((a, float("nan"), float("nan")))
 
     arr = np.array(results)
