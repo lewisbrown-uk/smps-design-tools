@@ -152,7 +152,7 @@ def main() -> None:
     arr = np.array(results)
     alpha = arr[:, 0]
     amp = arr[:, 1]
-    thd_pct = arr[:, 2] * 100
+    thd_db = 20 * np.log10(arr[:, 2])
 
     fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
     ax_a, ax_d = axes
@@ -171,9 +171,9 @@ def main() -> None:
     ax_a.grid(True, alpha=0.4)
     ax_a.legend()
 
-    ax_d.semilogy(alpha, thd_pct, "o-", color="C3")
+    ax_d.plot(alpha, thd_db, "o-", color="C3")
     ax_d.set_xlabel(r"Bias ratio $\alpha = R_\mathrm{bot}/R_\mathrm{tot}$")
-    ax_d.set_ylabel("Settled THD+N [%]")
+    ax_d.set_ylabel("Settled THD+N [dB]")
     ax_d.grid(True, which="both", alpha=0.4)
     ax_d.invert_xaxis()  # alpha=1.0 (diode-connected) on the left
 
