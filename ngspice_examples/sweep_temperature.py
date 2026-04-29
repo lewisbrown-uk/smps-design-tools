@@ -15,6 +15,24 @@ run ngspice, and measure with the lock-in:
 The Q2N3904 base-emitter voltage drops by about 2 mV/degC, so the BJT
 clamp threshold (which sets V(out) peak via V_clamp = V_BE,on/alpha)
 should shift the output amplitude by ~6.6 mV/degC at alpha=0.301.
+
+GOTCHA observed in this sweep: the alpha=0.301 design produces 4.77 V
+peak at 25 degC, uncomfortably close to TLV9104's ~4.9 V rail
+saturation on +/-5 V supplies. Below 25 degC the BJT clamp wants to
+fire at higher V(out), but the rails clip first; above 25 degC the
+BJT fires below the rails. So the V(out)-vs-T curve has a knee at
++25 degC where the dominant clamp transitions from "rails" to "BJT".
+This isn't a model artefact -- the time-domain peaks pin to ~4.9 V
+from -40 to +25 degC and then peel off, exactly the rail-saturation
+fingerprint. A side effect: the lock-in fundamental amplitude reads
+slightly larger than the time-domain peak in the rail-clipped regime
+(the classic 4/pi Fourier enhancement of a partially-clipped sine).
+
+Practical implication: if you wanted clean BJT-only clamping across
+temperature with these supplies, pick a higher alpha (~0.5 -> 3.6 V
+peak at 25 degC, well clear of the rails) at the cost of ~6 dB more
+THD; or replace the 2N3904 BJTs with Schottky diodes (lower V_F and
+flatter TC).
 """
 from __future__ import annotations
 import shutil
