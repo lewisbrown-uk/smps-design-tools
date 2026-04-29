@@ -110,7 +110,7 @@ R_bias vplus 0 1Meg
 R_din n_diff n_dem_minus 10k
 R_dfb n_demout n_dem_minus 10k
 XU_dem vplus n_dem_minus vcc vee n_demout uopamp_lvl2
-+      Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20
++      Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20 Vos=1.5m
 
 * === PID compensator (single op-amp) -> V_ctl ===
 * Input network: R_INT in parallel with C_PID (D term)
@@ -118,17 +118,23 @@ XU_dem vplus n_dem_minus vcc vee n_demout uopamp_lvl2
 * Plus C_HF in parallel with R_PID for the HF rolloff that suppresses
 * the f0=1 kHz residual ripple in V_demod from leaking onto V_ctl.
 * Transfer:  H(s) = -(R_PID + 1/sC_INT)(1 + sR_INT C_PID) / R_INT
-*    Ki = 1/(R_INT C_INT) = 31.4 rad/s  (5 Hz integrator zero)
+*    Ki = 1/(R_INT C_INT) = 105 rad/s  (16.7 Hz integrator zero)
 *    Kp = R_PID/R_INT + C_PID/C_INT ~ 10
-*    Kd = R_PID C_PID = 1 ms          (anticipates thermal lag)
-*    HF pole = 1/(2*pi*R_PID*C_HF) = 100 Hz
-R_intin  n_demout n_int_minus 100k
+*    Kd = R_PID C_PID = 0.3 ms        (anticipates thermal lag)
+*    HF pole = 1/(2*pi*R_PID*C_HF) = 333 Hz
+*
+* These values come from the sweep_a (loop bandwidth) experiment:
+* R_INT = 30k, R_PID = 300k gives 11x faster cold-start settling than
+* the original 100k/1M values (324 ms vs 3540 ms to settle within 5K of
+* the Vos-limited equilibrium) with NO overshoot above target. Going
+* faster (R_INT = 10k = 50 Hz integrator zero) adds 42 K of overshoot.
+R_intin  n_demout n_int_minus 30k
 C_intin  n_demout n_int_minus 1n
-R_intfb  n_int_pidp v_int_out 1Meg
-C_intfb  n_int_minus n_int_pidp 318.31n  IC=-1.0
+R_intfb  n_int_pidp v_int_out 300k
+C_intfb  n_int_minus n_int_pidp 318.31n  IC=0
 C_hf     n_int_pidp v_int_out 1.6n       IC=0
 XU_int 0 n_int_minus vcc vee v_int_out uopamp_lvl2
-+      Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20
++      Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20 Vos=1.5m
 
 * Anti-windup: clamp v_int_out at [0, +1.0] V matching the V_ctl range
 B_aw v_int_out 0 I = (V(v_int_out) > 1.0) * (V(v_int_out) - 1.0) * 1e3
@@ -136,6 +142,19 @@ B_aw v_int_out 0 I = (V(v_int_out) > 1.0) * (V(v_int_out) - 1.0) * 1e3
 
 * Map integrator output to JFET-friendly range [-1.0, 0]: invert and clamp
 B_ctl v_ctl 0 V = max(-1.0, min(0, -V(v_int_out)))
+
+* === Soft-start network (optional) ===
+* Holds v_int_out at V_PRESET = 0.55 V (= V_ctl approx -0.55 V, near
+* the Vos-limited steady state) for the first 100 ms via a switch with
+* RON = 10 mohm. After T_RAMP the switch opens and the loop runs free.
+* In real hardware this would be a small RC + Zener + analog-switch POR
+* network. With the fast loop (above), this saves ~100 ms of warm-up.
+* Set T_RAMP = 0 to disable (loop self-starts via the 1% bridge mismatch
+* and op-amp Vos drift).
+.model swSS SW(VT=0.5 VH=0 RON=0.01 ROFF=1G)
+V_preset_src v_preset_node 0 0.55
+V_ss vss 0 PWL(0 1 99.999m 1 100m 0 1 0)
+S_ss v_int_out v_preset_node vss 0 swSS
 
 * === Standard 2N3904 SPICE model ===
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
