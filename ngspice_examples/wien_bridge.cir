@@ -26,13 +26,14 @@ Rfb  fb   out  12k
 Q1   fb   fb   out  Q2N3904
 Q2   out  out  fb   Q2N3904
 
-* --- Op-amp: universal Level-1 macromodel ---
-* Avol=100k -> 100 dB DC gain (audio-op-amp-class)
-* GBW=100 MEG with Avol=100k puts the dominant pole at 1 kHz, which kills
-* loop phase. Lowering Avol to 10k pushes the pole to 10 kHz, faithful to
-* a real LM4562-class part operating at closed-loop gain 3.2.
+* --- Op-amp: universal Level-1 macromodel, NE5532 audio op-amp specs ---
+* Avol = 100k (100 dB), GBW = 10 MHz, Rin = 100k, Rout = 30 ohm.
+* The dominant pole at fp = GBW/Avol = 100 Hz contributes ~-84 deg of
+* loop phase at f0 = 1 kHz. The Wien-network pole pair shifts the
+* oscillation slightly below f0 (~993 Hz) where the loop phase totals
+* zero -- the cubic loop characteristic gives RHP roots at X ~ 0.1+j0.995.
 XU1  np nn out uopamp_lvl1
-+    Avol=10k GBW=100meg Rin=100k Rout=30
++    Avol=100k GBW=10meg Rin=100k Rout=30
 
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
 + ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1

@@ -71,8 +71,8 @@ Rbot1 b1  out {RBOT:.6g}
 Rtop2 out b2  {RTOP:.6g}
 Rbot2 b2  fb  {RBOT:.6g}
 
-* Oscillator op-amp: realistic Level-1 (Avol=10k, GBW=100M -> fp=10 kHz)
-XU1  np nn out uopamp_lvl1 Avol=10k GBW=100meg Rin=100k Rout=30
+* Oscillator op-amp: NE5532-class Level-1 (Avol=100k, GBW=10M, fp=100 Hz)
+XU1  np nn out uopamp_lvl1 Avol=100k GBW=10meg Rin=100k Rout=30
 
 * --- Sallen-Key 2nd-order Butterworth low-pass (unity gain) ---
 RA    out  nfa   {R_FILT:.6g}
@@ -80,7 +80,7 @@ RB    nfa  nfb   {R_FILT:.6g}
 CB    nfb  0     {cb:.6g}    IC=0
 CA    nfa  vfilt {ca:.6g}    IC=0
 * SK follower op-amp: same model
-XU2  nfb vfilt vfilt uopamp_lvl1 Avol=10k GBW=100meg Rin=100k Rout=30
+XU2  nfb vfilt vfilt uopamp_lvl1 Avol=100k GBW=10meg Rin=100k Rout=30
 
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
 + ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1

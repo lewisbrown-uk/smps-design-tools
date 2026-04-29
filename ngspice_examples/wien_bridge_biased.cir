@@ -23,9 +23,9 @@ Q2   out  b2   fb   Q2N3904
 Rtop2 out b2   168k
 Rbot2 b2  fb   72k
 
-* --- Op-amp ---
+* --- Op-amp: NE5532-class universal Level-1 macromodel ---
 XU1  np nn out uopamp_lvl1
-+    Avol=10k GBW=100meg Rin=100k Rout=30
++    Avol=100k GBW=10meg Rin=100k Rout=30
 
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
 + ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
