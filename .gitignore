@@ -4,5 +4,6 @@ __pycache__/
 ngspice_examples/_bias_sweep/
 ngspice_examples/_dt_sweep/
 ngspice_examples/_lp_sweep/
+ngspice_examples/_temp_sweep/
 ngspice_examples/*.data
 
