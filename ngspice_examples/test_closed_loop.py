@@ -133,23 +133,23 @@ XU_dem vplus n_dem_minus vcc vee n_demout {OPAMP}
 * so V_ctl_raw integrates positive. We want V_ctl negative when cold so
 * the JFET stays pinched off. Wire B_invert to flip sign.
 R_intin n_demout n_int_minus {R_INT:.6g}
-* IC on the cap = V(n_int_minus) - V(v_int_out) = 0 - (+1.5) = -1.5
-* gives V(v_int_out) = +1.5 at t=0, which through B_ctl maps to V_ctl = -1.5.
-C_intfb n_int_minus v_int_out {C_INT:.6e}  IC=-1.5
+* IC and anti-windup limit chosen to bound max filament drive. At
+* V_ctl = -1.0 V the JFET R_DS ~= 1 kohm (using J201 Vto=-1.5,
+* Beta=1e-3 in the linear region), giving an all-pass corner near
+* 1.6 kHz and ~55% of the maximum bridge differential. That delivers
+* roughly 1.5x the steady-state filament power -- enough for fast
+* warm-up but with bounded overshoot instead of running at full rail.
+* IC on the cap = V(n_int_minus) - V(v_int_out) = 0 - (+1.0) = -1.0
+* sets V(v_int_out) = +1.0 at t=0 -> V_ctl = -1.0.
+C_intfb n_int_minus v_int_out {C_INT:.6e}  IC=-1.0
 XU_int 0 n_int_minus vcc vee v_int_out {OPAMP}
 
-* Anti-windup: hard-clamp v_int_out at [0, +1.5] V so the integrator
-* can't accumulate beyond the V_ctl saturation range. When V_demod sign
-* reverses, the integrator immediately starts unwinding. Without this
-* we saw a 380 K T overshoot (filament-life-killing) due to wind-up
-* during the 150 ms when V_ctl is at -1.5 V clamp.
-B_aw v_int_out 0 I = (V(v_int_out) > 1.5) * (V(v_int_out) - 1.5) * 1e3
+* Anti-windup: clamp v_int_out at [0, +1.0] V to match the V_ctl range.
+B_aw v_int_out 0 I = (V(v_int_out) > 1.0) * (V(v_int_out) - 1.0) * 1e3
 +                  + (V(v_int_out) < 0) * V(v_int_out) * 1e3
 
-* Map integrator output to JFET-friendly range [-1.5, 0]: invert.
-* The clamp on B_ctl now mostly redundant since v_int_out is already
-* bounded -- keep it as a safety net.
-B_ctl v_ctl 0 V = max(-1.5, min(0, -V(v_int_out)))
+* Map integrator output to JFET range [-1.0, 0]: invert.
+B_ctl v_ctl 0 V = max(-1.0, min(0, -V(v_int_out)))
 
 * === 2N3904 ===
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
