@@ -46,12 +46,23 @@ FCS = np.array([
 
 
 def make_netlist(fc_hz: float, data_path: Path) -> str:
-    # SK LP unity-gain Butterworth: C_a = 2*C_b. fc = 1/(2 pi R sqrt(C_a C_b)).
-    # With C_a = 2*C_b: fc = 1/(2 pi R C_b sqrt(2))
-    cb = 1.0 / (2 * np.pi * R_FILT * fc_hz * np.sqrt(2.0))
-    ca = 2.0 * cb
-    return f"""* Wien bridge oscillator (biased BJT, alpha=0.301) + Sallen-Key LP
-* fc = {fc_hz:.1f} Hz, R = {R_FILT/1e3:.1f}k, C_a = {ca*1e9:.4f}n, C_b = {cb*1e9:.4f}n
+    # 4th-order Butterworth = two cascaded 2nd-order SK stages with same fc
+    # but different Q. With unity-gain SK and equal Rs, Q = sqrt(Ca/Cb)/2.
+    # 4th-order Butterworth Qs: Q1 = 1/(2 cos(pi/8)) = 0.5412
+    #                           Q2 = 1/(2 cos(3pi/8)) = 1.3066
+    # Stage 1 (Q=0.5412): Ca/Cb = (2*Q)^2 = 1.171
+    # Stage 2 (Q=1.3066): Ca/Cb = (2*Q)^2 = 6.829
+    Q1 = 1.0 / (2 * np.cos(np.pi / 8))
+    Q2 = 1.0 / (2 * np.cos(3 * np.pi / 8))
+    cb1 = 1.0 / (2 * np.pi * R_FILT * fc_hz * (2 * Q1))  # smaller cap of stage 1
+    ca1 = (2 * Q1) ** 2 * cb1
+    cb2 = 1.0 / (2 * np.pi * R_FILT * fc_hz * (2 * Q2))
+    ca2 = (2 * Q2) ** 2 * cb2
+    return f"""* Wien bridge oscillator (biased BJT, alpha=0.301) + 4th-order Butterworth SK
+* fc = {fc_hz:.1f} Hz
+* Stage 1: Q={Q1:.4f}, Ca={ca1*1e9:.4f}n, Cb={cb1*1e9:.4f}n
+* Stage 2: Q={Q2:.4f}, Ca={ca2*1e9:.4f}n, Cb={cb2*1e9:.4f}n
+* Op-amps modelled as TLV9104 (quad CMOS RRIO, ±5 V supplies).
 
 .include {(HERE/'uopamp.lib').as_posix()}
 
@@ -71,18 +82,31 @@ Rbot1 b1  out {RBOT:.6g}
 Rtop2 out b2  {RTOP:.6g}
 Rbot2 b2  fb  {RBOT:.6g}
 
-* Oscillator op-amp: NE5532-class Level-2 (Ilimit raised; see uopamp.lib)
-Vcc  vcc 0  15
-Vee  vee 0 -15
-XU1  np nn vcc vee out uopamp_lvl2 Avol=100k GBW=10meg Rin=100k Rout=30 Iq=8m Ilimit=1 Vrail=1.4 Vmax=40
+* +/-5 V supplies for the whole quad
+Vcc  vcc 0  5
+Vee  vee 0 -5
 
-* --- Sallen-Key 2nd-order Butterworth low-pass (unity gain) ---
-RA    out  nfa   {R_FILT:.6g}
-RB    nfa  nfb   {R_FILT:.6g}
-CB    nfb  0     {cb:.6g}    IC=0
-CA    nfa  vfilt {ca:.6g}    IC=0
-* SK follower op-amp: same model
-XU2  nfb vfilt vcc vee vfilt uopamp_lvl2 Avol=100k GBW=10meg Rin=100k Rout=30 Iq=8m Ilimit=1 Vrail=1.4 Vmax=40
+* --- Oscillator op-amp: TLV9104-class Level-2 ---
+* Avol=130 dB, GBW=1 MHz, Rin=100G (CMOS), Rout=10, Iq=0.6m, Vrail=100m,
+* Ilimit=1A (workaround for the lvl2 offset bug; see uopamp.lib)
+XU1  np nn vcc vee out uopamp_lvl2
++    Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20
+
+* --- Stage 1 of 4th-order Butterworth Sallen-Key (Q = 0.5412) ---
+RA1   out  nfa1   {R_FILT:.6g}
+RB1   nfa1 nfb1   {R_FILT:.6g}
+CB1   nfb1 0      {cb1:.6g}    IC=0
+CA1   nfa1 vfilt1 {ca1:.6g}    IC=0
+XU2  nfb1 vfilt1 vcc vee vfilt1 uopamp_lvl2
++    Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20
+
+* --- Stage 2 of 4th-order Butterworth Sallen-Key (Q = 1.3066) ---
+RA2   vfilt1 nfa2  {R_FILT:.6g}
+RB2   nfa2   nfb2  {R_FILT:.6g}
+CB2   nfb2   0     {cb2:.6g}   IC=0
+CA2   nfa2   vfilt {ca2:.6g}   IC=0
+XU3  nfb2 vfilt vcc vee vfilt uopamp_lvl2
++    Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20
 
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
 + ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
@@ -93,7 +117,7 @@ XU2  nfb vfilt vcc vee vfilt uopamp_lvl2 Avol=100k GBW=10meg Rin=100k Rout=30 Iq
 
 .control
 run
-wrdata {data_path.as_posix()} v(out) v(vfilt)
+wrdata {data_path.as_posix()} v(out) v(vfilt1) v(vfilt)
 .endcontrol
 
 .end
@@ -133,8 +157,8 @@ def run_one(fc_hz: float):
     subprocess.run(["ngspice", "-b", cir.name], cwd=WORK,
                    check=True, capture_output=True, text=True)
     d = np.loadtxt(dat)
-    # wrdata layout for tran with 2 vars: t, v(out), t, v(vfilt)
-    return d[:, 0], d[:, 1], d[:, 3]
+    # wrdata layout for tran with 3 vars: t, v(out), t, v(vfilt1), t, v(vfilt)
+    return d[:, 0], d[:, 1], d[:, 3], d[:, 5]
 
 
 def main():
@@ -143,54 +167,62 @@ def main():
 
     rows = []
     for fc in FCS:
-        t, vout, vfilt = run_one(fc)
+        t, vout, vfilt1, vfilt = run_one(fc)
         a_raw, thd_raw = lockin_thd(t, vout)
-        a_filt, thd_filt = lockin_thd(t, vfilt)
-        print(f"fc={fc:6.0f} Hz  raw: amp={a_raw:.3f}V THD+N={20*np.log10(thd_raw):+.2f}dB  "
-              f"filt: amp={a_filt:.3f}V THD+N={20*np.log10(thd_filt):+.2f}dB")
-        rows.append((fc, a_raw, thd_raw, a_filt, thd_filt))
+        a_2nd, thd_2nd = lockin_thd(t, vfilt1)
+        a_4th, thd_4th = lockin_thd(t, vfilt)
+        print(f"fc={fc:6.0f} Hz  raw: {20*np.log10(thd_raw):+6.2f}dB  "
+              f"2nd: amp={a_2nd:.3f}V {20*np.log10(thd_2nd):+6.2f}dB  "
+              f"4th: amp={a_4th:.3f}V {20*np.log10(thd_4th):+6.2f}dB")
+        rows.append((fc, a_raw, thd_raw, a_2nd, thd_2nd, a_4th, thd_4th))
 
     arr = np.array(rows)
     fc = arr[:, 0]
-    amp_filt = arr[:, 3]
+    amp_2nd = arr[:, 3]
+    amp_4th = arr[:, 5]
     thd_raw_db = 20 * np.log10(arr[:, 2])
-    thd_filt_db = 20 * np.log10(arr[:, 4])
+    thd_2nd_db = 20 * np.log10(arr[:, 4])
+    thd_4th_db = 20 * np.log10(arr[:, 6])
 
     # Theoretical Butterworth attenuation curves vs fc, for f0 / 3f0 / 5f0:
     fc_dense = np.geomspace(fc.min(), fc.max(), 200)
-    def butter2_db(f, fc_):
-        return -10 * np.log10(1 + (f / fc_) ** 4)
-    H1 = butter2_db(F0_NOMINAL, fc_dense)
-    H3 = butter2_db(3 * F0_NOMINAL, fc_dense)
-    H5 = butter2_db(5 * F0_NOMINAL, fc_dense)
-    # Predicted THD floor: existing harmonics scaled by H_k - H_1
+    def butter_db(f, fc_, order=2):
+        return -10 * np.log10(1 + (f / fc_) ** (2 * order))
     raw_h3 = -38.5
     raw_h5 = -52.2
-    pred_h3 = raw_h3 + (H3 - H1)
-    pred_h5 = raw_h5 + (H5 - H1)
-    pred_thd = 10 * np.log10(10 ** (pred_h3 / 10) + 10 ** (pred_h5 / 10))
+    def predict(order):
+        H1 = butter_db(F0_NOMINAL, fc_dense, order)
+        H3 = butter_db(3 * F0_NOMINAL, fc_dense, order)
+        H5 = butter_db(5 * F0_NOMINAL, fc_dense, order)
+        h3 = raw_h3 + (H3 - H1)
+        h5 = raw_h5 + (H5 - H1)
+        return 10 * np.log10(10 ** (h3 / 10) + 10 ** (h5 / 10))
+    pred_2nd = predict(2)
+    pred_4th = predict(4)
 
     fig, axes = plt.subplots(2, 1, figsize=(9, 8), sharex=True)
     ax_a, ax_d = axes
 
-    ax_a.semilogx(fc, amp_filt, "o-", color="C0", label="filtered output")
     ax_a.axhline(arr[:, 1].mean(), color="0.5", linestyle="--",
                  label="oscillator output (pre-filter)")
+    ax_a.semilogx(fc, amp_2nd, "o-", color="C0", label="after 2nd-order SK")
+    ax_a.semilogx(fc, amp_4th, "s-", color="C2", label="after 4th-order SK (cascaded)")
     ax_a.set_ylabel("Settled fundamental amplitude [V]")
     ax_a.set_title(
-        "Wien bridge + 2nd-order Sallen-Key Butterworth LP\n"
-        rf"$\alpha=0.301$ oscillator, $f_0\approx{F0_NOMINAL:.0f}$ Hz"
+        "Wien bridge + 2nd vs 4th-order Sallen-Key Butterworth LP\n"
+        rf"$\alpha=0.301$, $f_0\approx{F0_NOMINAL:.0f}$ Hz, TLV9104-class quad"
     )
     ax_a.grid(True, which="both", alpha=0.4)
     ax_a.legend()
 
-    ax_d.semilogx(fc, thd_filt_db, "o-", color="C3", label="measured (filtered)")
-    ax_d.semilogx(fc_dense, pred_thd, "--", color="0.5",
-                  label="prediction from H(3f0), H(5f0)")
-    ax_d.axhline(arr[:, 2].mean() and 20*np.log10(arr[:, 2].mean()),
-                 color="0.7", linestyle=":",
-                 label=f"oscillator THD+N before filter "
-                       f"({20*np.log10(arr[:,2].mean()):.1f} dB)")
+    ax_d.axhline(20*np.log10(arr[:,2].mean()), color="0.7", linestyle=":",
+                 label=f"pre-filter ({20*np.log10(arr[:,2].mean()):.1f} dB)")
+    ax_d.semilogx(fc, thd_2nd_db, "o-", color="C0", label="2nd-order (measured)")
+    ax_d.semilogx(fc_dense, pred_2nd, "--", color="C0", alpha=0.4,
+                  label="2nd-order (predicted)")
+    ax_d.semilogx(fc, thd_4th_db, "s-", color="C2", label="4th-order (measured)")
+    ax_d.semilogx(fc_dense, pred_4th, "--", color="C2", alpha=0.4,
+                  label="4th-order (predicted)")
     ax_d.set_xlabel("Filter corner frequency $f_c$ [Hz]")
     ax_d.set_ylabel("Settled THD+N at filter output [dB]")
     ax_d.grid(True, which="both", alpha=0.4)
@@ -203,7 +235,8 @@ def main():
 
     csv = HERE / "wien_lp_sweep.csv"
     np.savetxt(csv, arr, delimiter=",",
-               header="fc_Hz,amp_raw_V,thd_raw,amp_filt_V,thd_filt", comments="")
+               header="fc_Hz,amp_raw_V,thd_raw,amp_2nd_V,thd_2nd,amp_4th_V,thd_4th",
+               comments="")
     print(f"Wrote {csv}")
 
 
