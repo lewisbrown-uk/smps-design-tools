@@ -125,8 +125,16 @@ def make_netlist(data_path: Path,
     vos_v   = mc.get("vos_v", 1.5e-3)
     jfet_vp = mc.get("jfet_vp", -1.5)
     jfet_beta = mc.get("jfet_beta", 1.0e-3)
-    opamp = (f"uopamp_lvl2 Avol=3.16meg GBW=1meg Rin=100g Rout=10 "
-             f"Iq=600u Ilimit=1 Vrail=100m Vmax=20 Vos={vos_v:.6e}")
+    def _opamp(key):
+        v = mc.get(key, vos_v)
+        return (f"uopamp_lvl2 Avol=3.16meg GBW=1meg Rin=100g Rout=10 "
+                f"Iq=600u Ilimit=1 Vrail=100m Vmax=20 Vos={v:.6e}")
+    opamp = _opamp("vos_v")          # back-compat default for any unmarked usage
+    opamp_osc  = _opamp("vos_osc")
+    opamp_ap   = _opamp("vos_ap")
+    opamp_diff = _opamp("vos_diff")
+    opamp_dem  = _opamp("vos_dem")
+    opamp_int  = _opamp("vos_int")
     # Optional pre-heat boost line (added at end of netlist body)
     boost_line = ""
     if p_boost > 0 and t_boost > 0:
@@ -162,7 +170,7 @@ Rtop1 fb    b1    {RTOP_BJT:.6g}
 Rbot1 b1    v_osc {RBOT_BJT:.6g}
 Rtop2 v_osc b2    {RTOP_BJT:.6g}
 Rbot2 b2    fb    {RBOT_BJT:.6g}
-XU_osc np nn vcc vee v_osc {opamp}
+XU_osc np nn vcc vee v_osc {opamp_osc}
 
 * === JFET-controlled all-pass: V_ap = V_osc * (1 - jwR_DS C)/(1 + jwR_DS C) ===
 * Two equal R from V_osc and from V_ap into op-amp's V- (inverting unity gain).
@@ -171,7 +179,7 @@ R_ap2 v_ap  n_ap_minus {R_AP:.6g}
 * JFET R_DS in series from V_osc to V+ (the cap-shunted node).
 J_var v_osc v_ctl n_ap_plus J201
 C_ap n_ap_plus 0 {c_ap_v:.6e}    IC=0
-XU_ap n_ap_plus n_ap_minus vcc vee v_ap {opamp}
+XU_ap n_ap_plus n_ap_minus vcc vee v_ap {opamp_ap}
 .model J201 NJF(Vto={jfet_vp:.4f} Beta={jfet_beta:.4e} Lambda=0)
 
 * === AC Wheatstone bridge ===
@@ -196,7 +204,7 @@ R_a1 node_A n_diff_minus {r_a1:.6g}
 R_a2 n_diff_minus n_diff {r_a2:.6g}
 R_b1 node_B n_diff_plus {r_b1:.6g}
 R_b2 n_diff_plus 0 {r_b2:.6g}
-XU_diff n_diff_plus n_diff_minus vcc vee n_diff {opamp}
+XU_diff n_diff_plus n_diff_minus vcc vee n_diff {opamp_diff}
 
 * === Comparator (behavioural sign of V_osc) ===
 B_cmp n_cmp 0 V = 5 * tanh(V(v_osc) * 1000)
@@ -208,7 +216,7 @@ S2 0      vplus 0     n_cmp swMod
 R_bias vplus 0 1Meg
 R_din n_diff n_dem_minus 10k
 R_dfb n_demout n_dem_minus 10k
-XU_dem vplus n_dem_minus vcc vee n_demout {opamp}
+XU_dem vplus n_dem_minus vcc vee n_demout {opamp_dem}
 
 * === Integrator -> V_ctl (loop amp) ===
 * V_ctl_raw = -1/(R*C) * integral(V_demout). Cold filament: V_demout < 0,
@@ -232,7 +240,7 @@ C_intfb  n_int_minus n_int_pidp {c_int:.6e}  IC=0
 * the f0 ripple from V_demod that the D term would otherwise pump
 * through to V_ctl.
 C_hf     n_int_pidp v_int_out {c_hf:.6e}     IC=0
-XU_int 0 n_int_minus vcc vee v_int_out {opamp}
+XU_int 0 n_int_minus vcc vee v_int_out {opamp_int}
 
 * Anti-windup: clamp v_int_out at [0, +1.0] V to match the V_ctl range.
 B_aw v_int_out 0 I = (V(v_int_out) > 1.0) * (V(v_int_out) - 1.0) * 1e3
@@ -396,7 +404,7 @@ def plot_run(run, out_path, title):
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["single", "sweep_b", "sweep_a", "sweep_c", "sweep_d", "sweep_mc", "sweep_corners"], default="single")
+    parser.add_argument("--mode", choices=["single", "sweep_b", "sweep_a", "sweep_c", "sweep_d", "sweep_mc", "sweep_corners", "sweep_vos_corners"], default="single")
     parser.add_argument("--v_preset", type=float, default=0.0)
     parser.add_argument("--t_ramp", type=float, default=0.0)
     parser.add_argument("--r_int_scale", type=float, default=1.0)
@@ -829,6 +837,93 @@ def main():
         fig.tight_layout()
         fig.savefig(HERE / "filament_corners_traces.png", dpi=120); plt.close(fig)
         print(f"Wrote {HERE/'filament_corners_traces.png'}", flush=True)
+
+
+    if args.mode == "sweep_vos_corners":
+        # 2^4 corner sweep over Vos of the four DC-path op-amps:
+        # XU_ap (all-pass), XU_diff (subtractor), XU_dem (demodulator),
+        # XU_int (integrator). XU_osc is held at nominal because its Vos
+        # is AC-coupled out by the bridge. Each Vos at +/-1.5 mV
+        # (TLV9104 datasheet worst case). Filament held at nominal.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import csv as _csv
+        import itertools
+        v_p, t_r, r_int_scale = 0.55, 0.100, 0.3
+        VOS_MAX = 1.5e-3
+        keys_in_order = ["vos_ap", "vos_diff", "vos_dem", "vos_int"]
+        corners = []
+        for combo in itertools.product([-VOS_MAX, +VOS_MAX], repeat=4):
+            corners.append({k: v for k, v in zip(keys_in_order, combo)})
+
+        def label_for(s):
+            sign = lambda v: "P" if v > 0 else "N"
+            return ("v"
+                    + sign(s["vos_ap"])
+                    + sign(s["vos_diff"])
+                    + sign(s["vos_dem"])
+                    + sign(s["vos_int"]))
+
+        def one(i):
+            s = corners[i]
+            r = run_one(label_for(s), v_preset=v_p, t_ramp=t_r,
+                        r_int_scale=r_int_scale, mc=s)
+            m = metrics(r)
+            m.update({"trial": i, "label": label_for(s), **s})
+            return m, decimate_run(r, npts=2000)
+
+        rows = [None] * len(corners)
+        runs = [None] * len(corners)
+        print(f"Running 2^4 Vos corner sweep: 16 trials, workers={args.mc_workers}",
+              flush=True)
+        with ThreadPoolExecutor(max_workers=args.mc_workers) as ex:
+            futures = {ex.submit(one, i): i for i in range(len(corners))}
+            for fut in as_completed(futures):
+                i = futures[fut]
+                m, r = fut.result()
+                rows[i] = m; runs[i] = r
+                print(f"  {m['label']}  vos_ap={m['vos_ap']*1e3:+.2f}mV "
+                      f"vos_diff={m['vos_diff']*1e3:+.2f}mV "
+                      f"vos_dem={m['vos_dem']*1e3:+.2f}mV "
+                      f"vos_int={m['vos_int']*1e3:+.2f}mV  "
+                      f"-> T_final={m['T_final']:.0f}K  R_final={m['R_final']:.2f}ohm  "
+                      f"t_set5K={m['t_settle_5K']*1e3:.0f}ms", flush=True)
+
+        keys = ["trial", "label", "vos_ap", "vos_diff", "vos_dem", "vos_int",
+                "T_peak", "T_final", "T_overshoot",
+                "t_95target", "t_settle_5K", "t_settle_10K",
+                "v_ctl_final", "R_final"]
+        with open(HERE / "vos_corners_sweep.csv", "w") as fh:
+            w = _csv.DictWriter(fh, fieldnames=keys); w.writeheader()
+            for r in rows: w.writerow({k: r[k] for k in keys})
+        print(f"Wrote {HERE/'vos_corners_sweep.csv'}", flush=True)
+
+        # Overlay traces
+        fig, axes = plt.subplots(3, 1, figsize=(11, 10), sharex=True)
+        ax_T, ax_R, ax_ctl = axes
+        for r, m in zip(runs, rows):
+            ax_T.plot(r["t"]*1e3, r["T"], lw=0.7, label=m["label"], alpha=0.8)
+            ax_R.plot(r["t"]*1e3, r["R"], lw=0.7, alpha=0.8)
+            ax_ctl.plot(r["t"]*1e3, r["v_ctl"], lw=0.4, alpha=0.6)
+        ax_T.axhline(T_OP_TARGET, color="0.3", linestyle="--", lw=0.8, label=f"target = {T_OP_TARGET:.0f} K")
+        ax_T.set_ylabel("T [K]"); ax_T.grid(True, alpha=0.4); ax_T.legend(loc="lower right", ncol=4, fontsize=7)
+        ax_T.set_title("Vos corner sweep (2^4): standard filament. Label = sign(vos_ap, diff, dem, int) at +/-1.5 mV")
+        ax_R.axhline(R_OP, color="0.3", linestyle="--", lw=0.8, label=f"target = {R_OP:.0f} ohm")
+        ax_R.set_ylabel("R [ohm]"); ax_R.grid(True, alpha=0.4)
+        ax_ctl.set_ylabel("V_ctl [V]"); ax_ctl.grid(True, alpha=0.4); ax_ctl.set_xlabel("Time [ms]")
+        fig.tight_layout()
+        fig.savefig(HERE / "vos_corners_traces.png", dpi=120); plt.close(fig)
+        print(f"Wrote {HERE/'vos_corners_traces.png'}", flush=True)
+
+        # Summary
+        T_finals = np.array([r["T_final"] for r in rows])
+        R_finals = np.array([r["R_final"] for r in rows])
+        t_set    = np.array([r["t_settle_5K"] for r in rows]) * 1e3
+        print("\n=== Vos corner summary (16 trials, standard filament) ===")
+        for name, arr, unit in [("T_final", T_finals, "K"),
+                                ("R_final", R_finals, "ohm"),
+                                ("t_settle_5K", t_set, "ms")]:
+            print(f"  {name:14s}: mean={arr.mean():8.3f}  std={arr.std():6.3f}  "
+                  f"min={arr.min():8.3f}  max={arr.max():8.3f}  [{unit}]")
 
 
 if __name__ == "__main__":
