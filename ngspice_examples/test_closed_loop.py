@@ -324,6 +324,18 @@ def run_one(label, v_preset=0.0, t_ramp=0.0, r_int_scale=1.0,
     )
 
 
+def decimate_run(run, npts=2000):
+    """Return a new run dict with each array linearly decimated to ~npts.
+    Time axis is preserved exactly at the chosen indices (no interpolation,
+    no smoothing). Trace overlays at 11" / 120 dpi can resolve at most
+    ~1320 pixels horizontally, so 2000 samples is already supersampled."""
+    n = len(run["t"])
+    if n <= npts:
+        return run
+    idx = np.linspace(0, n - 1, npts).astype(np.int64)
+    return {k: v[idx] for k, v in run.items()}
+
+
 def metrics(run, target_T=T_OP_TARGET):
     """Extract settling/overshoot metrics from a run.
 
@@ -638,7 +650,9 @@ def main():
             m = metrics(r)
             m.update({"trial": i, **s,
                       "T_target": T_AMB * (R_OP * 0.99 / (R_AMB * s["k_r_amb"])) ** (1.0 / 1.2)})
-            return m, r
+            # Decimate before returning so the full-res arrays are freed
+            # in the worker thread instead of accumulating in the main loop.
+            return m, decimate_run(r, npts=2000)
 
         rows = [None] * N
         runs = [None] * N
@@ -770,7 +784,8 @@ def main():
             m = metrics(r)
             m.update({"trial": i, "label": label_for(s), **s,
                       "T_target": T_AMB * (R_OP * 0.99 / (R_AMB * s["k_r_amb"])) ** (1.0 / 1.2)})
-            return m, r
+            # Decimate before returning to keep memory bounded.
+            return m, decimate_run(r, npts=2000)
 
         rows = [None] * len(corners)
         runs = [None] * len(corners)
