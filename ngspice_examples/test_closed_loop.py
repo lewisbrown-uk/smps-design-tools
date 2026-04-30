@@ -384,7 +384,7 @@ def plot_run(run, out_path, title):
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["single", "sweep_b", "sweep_a", "sweep_c", "sweep_d", "sweep_mc"], default="single")
+    parser.add_argument("--mode", choices=["single", "sweep_b", "sweep_a", "sweep_c", "sweep_d", "sweep_mc", "sweep_corners"], default="single")
     parser.add_argument("--v_preset", type=float, default=0.0)
     parser.add_argument("--t_ramp", type=float, default=0.0)
     parser.add_argument("--r_int_scale", type=float, default=1.0)
@@ -736,6 +736,84 @@ def main():
         fig.tight_layout()
         fig.savefig(HERE / "filament_mc_scatter.png", dpi=120); plt.close(fig)
         print(f"Wrote {HERE/'filament_mc_scatter.png'}", flush=True)
+
+
+    if args.mode == "sweep_corners":
+        # Deterministic 2^3 corner sweep over the same three filament knobs
+        # used by sweep_mc. Each parameter at its lo / hi extremum.
+        # Guarantees coverage of the simultaneous-extreme cases that random
+        # MC sampling can miss. 8 trials total.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import csv as _csv
+        import itertools
+        v_p, t_r, r_int_scale = 0.55, 0.100, 0.3
+        bands = {
+            "k_r_amb":       (0.85, 1.15),
+            "k_sigma_eps_A": (0.80, 1.20),
+            "k_c_th":        (0.85, 1.15),
+        }
+        keys_in_order = list(bands.keys())
+        corners = []
+        for combo in itertools.product(*[bands[k] for k in keys_in_order]):
+            corners.append({k: v for k, v in zip(keys_in_order, combo)})
+
+        def label_for(s):
+            return ("c"
+                    + ("L" if s["k_r_amb"]       == bands["k_r_amb"][0]       else "H")
+                    + ("L" if s["k_sigma_eps_A"] == bands["k_sigma_eps_A"][0] else "H")
+                    + ("L" if s["k_c_th"]        == bands["k_c_th"][0]        else "H"))
+
+        def one(i):
+            s = corners[i]
+            r = run_one(label_for(s), v_preset=v_p, t_ramp=t_r,
+                        r_int_scale=r_int_scale, mc=s)
+            m = metrics(r)
+            m.update({"trial": i, "label": label_for(s), **s,
+                      "T_target": T_AMB * (R_OP * 0.99 / (R_AMB * s["k_r_amb"])) ** (1.0 / 1.2)})
+            return m, r
+
+        rows = [None] * len(corners)
+        runs = [None] * len(corners)
+        print(f"Running 2^3 corner sweep: 8 trials, workers={args.mc_workers}",
+              flush=True)
+        with ThreadPoolExecutor(max_workers=args.mc_workers) as ex:
+            futures = {ex.submit(one, i): i for i in range(len(corners))}
+            for fut in as_completed(futures):
+                i = futures[fut]
+                m, r = fut.result()
+                rows[i] = m; runs[i] = r
+                print(f"  {m['label']}  k_r_amb={m['k_r_amb']:.2f}  "
+                      f"k_sigma={m['k_sigma_eps_A']:.2f}  k_cth={m['k_c_th']:.2f}  "
+                      f"-> T_final={m['T_final']:.0f}K  R_final={m['R_final']:.1f}ohm  "
+                      f"T_peak={m['T_peak']:.0f}K  t_set5K={m['t_settle_5K']*1e3:.0f}ms  "
+                      f"overshoot={m['T_overshoot']:+.0f}K", flush=True)
+
+        # CSV
+        keys = ["trial", "label", "k_r_amb", "k_sigma_eps_A", "k_c_th", "T_target",
+                "T_peak", "T_final", "T_overshoot",
+                "t_95target", "t_settle_5K", "t_settle_10K",
+                "v_ctl_final", "R_final"]
+        with open(HERE / "filament_corners_sweep.csv", "w") as fh:
+            w = _csv.DictWriter(fh, fieldnames=keys); w.writeheader()
+            for r in rows: w.writerow({k: r[k] for k in keys})
+        print(f"Wrote {HERE/'filament_corners_sweep.csv'}", flush=True)
+
+        # Overlay traces
+        fig, axes = plt.subplots(3, 1, figsize=(11, 10), sharex=True)
+        ax_T, ax_R, ax_ctl = axes
+        for r, m in zip(runs, rows):
+            ax_T.plot(r["t"]*1e3, r["T"], lw=0.9, label=m["label"])
+            ax_R.plot(r["t"]*1e3, r["R"], lw=0.9)
+            ax_ctl.plot(r["t"]*1e3, r["v_ctl"], lw=0.5)
+        ax_T.axhline(T_OP_TARGET, color="0.3", linestyle="--", lw=0.8, label=f"target = {T_OP_TARGET:.0f} K")
+        ax_T.set_ylabel("T [K]"); ax_T.grid(True, alpha=0.4); ax_T.legend(loc="lower right", ncol=3, fontsize=8)
+        ax_T.set_title("2^3 corner sweep: T(t).  Label = (R_amb, sigma*eps*A, C_th), L=lo, H=hi")
+        ax_R.axhline(R_OP, color="0.3", linestyle="--", lw=0.8, label=f"target = {R_OP:.0f} ohm")
+        ax_R.set_ylabel("R [ohm]"); ax_R.grid(True, alpha=0.4)
+        ax_ctl.set_ylabel("V_ctl [V]"); ax_ctl.grid(True, alpha=0.4); ax_ctl.set_xlabel("Time [ms]")
+        fig.tight_layout()
+        fig.savefig(HERE / "filament_corners_traces.png", dpi=120); plt.close(fig)
+        print(f"Wrote {HERE/'filament_corners_traces.png'}", flush=True)
 
 
 if __name__ == "__main__":
