@@ -55,20 +55,17 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
 #   ILC1-1/7: 7.3    ->  scale 0.30 × 6.6 = 1.98
 #   ILC1-1/8: 26.4   ->  scale 0.30 × 24  = 7.20
 TUBES = {
-    "iv3":     _make_tube("IV-3",     R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100, r_int_scale=0.3),
-    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500, r_int_scale=2.85),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=1.98),
-    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=7.2),
+    "iv3":     _make_tube("IV-3",     R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100,  r_int_scale=0.3),
+    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True),
+    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True),
 }
-# Note: as of this commit the IV-6, ILC1-1/8 and ILC1-1/7 cases fail to reach
-# their target temperature because the Wien and all-pass op-amps cannot drive
-# the low-impedance bridge directly. A class-AB BJT booster INSIDE the Wien
-# feedback loop would compromise the oscillator's amplitude clamp and phase
-# shift; the right fix is two separate buffer stages (op-amp + class-AB pair
-# each, in their own feedback loops) inserted between V_osc/V_ap signal nodes
-# and the bridge. ILC1-1/7 additionally needs +/-9 V or higher rails because
-# its 5 V_RMS filament voltage requires 8.5 V_pk differential drive, beyond
-# what +/-5 V supplies can deliver.
+# Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
+# two non-inverting unity-gain op-amp + class-AB BC337/BC327 BJT pair buffers
+# inserted between v_osc / v_ap (Wien and all-pass internal nodes) and
+# v_osc_drive / v_ap_drive (the bridge filament/reference arm inputs).
+# Wien and all-pass loops are unloaded, BJT distortion is rejected by the
+# buffer op-amp's open-loop gain.
 C_TH = TAU_TH * 4 * SIGMA_EPS_A * T_OP_TARGET ** 3
 
 # Bridge / drive
@@ -174,38 +171,40 @@ def make_netlist(data_path: Path,
     opamp_diff = _opamp("vos_diff")
     opamp_dem  = _opamp("vos_dem")
     opamp_int  = _opamp("vos_int")
-    # Class-AB BJT booster on V_osc and V_ap, inside the op-amp feedback loop.
-    # Op-amp drives a bias network midpoint; BJT emitters become the boosted
-    # output. Set mc["booster"]=True to enable (needed for high-current tubes).
+    # Output buffer stages: when use_booster=True, two separate non-inverting
+    # unity-gain buffers (op-amp + class-AB BC337/BC327 BJT pair, each in its
+    # own feedback loop) sit between the Wien/all-pass signal nodes (v_osc,
+    # v_ap) and the bridge drive nodes (v_osc_drive, v_ap_drive). The Wien
+    # and all-pass loops are unloaded; BJT crossover distortion is rejected
+    # by the buffer op-amp's open-loop gain. Bias: 4.7k from each rail, two
+    # 1N4148 diodes between the BJT bases for class-AB Vbe-cancelling bias.
     use_booster = mc.get("booster", False)
-    osc_opamp_out = "n_osc_int" if use_booster else "v_osc"
-    ap_opamp_out  = "n_ap_int"  if use_booster else "v_ap"
-    # Class-AB BJT booster netlist (when enabled). One per output (V_osc, V_ap).
-    # Bias current ~1 mA via 4.7k resistors from each rail. BD139/BD140 emitter
-    # followers, two diode drops (= ~1.2 V) sit between the bases for class-AB
-    # bias. Op-amp output drives the midpoint of the diode chain.
+    v_osc_drive = "v_osc_drive" if use_booster else "v_osc"
+    v_ap_drive  = "v_ap_drive"  if use_booster else "v_ap"
     booster_lines = ""
     if use_booster:
-        booster_lines = """
-* Class-AB BJT booster on V_osc (inside Wien feedback loop)
-R_oscbb_top vcc q_osc_bn 4.7k
-D_oscbb_top q_osc_bn n_osc_int Dbias
-D_oscbb_bot n_osc_int q_osc_bp Dbias
-R_oscbb_bot q_osc_bp vee 4.7k
-Q_osc_npn  vcc q_osc_bn v_osc QBD139
-Q_osc_pnp  vee q_osc_bp v_osc QBD140
-* Class-AB BJT booster on V_ap (inside all-pass feedback loop)
-R_apbb_top  vcc q_ap_bn 4.7k
-D_apbb_top  q_ap_bn n_ap_int Dbias
-D_apbb_bot  n_ap_int q_ap_bp Dbias
-R_apbb_bot  q_ap_bp vee 4.7k
-Q_ap_npn   vcc q_ap_bn v_ap QBD139
-Q_ap_pnp   vee q_ap_bp v_ap QBD140
+        booster_lines = f"""
+* Output buffer X1: V_osc -> V_osc_drive (unity gain, class-AB BC337/BC327)
+XU_buf_osc v_osc v_osc_drive vcc vee n_buf_osc_out {opamp}
+R_obb_top vcc q_o_bn 4.7k
+D_obb_top q_o_bn n_buf_osc_out Dbias
+D_obb_bot n_buf_osc_out q_o_bp Dbias
+R_obb_bot q_o_bp vee 4.7k
+Q_o_npn  vcc q_o_bn v_osc_drive QBC337
+Q_o_pnp  vee q_o_bp v_osc_drive QBC327
+* Output buffer X2: V_ap -> V_ap_drive
+XU_buf_ap v_ap v_ap_drive vcc vee n_buf_ap_out {opamp}
+R_abb_top vcc q_a_bn 4.7k
+D_abb_top q_a_bn n_buf_ap_out Dbias
+D_abb_bot n_buf_ap_out q_a_bp Dbias
+R_abb_bot q_a_bp vee 4.7k
+Q_a_npn  vcc q_a_bn v_ap_drive QBC337
+Q_a_pnp  vee q_a_bp v_ap_drive QBC327
 .model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
-.model QBD139 NPN(IS=1.78e-13 BF=300 NF=1 BR=4 IKF=0.5 RB=2 RC=0.4 RE=5m
-+ CJC=4e-11 MJC=0.4 VJC=0.4 CJE=2e-10 MJE=0.4 VJE=0.5 FC=0.5 TR=60n TF=0.5n)
-.model QBD140 PNP(IS=1.78e-13 BF=300 NF=1 BR=4 IKF=0.5 RB=2 RC=0.4 RE=5m
-+ CJC=4e-11 MJC=0.4 VJC=0.4 CJE=2e-10 MJE=0.4 VJE=0.5 FC=0.5 TR=60n TF=0.5n)
+.model QBC337 NPN(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
++ CJC=11p CJE=20p VAF=100)
+.model QBC327 PNP(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
++ CJC=11p CJE=20p VAF=100)
 """
     # Optional pre-heat boost line (added at end of netlist body)
     boost_line = ""
@@ -242,7 +241,7 @@ Rtop1 fb    b1    {RTOP_BJT:.6g}
 Rbot1 b1    v_osc {RBOT_BJT:.6g}
 Rtop2 v_osc b2    {RTOP_BJT:.6g}
 Rbot2 b2    fb    {RBOT_BJT:.6g}
-XU_osc np nn vcc vee {osc_opamp_out} {opamp_osc}
+XU_osc np nn vcc vee v_osc {opamp_osc}
 
 * === JFET-controlled all-pass: V_ap = V_osc * (1 - jwR_DS C)/(1 + jwR_DS C) ===
 * Two equal R from V_osc and from V_ap into op-amp's V- (inverting unity gain).
@@ -251,22 +250,22 @@ R_ap2 v_ap  n_ap_minus {R_AP:.6g}
 * JFET R_DS in series from V_osc to V+ (the cap-shunted node).
 J_var v_osc v_ctl n_ap_plus J201
 C_ap n_ap_plus 0 {c_ap_v:.6e}    IC=0
-XU_ap n_ap_plus n_ap_minus vcc vee {ap_opamp_out} {opamp_ap}
+XU_ap n_ap_plus n_ap_minus vcc vee v_ap {opamp_ap}
 .model J201 NJF(Vto={jfet_vp:.4f} Beta={jfet_beta:.4e} Lambda=0)
 
 * === AC Wheatstone bridge ===
 * Filament arm: V_osc -> R_filament(thermal) -> node_A -> R_sense -> V_ap
-B_fil v_osc node_A I = (V(v_osc) - V(node_A)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
-R_sen node_A v_ap {r_sense_v:.6g}
+B_fil {v_osc_drive} node_A I = (V({v_osc_drive}) - V(node_A)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
+R_sen node_A {v_ap_drive} {r_sense_v:.6g}
 * Reference arm: V_osc -> R_top_ref -> node_B -> R_sense_ref -> V_ap
 * R_top_ref nominal 99 ohm (1% off the 100-ohm filament target) so the bridge
 * has a non-zero error signal at cold-start. With MC on, this is multiplied
 * by k_r_top_ref tolerance.
-R_top_ref v_osc node_B {r_top_ref:.6g}
-R_bot_ref node_B v_ap  {r_bot_ref:.6g}
+R_top_ref {v_osc_drive} node_B {r_top_ref:.6g}
+R_bot_ref node_B {v_ap_drive}  {r_bot_ref:.6g}
 
 * === Filament thermal subnet ===
-B_pelec 0 T_node I = (V(v_osc)-V(node_A))*(V(v_osc)-V(node_A)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
+B_pelec 0 T_node I = (V({v_osc_drive})-V(node_A))*(V({v_osc_drive})-V(node_A)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
 B_prad  T_node 0 I = sigma_eps_A * (V(T_node)^4 - T_amb^4)
 C_th T_node 0 {{C_th}} IC={T_AMB}
 B_R r_fil 0 V = R_amb * (V(T_node)/T_amb)^fil_exp
@@ -344,7 +343,7 @@ S_ss v_int_out v_preset_node vss 0 swSS
 
 .control
 run
-wrdata {data_path.as_posix()} v(v_osc) v(v_ap) v(node_A) v(node_B) v(n_diff) v(n_demout) v(v_ctl) v(v_int_out) v(T_node) v(r_fil)
+wrdata {data_path.as_posix()} v({v_osc_drive}) v({v_ap_drive}) v(node_A) v(node_B) v(n_diff) v(n_demout) v(v_ctl) v(v_int_out) v(T_node) v(r_fil)
 .endcontrol
 
 .end
