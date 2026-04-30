@@ -80,19 +80,53 @@ def make_netlist(data_path: Path,
                  t_ramp: float = None,
                  r_int_scale: float = 1.0,
                  p_boost: float = 0.0,
-                 t_boost: float = 0.0) -> str:
+                 t_boost: float = 0.0,
+                 mc: dict = None) -> str:
     """Generate the closed-loop netlist.
     r_int_scale: scales R_INT and R_PID together (1/scale = bandwidth scale).
     p_boost: extra power [W] injected into thermal node for pre-heat (option D).
     t_boost: duration of the pre-heat boost [s].
+    mc: optional dict of multiplicative tolerance factors (defaults to 1.0)
+        for Monte Carlo sweep over manufacturing variation.
+        Recognised keys (each defaults to 1.0 unless noted):
+          k_r1_wien, k_r2_wien, k_c1_wien, k_c2_wien,
+          k_r_top_ref, k_r_bot_ref, k_r_sense,
+          k_r_amb (filament cold resistance),
+          k_r_a1, k_r_a2, k_r_b1, k_r_b2 (diff amp matching),
+          k_c_ap, k_c_intin, k_c_hf, k_c_intfb (electrolytic, asym tol),
+          k_r_intin, k_r_intfb,
+          vos_v (absolute Vos in V, default 1.5e-3),
+          jfet_vp (absolute, default -1.5),
+          jfet_beta (absolute, default 1.0e-3).
     """
     if v_preset is None: v_preset = V_PRESET
     if t_ramp   is None: t_ramp   = T_RAMP
-    r_int = R_INT_BASE * r_int_scale
-    r_pid = R_PID_BASE * r_int_scale
-    c_int = C_INT_BASE
-    c_pid = C_PID_BASE
-    c_hf  = C_HF_BASE
+    if mc is None: mc = {}
+    g = lambda k, default=1.0: mc.get(k, default)
+    r_int = R_INT_BASE * r_int_scale * g("k_r_intin")
+    r_pid = R_PID_BASE * r_int_scale * g("k_r_intfb")
+    c_int = C_INT_BASE * g("k_c_intfb")
+    c_pid = C_PID_BASE * g("k_c_intin")
+    c_hf  = C_HF_BASE  * g("k_c_hf")
+    r1_wien = 10e3   * g("k_r1_wien")
+    r2_wien = 10e3   * g("k_r2_wien")
+    c1_wien = 15.915e-9 * g("k_c1_wien")
+    c2_wien = 15.915e-9 * g("k_c2_wien")
+    r_top_ref = R_OP * 0.99 * g("k_r_top_ref")  # nominal 99 ohm
+    r_bot_ref = R_SENSE * g("k_r_bot_ref")
+    r_sense_v = R_SENSE * g("k_r_sense")
+    r_amb_eff = R_AMB * g("k_r_amb")
+    sigma_eps_A_eff = SIGMA_EPS_A * g("k_sigma_eps_A")
+    c_th_eff = C_TH * g("k_c_th")
+    fil_exp = mc.get("fil_exp", 1.2)
+    r_a1 = 10e3 * g("k_r_a1"); r_a2 = 10e3 * g("k_r_a2")
+    r_b1 = 10e3 * g("k_r_b1"); r_b2 = 10e3 * g("k_r_b2")
+    c_ap_v = C_AP * g("k_c_ap")
+    vos_v   = mc.get("vos_v", 1.5e-3)
+    jfet_vp = mc.get("jfet_vp", -1.5)
+    jfet_beta = mc.get("jfet_beta", 1.0e-3)
+    opamp = (f"uopamp_lvl2 Avol=3.16meg GBW=1meg Rin=100g Rout=10 "
+             f"Iq=600u Ilimit=1 Vrail=100m Vmax=20 Vos={vos_v:.6e}")
     # Optional pre-heat boost line (added at end of netlist body)
     boost_line = ""
     if p_boost > 0 and t_boost > 0:
@@ -106,18 +140,19 @@ def make_netlist(data_path: Path,
 .include {(HERE/'uopamp.lib').as_posix()}
 
 .param T_amb={T_AMB}
-.param R_amb={R_AMB:.6g}
-.param sigma_eps_A={SIGMA_EPS_A:.6e}
-.param C_th={C_TH:.6e}
+.param R_amb={r_amb_eff:.6g}
+.param sigma_eps_A={sigma_eps_A_eff:.6e}
+.param C_th={c_th_eff:.6e}
+.param fil_exp={fil_exp:.4f}
 
 Vcc  vcc 0  5
 Vee  vee 0 -5
 
 * === Wien bridge oscillator (alpha=0.5) ===
-R1   v_osc  ns   10k
-C1   ns     np   15.915n  IC=0
-R2   np     0    10k
-C2   np     0    15.915n  IC=10m
+R1   v_osc  ns   {r1_wien:.6g}
+C1   ns     np   {c1_wien:.6e}  IC=0
+R2   np     0    {r2_wien:.6g}
+C2   np     0    {c2_wien:.6e}  IC=10m
 Rg   nn     0    10k
 Rfa  nn     fb   10k
 Rfb  fb     v_osc  12k
@@ -127,7 +162,7 @@ Rtop1 fb    b1    {RTOP_BJT:.6g}
 Rbot1 b1    v_osc {RBOT_BJT:.6g}
 Rtop2 v_osc b2    {RTOP_BJT:.6g}
 Rbot2 b2    fb    {RBOT_BJT:.6g}
-XU_osc np nn vcc vee v_osc {OPAMP}
+XU_osc np nn vcc vee v_osc {opamp}
 
 * === JFET-controlled all-pass: V_ap = V_osc * (1 - jwR_DS C)/(1 + jwR_DS C) ===
 * Two equal R from V_osc and from V_ap into op-amp's V- (inverting unity gain).
@@ -135,33 +170,33 @@ R_ap1 v_osc n_ap_minus {R_AP:.6g}
 R_ap2 v_ap  n_ap_minus {R_AP:.6g}
 * JFET R_DS in series from V_osc to V+ (the cap-shunted node).
 J_var v_osc v_ctl n_ap_plus J201
-C_ap n_ap_plus 0 {C_AP:.6g}    IC=0
-XU_ap n_ap_plus n_ap_minus vcc vee v_ap {OPAMP}
-.model J201 NJF(Vto=-1.5 Beta=1.0e-3 Lambda=0)
+C_ap n_ap_plus 0 {c_ap_v:.6e}    IC=0
+XU_ap n_ap_plus n_ap_minus vcc vee v_ap {opamp}
+.model J201 NJF(Vto={jfet_vp:.4f} Beta={jfet_beta:.4e} Lambda=0)
 
 * === AC Wheatstone bridge ===
 * Filament arm: V_osc -> R_filament(thermal) -> node_A -> R_sense -> V_ap
-B_fil v_osc node_A I = (V(v_osc) - V(node_A)) / (R_amb * (V(T_node)/T_amb)^1.2)
-R_sen node_A v_ap {R_SENSE:.6g}
+B_fil v_osc node_A I = (V(v_osc) - V(node_A)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
+R_sen node_A v_ap {r_sense_v:.6g}
 * Reference arm: V_osc -> R_top_ref -> node_B -> R_sense_ref -> V_ap
-* R_top_ref deliberately set 1% off-nominal to mimic real resistor tolerance
-* and ensure the bridge has a non-zero error signal at zero drive (otherwise
-* the regulator has a chicken-and-egg cold-start trap with no IC on integrator).
-R_top_ref v_osc node_B {R_OP * 0.99:.6g}
-R_bot_ref node_B v_ap  {R_SENSE:.6g}
+* R_top_ref nominal 99 ohm (1% off the 100-ohm filament target) so the bridge
+* has a non-zero error signal at cold-start. With MC on, this is multiplied
+* by k_r_top_ref tolerance.
+R_top_ref v_osc node_B {r_top_ref:.6g}
+R_bot_ref node_B v_ap  {r_bot_ref:.6g}
 
 * === Filament thermal subnet ===
-B_pelec 0 T_node I = (V(v_osc)-V(node_A))*(V(v_osc)-V(node_A)) / (R_amb * (V(T_node)/T_amb)^1.2)
+B_pelec 0 T_node I = (V(v_osc)-V(node_A))*(V(v_osc)-V(node_A)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
 B_prad  T_node 0 I = sigma_eps_A * (V(T_node)^4 - T_amb^4)
 C_th T_node 0 {{C_th}} IC={T_AMB}
-B_R r_fil 0 V = R_amb * (V(T_node)/T_amb)^1.2
+B_R r_fil 0 V = R_amb * (V(T_node)/T_amb)^fil_exp
 
 * === Difference amp (1-op-amp subtractor, gain 1) ===
-R_a1 node_A n_diff_minus 10k
-R_a2 n_diff_minus n_diff 10k
-R_b1 node_B n_diff_plus 10k
-R_b2 n_diff_plus 0 10k
-XU_diff n_diff_plus n_diff_minus vcc vee n_diff {OPAMP}
+R_a1 node_A n_diff_minus {r_a1:.6g}
+R_a2 n_diff_minus n_diff {r_a2:.6g}
+R_b1 node_B n_diff_plus {r_b1:.6g}
+R_b2 n_diff_plus 0 {r_b2:.6g}
+XU_diff n_diff_plus n_diff_minus vcc vee n_diff {opamp}
 
 * === Comparator (behavioural sign of V_osc) ===
 B_cmp n_cmp 0 V = 5 * tanh(V(v_osc) * 1000)
@@ -173,7 +208,7 @@ S2 0      vplus 0     n_cmp swMod
 R_bias vplus 0 1Meg
 R_din n_diff n_dem_minus 10k
 R_dfb n_demout n_dem_minus 10k
-XU_dem vplus n_dem_minus vcc vee n_demout {OPAMP}
+XU_dem vplus n_dem_minus vcc vee n_demout {opamp}
 
 * === Integrator -> V_ctl (loop amp) ===
 * V_ctl_raw = -1/(R*C) * integral(V_demout). Cold filament: V_demout < 0,
@@ -197,7 +232,7 @@ C_intfb  n_int_minus n_int_pidp {c_int:.6e}  IC=0
 * the f0 ripple from V_demod that the D term would otherwise pump
 * through to V_ctl.
 C_hf     n_int_pidp v_int_out {c_hf:.6e}     IC=0
-XU_int 0 n_int_minus vcc vee v_int_out {OPAMP}
+XU_int 0 n_int_minus vcc vee v_int_out {opamp}
 
 * Anti-windup: clamp v_int_out at [0, +1.0] V to match the V_ctl range.
 B_aw v_int_out 0 I = (V(v_int_out) > 1.0) * (V(v_int_out) - 1.0) * 1e3
@@ -236,8 +271,24 @@ wrdata {data_path.as_posix()} v(v_osc) v(v_ap) v(node_A) v(node_B) v(n_diff) v(n
 """
 
 
+def draw_filament_sample(rng):
+    """Draw one Soviet-era VFD filament tolerance sample.
+    Variation captured (uniform within band):
+      - R_amb (cold resistance): +/-15% (manufacturing tungsten draw spread)
+      - sigma_eps_A (radiative coupling): +/-20% (oxide layer / surface area)
+      - C_th (thermal mass): +/-15% (filament length / diameter spread)
+    The temperature exponent (1.2) is left fixed -- it is a tungsten material
+    constant, not a manufacturing variable.
+    """
+    return {
+        "k_r_amb":       float(rng.uniform(0.85, 1.15)),
+        "k_sigma_eps_A": float(rng.uniform(0.80, 1.20)),
+        "k_c_th":        float(rng.uniform(0.85, 1.15)),
+    }
+
+
 def run_one(label, v_preset=0.0, t_ramp=0.0, r_int_scale=1.0,
-            p_boost=0.0, t_boost=0.0):
+            p_boost=0.0, t_boost=0.0, mc=None):
     """Run one closed-loop sim with the given soft-start params, return dict of arrays."""
     if shutil.which("ngspice") is None:
         raise RuntimeError("ngspice not found")
@@ -245,7 +296,8 @@ def run_one(label, v_preset=0.0, t_ramp=0.0, r_int_scale=1.0,
     dat = WORK / f"closedloop_{label}.data"
     cir.write_text(make_netlist(dat, v_preset=v_preset, t_ramp=t_ramp,
                                 r_int_scale=r_int_scale,
-                                p_boost=p_boost, t_boost=t_boost))
+                                p_boost=p_boost, t_boost=t_boost,
+                                mc=mc))
     result = subprocess.run(["ngspice", "-b", cir.name], cwd=WORK,
                             capture_output=True, text=True)
     if result.returncode != 0:
@@ -332,10 +384,13 @@ def plot_run(run, out_path, title):
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["single", "sweep_b", "sweep_a", "sweep_c", "sweep_d"], default="single")
+    parser.add_argument("--mode", choices=["single", "sweep_b", "sweep_a", "sweep_c", "sweep_d", "sweep_mc"], default="single")
     parser.add_argument("--v_preset", type=float, default=0.0)
     parser.add_argument("--t_ramp", type=float, default=0.0)
     parser.add_argument("--r_int_scale", type=float, default=1.0)
+    parser.add_argument("--mc_n", type=int, default=24, help="MC trial count (sweep_mc)")
+    parser.add_argument("--mc_workers", type=int, default=4, help="Parallel ngspice workers (sweep_mc)")
+    parser.add_argument("--mc_seed", type=int, default=42, help="RNG seed (sweep_mc)")
     args = parser.parse_args()
     if args.mode == "single":
         print(f"Running closed-loop transient (T_END={T_END*1e3:.0f} ms, "
@@ -562,6 +617,125 @@ def main():
         fig.savefig(HERE / "preheat_sweep_traces.png", dpi=120); plt.close(fig)
         print(f"Wrote {HERE/'preheat_sweep_traces.png'}", flush=True)
         print(f"Wrote {HERE/'preheat_sweep.csv'}", flush=True)
+
+
+    if args.mode == "sweep_mc":
+        # Monte Carlo over Soviet-era VFD filament manufacturing variation,
+        # using the option-A production config (R_INT scale=0.3 = 16.7 Hz
+        # integrator zero) plus the soft-start (V_p=0.55 V, T_r=100 ms).
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import csv as _csv
+        rng = np.random.default_rng(args.mc_seed)
+        v_p, t_r, r_int_scale = 0.55, 0.100, 0.3
+        N = args.mc_n
+        samples = [draw_filament_sample(rng) for _ in range(N)]
+
+        def one(i):
+            s = samples[i]
+            label = f"mc{i:03d}"
+            r = run_one(label, v_preset=v_p, t_ramp=t_r,
+                        r_int_scale=r_int_scale, mc=s)
+            m = metrics(r)
+            m.update({"trial": i, **s,
+                      "T_target": T_AMB * (R_OP * 0.99 / (R_AMB * s["k_r_amb"])) ** (1.0 / 1.2)})
+            return m, r
+
+        rows = [None] * N
+        runs = [None] * N
+        print(f"Running MC: N={N}, workers={args.mc_workers}, seed={args.mc_seed}",
+              flush=True)
+        with ThreadPoolExecutor(max_workers=args.mc_workers) as ex:
+            futures = {ex.submit(one, i): i for i in range(N)}
+            for fut in as_completed(futures):
+                i = futures[fut]
+                m, r = fut.result()
+                rows[i] = m; runs[i] = r
+                print(f"  trial {i:03d}: k_r_amb={m['k_r_amb']:.3f} "
+                      f"k_sigma={m['k_sigma_eps_A']:.3f} k_cth={m['k_c_th']:.3f}  "
+                      f"-> T_final={m['T_final']:.0f}K  R_final={m['R_final']:.1f}ohm  "
+                      f"T_peak={m['T_peak']:.0f}K  t_set5K={m['t_settle_5K']*1e3:.0f}ms  "
+                      f"overshoot={m['T_overshoot']:+.0f}K", flush=True)
+
+        # Save CSV
+        keys = ["trial", "k_r_amb", "k_sigma_eps_A", "k_c_th", "T_target",
+                "T_peak", "T_final", "T_overshoot",
+                "t_95target", "t_settle_5K", "t_settle_10K",
+                "v_ctl_final", "R_final"]
+        with open(HERE / "filament_mc_sweep.csv", "w") as fh:
+            w = _csv.DictWriter(fh, fieldnames=keys); w.writeheader()
+            for r in rows: w.writerow({k: r[k] for k in keys})
+        print(f"Wrote {HERE/'filament_mc_sweep.csv'}", flush=True)
+
+        # Summary stats
+        T_finals = np.array([r["T_final"] for r in rows])
+        T_peaks  = np.array([r["T_peak"]  for r in rows])
+        R_finals = np.array([r["R_final"] for r in rows])
+        t_set    = np.array([r["t_settle_5K"] for r in rows]) * 1e3
+        overshoots = np.array([r["T_overshoot"] for r in rows])
+        print("\n=== MC summary ({} trials) ===".format(N))
+        for name, arr, unit in [
+            ("T_final",     T_finals,   "K"),
+            ("T_peak",      T_peaks,    "K"),
+            ("R_final",     R_finals,   "ohm"),
+            ("t_settle_5K", t_set,      "ms"),
+            ("overshoot",   overshoots, "K"),
+        ]:
+            print(f"  {name:14s}: mean={arr.mean():8.2f}  std={arr.std():6.2f}  "
+                  f"min={arr.min():8.2f}  max={arr.max():8.2f}  [{unit}]")
+
+        # Overlay traces
+        fig, axes = plt.subplots(3, 1, figsize=(11, 10), sharex=True)
+        ax_T, ax_R, ax_ctl = axes
+        for r in runs:
+            ax_T.plot(r["t"]*1e3, r["T"], lw=0.6, alpha=0.6)
+            ax_R.plot(r["t"]*1e3, r["R"], lw=0.6, alpha=0.6)
+            ax_ctl.plot(r["t"]*1e3, r["v_ctl"], lw=0.4, alpha=0.6)
+        ax_T.axhline(T_OP_TARGET, color="0.3", linestyle="--", lw=0.8, label=f"target = {T_OP_TARGET:.0f} K")
+        ax_T.set_ylabel("T [K]"); ax_T.grid(True, alpha=0.4); ax_T.legend(loc="lower right")
+        ax_T.set_title(f"Filament Monte Carlo (N={N}): T(t) across +/-15% R_amb, +/-20% sigma*eps*A, +/-15% C_th")
+        ax_R.axhline(R_OP, color="0.3", linestyle="--", lw=0.8, label=f"target = {R_OP:.0f} ohm")
+        ax_R.set_ylabel("R [ohm]"); ax_R.grid(True, alpha=0.4); ax_R.legend(loc="lower right")
+        ax_ctl.set_ylabel("V_ctl [V]"); ax_ctl.grid(True, alpha=0.4); ax_ctl.set_xlabel("Time [ms]")
+        fig.tight_layout()
+        fig.savefig(HERE / "filament_mc_traces.png", dpi=120); plt.close(fig)
+        print(f"Wrote {HERE/'filament_mc_traces.png'}", flush=True)
+
+        # Histograms
+        fig, axes = plt.subplots(2, 2, figsize=(11, 8))
+        for ax, arr, title, unit, ref in [
+            (axes[0,0], T_finals,   "T_final",     "K",  T_OP_TARGET),
+            (axes[0,1], T_peaks,    "T_peak",      "K",  T_OP_TARGET),
+            (axes[1,0], R_finals,   "R_final",     "$\\Omega$", R_OP),
+            (axes[1,1], t_set,      "t_settle_5K", "ms", None),
+        ]:
+            ax.hist(arr, bins=12, color="C0", edgecolor="0.2")
+            ax.set_xlabel(f"{title} [{unit}]"); ax.set_ylabel("count")
+            ax.set_title(f"{title}: mean {arr.mean():.1f}, sigma {arr.std():.1f} {unit}")
+            if ref is not None:
+                ax.axvline(ref, color="C3", linestyle="--", lw=1.0, label=f"target = {ref:g}")
+                ax.legend(loc="upper right")
+            ax.grid(True, alpha=0.3, axis="y")
+        fig.suptitle(f"Filament MC histograms (N={N})")
+        fig.tight_layout()
+        fig.savefig(HERE / "filament_mc_histograms.png", dpi=120); plt.close(fig)
+        print(f"Wrote {HERE/'filament_mc_histograms.png'}", flush=True)
+
+        # Scatter of T_final vs k_r_amb (the dominant operating-point lever)
+        fig, axes = plt.subplots(1, 2, figsize=(11, 5))
+        ax_t, ax_r = axes
+        kr = np.array([r["k_r_amb"] for r in rows])
+        Tt = np.array([r["T_target"] for r in rows])
+        ax_t.scatter(kr, T_finals, c="C0", label="T_final"); ax_t.scatter(kr, Tt, c="C3", marker="x", label="T_target (computed)")
+        ax_t.set_xlabel("k_r_amb (R_amb tolerance factor)"); ax_t.set_ylabel("T [K]")
+        ax_t.set_title("Steady-state T vs filament cold-resistance variation")
+        ax_t.legend(); ax_t.grid(True, alpha=0.4); ax_t.axhline(T_OP_TARGET, color="0.5", lw=0.5, ls="--")
+        ax_r.scatter(kr, t_set, c="C2"); ax_r.set_xlabel("k_r_amb")
+        ax_r.set_ylabel("t_settle_5K [ms]")
+        ax_r.set_title("Settling time vs filament cold-R variation")
+        ax_r.grid(True, alpha=0.4)
+        fig.tight_layout()
+        fig.savefig(HERE / "filament_mc_scatter.png", dpi=120); plt.close(fig)
+        print(f"Wrote {HERE/'filament_mc_scatter.png'}", flush=True)
 
 
 if __name__ == "__main__":
