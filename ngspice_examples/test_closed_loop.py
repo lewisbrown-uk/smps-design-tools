@@ -35,7 +35,8 @@ TAU_TH = 0.100
 # 10x scaleup of the reference arm. Bridge balance:
 #   R_target = R_sen * R_top_ref / R_bot_ref, with a deliberate 1% offset.
 def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
-               r_int_scale=0.3, booster=False):
+               r_int_scale=0.3, booster=False,
+               wien_alpha=None, c_ap=None):
     R_top_ref = R_op * 0.99 * R_bot_ref / R_sen   # 1% off-target for cold-start kick
     P_op = V_op * V_op / R_op
     R_amb = R_op / (T_op / T_AMB) ** 1.2
@@ -44,7 +45,8 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
     return dict(name=name, R_op=R_op, V_op=V_op, T_op=T_op, P_op=P_op,
                 r_amb=R_amb, sigma_eps_A=sigma_eps_A, c_th=c_th,
                 r_top_ref=R_top_ref, r_bot_ref=R_bot_ref, r_sense=R_sen,
-                r_int_scale=r_int_scale, booster=booster)
+                r_int_scale=r_int_scale, booster=booster,
+                wien_alpha=wien_alpha, c_ap=c_ap)
 
 # r_int_scale per tube: option-A's 0.3 was tuned for the IV-3 bridge gain.
 # Bridge sensitivity ~ V_drive*R_sen/(R_op+R_sen)^2 changes per tube, so
@@ -57,7 +59,14 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
 TUBES = {
     "iv3":     _make_tube("IV-3",     R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100,  r_int_scale=0.3),
     "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True),
+    # ILC1-1/7 needs full all-pass swing for its 5 V_RMS = 7 V_pk filament
+    # voltage. c_ap=1uF moves the all-pass corner an order of magnitude lower
+    # so at V_ctl=-1 V (R_DS~1k) the all-pass shift reaches near -180 deg,
+    # giving |V_osc - V_ap| ~ 2 |V_osc| at max drive. (wien_alpha=0.3 was
+    # tried but actually REDUCES V_osc amplitude rather than increases it,
+    # because the BJT clamp's soft-knee response is set by the (1+Rfb/Rg)
+    # gain margin, not just the threshold.)
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, c_ap=1e-6),
     "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
@@ -157,7 +166,13 @@ def make_netlist(data_path: Path,
     fil_exp = mc.get("fil_exp", 1.2)
     r_a1 = 10e3 * g("k_r_a1"); r_a2 = 10e3 * g("k_r_a2")
     r_b1 = 10e3 * g("k_r_b1"); r_b2 = 10e3 * g("k_r_b2")
-    c_ap_v = C_AP * g("k_c_ap")
+    c_ap_v = mc.get("c_ap", C_AP * g("k_c_ap"))
+    # Wien BJT amplitude clamp: alpha sets the V_osc clamp threshold (lower
+    # alpha -> higher peak amplitude). Default 0.5 keeps clamp at ~3 V_pk on
+    # +/-5 V rails.
+    wien_alpha_eff = mc.get("wien_alpha") or ALPHA
+    rtop_bjt = (1 - wien_alpha_eff) * R_TOT_BJT
+    rbot_bjt = wien_alpha_eff * R_TOT_BJT
     vos_v   = mc.get("vos_v", 1.5e-3)
     jfet_vp = mc.get("jfet_vp", -1.5)
     jfet_beta = mc.get("jfet_beta", 1.0e-3)
@@ -176,8 +191,11 @@ def make_netlist(data_path: Path,
     # own feedback loop) sit between the Wien/all-pass signal nodes (v_osc,
     # v_ap) and the bridge drive nodes (v_osc_drive, v_ap_drive). The Wien
     # and all-pass loops are unloaded; BJT crossover distortion is rejected
-    # by the buffer op-amp's open-loop gain. Bias: 4.7k from each rail, two
-    # 1N4148 diodes between the BJT bases for class-AB Vbe-cancelling bias.
+    # by the buffer op-amp's open-loop gain. Bias: 680 ohm from each rail,
+    # two 1N4148 diodes between the BJT bases for class-AB Vbe-cancelling
+    # bias. (4.7 kohm was tried first but starves base drive at peak output:
+    # bias current drops below I_C/beta at +3 V swing into 130 mA load. 680
+    # ohm gives 2-6 mA bias over the full +/-4 V swing range.)
     use_booster = mc.get("booster", False)
     v_osc_drive = "v_osc_drive" if use_booster else "v_osc"
     v_ap_drive  = "v_ap_drive"  if use_booster else "v_ap"
@@ -186,18 +204,18 @@ def make_netlist(data_path: Path,
         booster_lines = f"""
 * Output buffer X1: V_osc -> V_osc_drive (unity gain, class-AB BC337/BC327)
 XU_buf_osc v_osc v_osc_drive vcc vee n_buf_osc_out {opamp}
-R_obb_top vcc q_o_bn 4.7k
+R_obb_top vcc q_o_bn 680
 D_obb_top q_o_bn n_buf_osc_out Dbias
 D_obb_bot n_buf_osc_out q_o_bp Dbias
-R_obb_bot q_o_bp vee 4.7k
+R_obb_bot q_o_bp vee 680
 Q_o_npn  vcc q_o_bn v_osc_drive QBC337
 Q_o_pnp  vee q_o_bp v_osc_drive QBC327
 * Output buffer X2: V_ap -> V_ap_drive
 XU_buf_ap v_ap v_ap_drive vcc vee n_buf_ap_out {opamp}
-R_abb_top vcc q_a_bn 4.7k
+R_abb_top vcc q_a_bn 680
 D_abb_top q_a_bn n_buf_ap_out Dbias
 D_abb_bot n_buf_ap_out q_a_bp Dbias
-R_abb_bot q_a_bp vee 4.7k
+R_abb_bot q_a_bp vee 680
 Q_a_npn  vcc q_a_bn v_ap_drive QBC337
 Q_a_pnp  vee q_a_bp v_ap_drive QBC327
 .model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
@@ -237,10 +255,10 @@ Rfa  nn     fb   10k
 Rfb  fb     v_osc  12k
 Q1   fb     b1    v_osc Q2N3904
 Q2   v_osc  b2    fb    Q2N3904
-Rtop1 fb    b1    {RTOP_BJT:.6g}
-Rbot1 b1    v_osc {RBOT_BJT:.6g}
-Rtop2 v_osc b2    {RTOP_BJT:.6g}
-Rbot2 b2    fb    {RBOT_BJT:.6g}
+Rtop1 fb    b1    {rtop_bjt:.6g}
+Rbot1 b1    v_osc {rbot_bjt:.6g}
+Rtop2 v_osc b2    {rtop_bjt:.6g}
+Rbot2 b2    fb    {rbot_bjt:.6g}
 XU_osc np nn vcc vee v_osc {opamp_osc}
 
 * === JFET-controlled all-pass: V_ap = V_osc * (1 - jwR_DS C)/(1 + jwR_DS C) ===
@@ -1018,6 +1036,10 @@ def main():
                   "r_sense":   spec["r_sense"]}
             if spec.get("booster"):
                 mc["booster"] = True
+            if spec.get("wien_alpha") is not None:
+                mc["wien_alpha"] = spec["wien_alpha"]
+            if spec.get("c_ap") is not None:
+                mc["c_ap"] = spec["c_ap"]
             r = run_one(f"tube_{name}", v_preset=v_p, t_ramp=t_r,
                         r_int_scale=spec["r_int_scale"], mc=mc)
             m = metrics(r, target_T=spec["T_op"])
