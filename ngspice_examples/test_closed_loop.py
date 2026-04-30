@@ -30,6 +30,45 @@ P_OP = 0.010
 R_AMB = R_OP / (T_OP_TARGET / T_AMB) ** 1.2
 SIGMA_EPS_A = P_OP / (T_OP_TARGET ** 4 - T_AMB ** 4)
 TAU_TH = 0.100
+
+# Per-tube design table: filament + bridge resistors at the recommended
+# 10x scaleup of the reference arm. Bridge balance:
+#   R_target = R_sen * R_top_ref / R_bot_ref, with a deliberate 1% offset.
+def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
+               r_int_scale=0.3, booster=False):
+    R_top_ref = R_op * 0.99 * R_bot_ref / R_sen   # 1% off-target for cold-start kick
+    P_op = V_op * V_op / R_op
+    R_amb = R_op / (T_op / T_AMB) ** 1.2
+    sigma_eps_A = P_op / (T_op ** 4 - T_AMB ** 4)
+    c_th = TAU_TH * 4 * sigma_eps_A * T_op ** 3
+    return dict(name=name, R_op=R_op, V_op=V_op, T_op=T_op, P_op=P_op,
+                r_amb=R_amb, sigma_eps_A=sigma_eps_A, c_th=c_th,
+                r_top_ref=R_top_ref, r_bot_ref=R_bot_ref, r_sense=R_sen,
+                r_int_scale=r_int_scale, booster=booster)
+
+# r_int_scale per tube: option-A's 0.3 was tuned for the IV-3 bridge gain.
+# Bridge sensitivity ~ V_drive*R_sen/(R_op+R_sen)^2 changes per tube, so
+# R_INT must scale inversely with sensitivity to keep loop gain ~constant.
+# Numbers below are derived from sensitivity ratios vs IV-3:
+#   IV-3:  1.1 mV/Ω  ->  scale 0.30
+#   IV-6: 10.6 mV/Ω  ->  scale 0.30 × 9.5 = 2.85
+#   ILC1-1/7: 7.3    ->  scale 0.30 × 6.6 = 1.98
+#   ILC1-1/8: 26.4   ->  scale 0.30 × 24  = 7.20
+TUBES = {
+    "iv3":     _make_tube("IV-3",     R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100, r_int_scale=0.3),
+    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500, r_int_scale=2.85),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=1.98),
+    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=7.2),
+}
+# Note: as of this commit the IV-6, ILC1-1/8 and ILC1-1/7 cases fail to reach
+# their target temperature because the Wien and all-pass op-amps cannot drive
+# the low-impedance bridge directly. A class-AB BJT booster INSIDE the Wien
+# feedback loop would compromise the oscillator's amplitude clamp and phase
+# shift; the right fix is two separate buffer stages (op-amp + class-AB pair
+# each, in their own feedback loops) inserted between V_osc/V_ap signal nodes
+# and the bridge. ILC1-1/7 additionally needs +/-9 V or higher rails because
+# its 5 V_RMS filament voltage requires 8.5 V_pk differential drive, beyond
+# what +/-5 V supplies can deliver.
 C_TH = TAU_TH * 4 * SIGMA_EPS_A * T_OP_TARGET ** 3
 
 # Bridge / drive
@@ -112,12 +151,12 @@ def make_netlist(data_path: Path,
     r2_wien = 10e3   * g("k_r2_wien")
     c1_wien = 15.915e-9 * g("k_c1_wien")
     c2_wien = 15.915e-9 * g("k_c2_wien")
-    r_top_ref = R_OP * 0.99 * g("k_r_top_ref")  # nominal 99 ohm
-    r_bot_ref = R_SENSE * g("k_r_bot_ref")
-    r_sense_v = R_SENSE * g("k_r_sense")
-    r_amb_eff = R_AMB * g("k_r_amb")
-    sigma_eps_A_eff = SIGMA_EPS_A * g("k_sigma_eps_A")
-    c_th_eff = C_TH * g("k_c_th")
+    r_top_ref = mc.get("r_top_ref", R_OP * 0.99 * g("k_r_top_ref"))
+    r_bot_ref = mc.get("r_bot_ref", R_SENSE * g("k_r_bot_ref"))
+    r_sense_v = mc.get("r_sense",   R_SENSE * g("k_r_sense"))
+    r_amb_eff = mc.get("r_amb",     R_AMB * g("k_r_amb"))
+    sigma_eps_A_eff = mc.get("sigma_eps_A", SIGMA_EPS_A * g("k_sigma_eps_A"))
+    c_th_eff  = mc.get("c_th",      C_TH * g("k_c_th"))
     fil_exp = mc.get("fil_exp", 1.2)
     r_a1 = 10e3 * g("k_r_a1"); r_a2 = 10e3 * g("k_r_a2")
     r_b1 = 10e3 * g("k_r_b1"); r_b2 = 10e3 * g("k_r_b2")
@@ -135,6 +174,39 @@ def make_netlist(data_path: Path,
     opamp_diff = _opamp("vos_diff")
     opamp_dem  = _opamp("vos_dem")
     opamp_int  = _opamp("vos_int")
+    # Class-AB BJT booster on V_osc and V_ap, inside the op-amp feedback loop.
+    # Op-amp drives a bias network midpoint; BJT emitters become the boosted
+    # output. Set mc["booster"]=True to enable (needed for high-current tubes).
+    use_booster = mc.get("booster", False)
+    osc_opamp_out = "n_osc_int" if use_booster else "v_osc"
+    ap_opamp_out  = "n_ap_int"  if use_booster else "v_ap"
+    # Class-AB BJT booster netlist (when enabled). One per output (V_osc, V_ap).
+    # Bias current ~1 mA via 4.7k resistors from each rail. BD139/BD140 emitter
+    # followers, two diode drops (= ~1.2 V) sit between the bases for class-AB
+    # bias. Op-amp output drives the midpoint of the diode chain.
+    booster_lines = ""
+    if use_booster:
+        booster_lines = """
+* Class-AB BJT booster on V_osc (inside Wien feedback loop)
+R_oscbb_top vcc q_osc_bn 4.7k
+D_oscbb_top q_osc_bn n_osc_int Dbias
+D_oscbb_bot n_osc_int q_osc_bp Dbias
+R_oscbb_bot q_osc_bp vee 4.7k
+Q_osc_npn  vcc q_osc_bn v_osc QBD139
+Q_osc_pnp  vee q_osc_bp v_osc QBD140
+* Class-AB BJT booster on V_ap (inside all-pass feedback loop)
+R_apbb_top  vcc q_ap_bn 4.7k
+D_apbb_top  q_ap_bn n_ap_int Dbias
+D_apbb_bot  n_ap_int q_ap_bp Dbias
+R_apbb_bot  q_ap_bp vee 4.7k
+Q_ap_npn   vcc q_ap_bn v_ap QBD139
+Q_ap_pnp   vee q_ap_bp v_ap QBD140
+.model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
+.model QBD139 NPN(IS=1.78e-13 BF=300 NF=1 BR=4 IKF=0.5 RB=2 RC=0.4 RE=5m
++ CJC=4e-11 MJC=0.4 VJC=0.4 CJE=2e-10 MJE=0.4 VJE=0.5 FC=0.5 TR=60n TF=0.5n)
+.model QBD140 PNP(IS=1.78e-13 BF=300 NF=1 BR=4 IKF=0.5 RB=2 RC=0.4 RE=5m
++ CJC=4e-11 MJC=0.4 VJC=0.4 CJE=2e-10 MJE=0.4 VJE=0.5 FC=0.5 TR=60n TF=0.5n)
+"""
     # Optional pre-heat boost line (added at end of netlist body)
     boost_line = ""
     if p_boost > 0 and t_boost > 0:
@@ -170,7 +242,7 @@ Rtop1 fb    b1    {RTOP_BJT:.6g}
 Rbot1 b1    v_osc {RBOT_BJT:.6g}
 Rtop2 v_osc b2    {RTOP_BJT:.6g}
 Rbot2 b2    fb    {RBOT_BJT:.6g}
-XU_osc np nn vcc vee v_osc {opamp_osc}
+XU_osc np nn vcc vee {osc_opamp_out} {opamp_osc}
 
 * === JFET-controlled all-pass: V_ap = V_osc * (1 - jwR_DS C)/(1 + jwR_DS C) ===
 * Two equal R from V_osc and from V_ap into op-amp's V- (inverting unity gain).
@@ -179,7 +251,7 @@ R_ap2 v_ap  n_ap_minus {R_AP:.6g}
 * JFET R_DS in series from V_osc to V+ (the cap-shunted node).
 J_var v_osc v_ctl n_ap_plus J201
 C_ap n_ap_plus 0 {c_ap_v:.6e}    IC=0
-XU_ap n_ap_plus n_ap_minus vcc vee v_ap {opamp_ap}
+XU_ap n_ap_plus n_ap_minus vcc vee {ap_opamp_out} {opamp_ap}
 .model J201 NJF(Vto={jfet_vp:.4f} Beta={jfet_beta:.4e} Lambda=0)
 
 * === AC Wheatstone bridge ===
@@ -260,7 +332,7 @@ B_ctl v_ctl 0 V = max(-1.0, min(0, -V(v_int_out)))
 V_preset_src v_preset_node 0 {v_preset:.4f}
 V_ss vss 0 PWL(0 1 {max(t_ramp - 1e-6, 0):.6e} 1 {t_ramp:.6e} 0 1 0)
 S_ss v_int_out v_preset_node vss 0 swSS
-{boost_line}
+{booster_lines}{boost_line}
 * === 2N3904 ===
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
 + ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
@@ -404,7 +476,7 @@ def plot_run(run, out_path, title):
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["single", "sweep_b", "sweep_a", "sweep_c", "sweep_d", "sweep_mc", "sweep_corners", "sweep_vos_corners"], default="single")
+    parser.add_argument("--mode", choices=["single", "sweep_b", "sweep_a", "sweep_c", "sweep_d", "sweep_mc", "sweep_corners", "sweep_vos_corners", "sweep_tubes"], default="single")
     parser.add_argument("--v_preset", type=float, default=0.0)
     parser.add_argument("--t_ramp", type=float, default=0.0)
     parser.add_argument("--r_int_scale", type=float, default=1.0)
@@ -924,6 +996,96 @@ def main():
                                 ("t_settle_5K", t_set, "ms")]:
             print(f"  {name:14s}: mean={arr.mean():8.3f}  std={arr.std():6.3f}  "
                   f"min={arr.min():8.3f}  max={arr.max():8.3f}  [{unit}]")
+
+
+    if args.mode == "sweep_tubes":
+        # Run nominal closed-loop transient for each tube in TUBES.
+        # Same loop config (option-A: r_int_scale=0.3, soft-start v_p=0.55,
+        # t_r=100ms). Per-tube parameters set the filament thermal model and
+        # bridge resistors; everything else (op-amps, Wien, JFET, PID) is
+        # unchanged.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import csv as _csv
+        v_p, t_r = 0.55, 0.100
+        names = list(TUBES.keys())
+
+        def one(name):
+            spec = TUBES[name]
+            mc = {"r_amb": spec["r_amb"],
+                  "sigma_eps_A": spec["sigma_eps_A"],
+                  "c_th": spec["c_th"],
+                  "r_top_ref": spec["r_top_ref"],
+                  "r_bot_ref": spec["r_bot_ref"],
+                  "r_sense":   spec["r_sense"]}
+            if spec.get("booster"):
+                mc["booster"] = True
+            r = run_one(f"tube_{name}", v_preset=v_p, t_ramp=t_r,
+                        r_int_scale=spec["r_int_scale"], mc=mc)
+            m = metrics(r, target_T=spec["T_op"])
+            m["tube"] = spec["name"]
+            m["r_int_scale"] = spec["r_int_scale"]
+            for k in ("R_op", "V_op", "T_op", "P_op", "r_amb",
+                      "r_top_ref", "r_bot_ref", "r_sense"):
+                m[k] = spec[k]
+            # V_filament RMS over the last 50 ms
+            t = r["t"]; v_fil = r["v_osc"] - r["v_A"]
+            late = t > (t[-1] - 0.05)
+            m["V_fil_rms"] = float(np.sqrt(np.mean(v_fil[late]**2)))
+            m["I_fil_rms"] = m["V_fil_rms"] / m["R_final"] if m["R_final"] else float("nan")
+            return name, m, decimate_run(r, npts=2000)
+
+        rows = {}
+        runs = {}
+        print(f"Running 4-tube nominal sim, workers={args.mc_workers}",
+              flush=True)
+        with ThreadPoolExecutor(max_workers=min(args.mc_workers, len(names))) as ex:
+            futures = {ex.submit(one, n): n for n in names}
+            for fut in as_completed(futures):
+                name, m, r = fut.result()
+                rows[name] = m; runs[name] = r
+                print(f"  {m['tube']:9s}  R_target={m['R_op']:6.1f} target T={m['T_op']:.0f}K  "
+                      f"r_int_scale={m['r_int_scale']:.2f}  "
+                      f"-> T_final={m['T_final']:.0f}K  R_final={m['R_final']:.2f}ohm  "
+                      f"V_fil={m['V_fil_rms']:.3f}V_RMS  I_fil={m['I_fil_rms']*1000:.1f}mA  "
+                      f"t_set5K={m['t_settle_5K']*1e3:.0f}ms  overshoot={m['T_overshoot']:+.0f}K",
+                      flush=True)
+
+        keys = ["tube", "R_op", "V_op", "T_op", "P_op",
+                "r_top_ref", "r_bot_ref", "r_sense", "r_amb", "r_int_scale",
+                "T_peak", "T_final", "T_overshoot",
+                "t_95target", "t_settle_5K", "t_settle_10K",
+                "v_ctl_final", "R_final", "V_fil_rms", "I_fil_rms"]
+        with open(HERE / "tubes_sweep.csv", "w") as fh:
+            w = _csv.DictWriter(fh, fieldnames=keys); w.writeheader()
+            for n in names: w.writerow({k: rows[n][k] for k in keys})
+        print(f"Wrote {HERE/'tubes_sweep.csv'}", flush=True)
+
+        # Overlay traces, one column per tube to avoid Y-axis crowding
+        fig, axes = plt.subplots(4, len(names), figsize=(4*len(names), 11), sharex=True)
+        for i, n in enumerate(names):
+            r = runs[n]; m = rows[n]
+            t_ms = r["t"] * 1e3
+            v_fil = r["v_osc"] - r["v_A"]
+            axes[0, i].plot(t_ms, r["T"], color="C3")
+            axes[0, i].axhline(m["T_op"], color="0.4", ls="--", lw=0.8, label=f"target {m['T_op']:.0f} K")
+            axes[0, i].set_title(f"{m['tube']}  ({m['R_op']:.0f} Ω, {m['V_op']:.1f} V_RMS)")
+            axes[0, i].set_ylabel("T [K]" if i == 0 else "")
+            axes[0, i].grid(True, alpha=0.3); axes[0, i].legend(loc="lower right", fontsize=8)
+            axes[1, i].plot(t_ms, r["R"], color="C0")
+            axes[1, i].axhline(m["R_op"], color="0.4", ls="--", lw=0.8, label=f"target {m['R_op']:.0f} Ω")
+            axes[1, i].set_ylabel(r"R [$\Omega$]" if i == 0 else "")
+            axes[1, i].grid(True, alpha=0.3); axes[1, i].legend(loc="lower right", fontsize=8)
+            axes[2, i].plot(t_ms, v_fil, color="C2", lw=0.4)
+            axes[2, i].set_ylabel("V_fil [V]" if i == 0 else "")
+            axes[2, i].grid(True, alpha=0.3)
+            axes[3, i].plot(t_ms, r["v_ctl"], color="C4", lw=0.5)
+            axes[3, i].set_ylabel("V_ctl [V]" if i == 0 else "")
+            axes[3, i].set_xlabel("Time [ms]")
+            axes[3, i].grid(True, alpha=0.3)
+        fig.suptitle("Four-tube nominal sweep (option-A loop, 10x ref-arm scaleup)")
+        fig.tight_layout()
+        fig.savefig(HERE / "tubes_sweep_traces.png", dpi=120); plt.close(fig)
+        print(f"Wrote {HERE/'tubes_sweep_traces.png'}", flush=True)
 
 
 if __name__ == "__main__":
