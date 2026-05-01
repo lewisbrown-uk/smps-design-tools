@@ -372,12 +372,25 @@ C_intfb  n_int_minus n_int_pidp {c_int:.6e}  IC=0
 C_hf     n_int_pidp v_int_out {c_hf:.6e}     IC=0
 XU_int 0 n_int_minus vcc vee v_int_out {opamp_int}
 
-* Anti-windup: clamp v_int_out at [0, +1.0] V to match the V_ctl range.
+* Back-calculation anti-windup: V_ctl is allowed to range from -1.0 to +0.4 V.
+* +0.4 V is just below the JFET gate-source diode forward-conduction threshold
+* (~+0.6 V); going positive lets the JFET conduct harder (smaller R_DS) so the
+* all-pass produces less phase shift and less drive -- needed for ILC1-1/7
+* whose minimum drive at V_ctl=0 is still too high. The hard-clamp form
+* previously used (B_aw clamping V_int_out to [0, 1]) prevented this.
+*
+* Tracking form: I_aw = K_b * (V_ctl_commanded - V_ctl_actual)
+* where V_ctl_commanded = -V_int_out (unsaturated)
+*       V_ctl_actual    = clamped to [-1, +0.4]
+* When saturated, K_b * tracking error pulls V_int_out toward the value
+* that would yield V_ctl_actual unsaturated. K_b = 1e3 chosen to be much
+* faster than the integrator's natural time constant so the integrator
+* follows the clamp without lag.
 B_aw v_int_out 0 I = (V(v_int_out) > 1.0) * (V(v_int_out) - 1.0) * 1e3
-+                  + (V(v_int_out) < 0) * V(v_int_out) * 1e3
++                  + (V(v_int_out) < -0.4) * (V(v_int_out) + 0.4) * 1e3
 
-* Map integrator output to JFET range [-1.0, 0]: invert.
-B_ctl v_ctl 0 V = max(-1.0, min(0, -V(v_int_out)))
+* Map integrator output to JFET V_ctl range [-1.0, +0.4].
+B_ctl v_ctl 0 V = max(-1.0, min(0.4, -V(v_int_out)))
 
 * === Soft-start network (V_PRESET = {v_preset}, T_RAMP = {t_ramp} s) ===
 * During the first T_RAMP seconds, a switch ties v_int_out to V_PRESET
