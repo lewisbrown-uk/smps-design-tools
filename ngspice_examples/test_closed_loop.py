@@ -192,32 +192,50 @@ def make_netlist(data_path: Path,
     opamp_diff = _opamp("vos_diff")
     opamp_dem  = _opamp("vos_dem")
     opamp_int  = _opamp("vos_int")
-    # Output buffer stages: when use_booster=True, two separate non-inverting
-    # unity-gain buffers (op-amp + class-AB BC337/BC327 BJT pair, each in its
-    # own feedback loop) sit between the Wien/all-pass signal nodes (v_osc,
-    # v_ap) and the bridge drive nodes (v_osc_drive, v_ap_drive). The Wien
-    # and all-pass loops are unloaded; BJT crossover distortion is rejected
-    # by the buffer op-amp's open-loop gain. Bias: 680 ohm from each rail,
-    # two 1N4148 diodes between the BJT bases for class-AB Vbe-cancelling
-    # bias. (4.7 kohm was tried first but starves base drive at peak output:
-    # bias current drops below I_C/beta at +3 V swing into 130 mA load. 680
-    # ohm gives 2-6 mA bias over the full +/-4 V swing range.)
+    # Output stages: when use_booster=True, the textbook JFET-VCR architecture is:
+    #   Buffer 0  attenuates V_osc to keep JFET in linear region (V_DS << V_GS-Vto).
+    #             Passive divider on V_osc gives v_atten_input (high-Z), op-amp
+    #             follower presents v_drv_atten (low-Z) so the JFET's asymmetric
+    #             current draw doesn't distort the attenuated signal.
+    #   All-pass  operates entirely on v_drv_atten (small, linear JFET).
+    #   Buffer 1  amplifies v_drv_atten by k_buf, drives v_osc_drive at bridge.
+    #   Buffer 2  amplifies v_ap     by k_buf, drives v_ap_drive  at bridge.
+    # Net signal gain through the booster chain = k_buf / k_atten.
+    # All buffers have op-amp + class-AB BC337/BC327 BJT pair on the output
+    # except Buffer 0 (low current to JFET, op-amp output suffices).
     use_booster = mc.get("booster", False)
     v_osc_drive = "v_osc_drive" if use_booster else "v_osc"
     v_ap_drive  = "v_ap_drive"  if use_booster else "v_ap"
+    # When booster is on, the all-pass JFET drain (and R_ap1) tap into
+    # v_drv_atten (low-Z attenuated signal). Otherwise they tap into v_osc.
+    v_osc_jfet  = "v_drv_atten" if use_booster else "v_osc"
     booster_lines = ""
     if use_booster:
         booster_lines = f"""
-* Output buffer X1: V_osc -> V_osc_drive (unity gain, class-AB BC337/BC327)
-XU_buf_osc v_osc v_osc_drive vcc vee n_buf_osc_out {opamp}
+* Buffer 0: passive attenuator on V_osc, then op-amp follower to feed JFET
+* with low-Z attenuated drive. R_atten_top:R_atten_bot = 56k:9.1k -> k_atten
+* ~ 7.15, so V_drv_atten ~= V_osc / 7.15 (peak ~0.5 V at V_osc 3.6 V_pk),
+* keeping V_DS in the JFET's linear region.
+R_atten_top  v_osc          v_atten_input 56k
+R_atten_bot  v_atten_input  0             9.1k
+XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp}
+
+* Buffer 1: V_drv_atten -> V_osc_drive (gain k_buf, class-AB BC337/BC327)
+* Feedback divider R_buf1_fb1:R_buf1_fb2 = 9.1k:1k -> k_buf = 10.1
+XU_buf_osc   v_drv_atten n_buf_osc_fb vcc vee n_buf_osc_out {opamp}
+R_buf1_fb1   v_osc_drive n_buf_osc_fb 9.1k
+R_buf1_fb2   n_buf_osc_fb 0           1k
 R_obb_top vcc q_o_bn 680
 D_obb_top q_o_bn n_buf_osc_out Dbias
 D_obb_bot n_buf_osc_out q_o_bp Dbias
 R_obb_bot q_o_bp vee 680
 Q_o_npn  vcc q_o_bn v_osc_drive QBC337
 Q_o_pnp  vee q_o_bp v_osc_drive QBC327
-* Output buffer X2: V_ap -> V_ap_drive
-XU_buf_ap v_ap v_ap_drive vcc vee n_buf_ap_out {opamp}
+
+* Buffer 2: V_ap -> V_ap_drive (gain k_buf, class-AB BC337/BC327)
+XU_buf_ap    v_ap        n_buf_ap_fb  vcc vee n_buf_ap_out {opamp}
+R_buf2_fb1   v_ap_drive  n_buf_ap_fb  9.1k
+R_buf2_fb2   n_buf_ap_fb 0            1k
 R_abb_top vcc q_a_bn 680
 D_abb_top q_a_bn n_buf_ap_out Dbias
 D_abb_bot n_buf_ap_out q_a_bp Dbias
@@ -268,17 +286,15 @@ Rbot2 b2    fb    {rbot_bjt:.6g}
 XU_osc np nn vcc vee v_osc {opamp_osc}
 
 * === JFET-controlled all-pass: V_ap = V_osc * (1 - jwR_DS C)/(1 + jwR_DS C) ===
-* All-pass input is taken from {v_osc_drive} (the buffer output) when a
-* buffer is in use, NOT from v_osc directly. This isolates v_osc from the
-* nonlinear JFET load -- the JFET's V_DS-dependent I-V creates asymmetric
-* loading on v_osc that pulls the positive half-cycle harder than the
-* negative, distorting V_osc by ~20% when J_var is connected directly to
-* v_osc. Routing J_var via the buffer puts the JFET load on the low-Z
-* buffer output instead, leaving v_osc clean.
-R_ap1 {v_osc_drive} n_ap_minus {R_AP:.6g}
+* All-pass input is taken from {v_osc_jfet}: when a buffer chain is in use,
+* this is v_drv_atten (low-Z attenuated signal from Buffer 0); otherwise it
+* is v_osc directly. Attenuation keeps V_DS << V_GS-Vto so the JFET stays
+* in its linear region, eliminating the asymmetric V_GS shift caused by the
+* model's drain/source swap when V_DS reverses polarity.
+R_ap1 {v_osc_jfet} n_ap_minus {R_AP:.6g}
 R_ap2 v_ap  n_ap_minus {R_AP:.6g}
-* JFET R_DS in series from V_osc to V+ (the cap-shunted node).
-J_var {v_osc_drive} v_ctl n_ap_plus J201
+* JFET R_DS in series from V_drv_atten (or V_osc) to V+ (cap-shunted node).
+J_var {v_osc_jfet} v_ctl n_ap_plus J201
 C_ap n_ap_plus 0 {c_ap_v:.6e}    IC=0
 XU_ap n_ap_plus n_ap_minus vcc vee v_ap {opamp_ap}
 .model J201 NJF(Vto={jfet_vp:.4f} Beta={jfet_beta:.4e} Lambda=0)
