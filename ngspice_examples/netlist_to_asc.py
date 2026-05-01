@@ -1,0 +1,253 @@
+"""Netlist-to-LTspice-.asc converter for visualising the regulator schematic.
+
+Drops every component on the page in a grid with short wire stubs to net
+labels at each terminal. The placement is non-overlapping but otherwise
+unstructured -- the user is expected to drag components into a
+meaningful layout in LTspice once the components are visible on the page.
+
+Usage:
+    python3 netlist_to_asc.py [TUBE]
+        TUBE in {iv3, iv6, ilc11_7, ilc11_8} (default: ilc11_7)
+
+Writes regulator_<tube>.asc next to this script.
+"""
+from __future__ import annotations
+import sys
+import re
+from pathlib import Path
+
+HERE = Path(__file__).parent
+
+# LTspice grid is 16 pixels per unit. Components are spaced ~256 px apart
+# (16 grid units) so they don't overlap and stubs have room.
+GRID = 16
+COMPONENT_PITCH = 256          # horizontal pitch between components
+COMPONENT_VPITCH = 256         # vertical pitch between rows
+ROW_LEN = 8                    # components per row before wrapping
+STUB_LEN = 64                  # length of wire stub from each terminal
+
+# LTspice symbol pin offsets (relative to symbol origin, R0 rotation).
+# These come from the standard LTspice symbol library. They are approximate;
+# user should drag wires/labels in LTspice if they don't quite line up after
+# moving symbols around.
+PIN_OFFSETS = {
+    "res":     [(16,   0), (16,  80)],         # 2 pins vertical
+    "cap":     [(16,   0), (16,  64)],
+    "diode":   [(16,   0), (16,  64)],         # anode top, cathode bottom
+    "npn":     [(64,  16), (0,   48), (64,  80)],   # C, B, E
+    "pnp":     [(64,  16), (0,   48), (64,  80)],
+    "njf":     [(64,  16), (0,   48), (64,  80)],   # D, G, S
+    "pjf":     [(64,  16), (0,   48), (64,  80)],
+    "voltage": [(16,   0), (16,  80)],         # + top, - bottom
+    "sw":      [(0,    0), (96,   0), (32,  32), (64,  32)],   # in, out, ctrl+, ctrl-
+    "bv":      [(16,   0), (16,  80)],
+    "bi":      [(16,   0), (16,  80)],
+    # Op-amp 5-pin (+IN, -IN, V+, V-, OUT); LTspice's opamp2.asy uses these
+    "opamp":   [(0,    32), (0,   64), (16,  16), (16,  80), (96,  48)],
+}
+
+
+def parse_netlist(netlist: str):
+    """Parse a netlist string, returning a list of component dicts."""
+    components = []
+    # Collect model definitions to determine NPN/PNP for each Q transistor
+    model_kinds = {}  # model_name -> "NPN" / "PNP" / "NJF" / "PJF" / "D" / "SW"
+    lines = netlist.splitlines()
+    # Join continuation lines (start with +)
+    joined = []
+    for line in lines:
+        line = line.rstrip()
+        if line.startswith("+") and joined:
+            joined[-1] += " " + line[1:].strip()
+        else:
+            joined.append(line)
+
+    # First pass: collect models
+    for line in joined:
+        ls = line.strip()
+        if ls.lower().startswith(".model"):
+            parts = ls.split()
+            if len(parts) >= 3:
+                mname = parts[1]
+                # The 3rd token may be NPN/PNP/NJF/D/SW or have ( appended
+                kind = parts[2].split("(")[0].upper()
+                model_kinds[mname] = kind
+
+    for line in joined:
+        line = line.strip()
+        if not line or line.startswith("*"):
+            continue
+        if line.startswith("."):
+            components.append({"type": "directive", "text": line})
+            continue
+        # Skip ngspice control commands inside .control...endcontrol
+        if line.lower() in ("run",) or line.lower().startswith("wrdata"):
+            components.append({"type": "directive", "text": "* " + line})
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        ref = parts[0]
+        prefix = ref[0].upper()
+        comp = {"ref": ref, "prefix": prefix, "raw": line}
+        if prefix == "R":
+            comp.update({"type": "res", "nodes": parts[1:3], "value": parts[3] if len(parts) > 3 else "?"})
+        elif prefix == "C":
+            comp.update({"type": "cap", "nodes": parts[1:3], "value": parts[3] if len(parts) > 3 else "?"})
+        elif prefix == "D":
+            comp.update({"type": "diode", "nodes": parts[1:3], "model": parts[3] if len(parts) > 3 else "?"})
+        elif prefix == "Q":
+            nodes = parts[1:4]
+            model = parts[-1]
+            kind = model_kinds.get(model, "NPN")
+            sym = "pnp" if kind == "PNP" else "npn"
+            comp.update({"type": sym, "nodes": nodes, "model": model})
+        elif prefix == "J":
+            nodes = parts[1:4]
+            model = parts[4] if len(parts) > 4 else "?"
+            kind = model_kinds.get(model, "NJF")
+            sym = "pjf" if kind == "PJF" else "njf"
+            comp.update({"type": sym, "nodes": nodes, "model": model})
+        elif prefix == "V":
+            comp.update({"type": "voltage", "nodes": parts[1:3], "value": " ".join(parts[3:])})
+        elif prefix == "B":
+            # B name n+ n- (V|I) = expression
+            expr = " ".join(parts[3:])
+            is_current = expr.lstrip().upper().startswith("I")
+            comp.update({"type": "bi" if is_current else "bv", "nodes": parts[1:3], "expr": expr})
+        elif prefix == "S":
+            # S name n+ n- ctrl+ ctrl- model
+            comp.update({"type": "sw", "nodes": parts[1:5], "model": parts[5] if len(parts) > 5 else "?"})
+        elif prefix == "X":
+            # X name <pins...> subckt [params]
+            # Universal opamp: X<n> <+IN> <-IN> <VCC> <VEE> <OUT> uopamp_lvl2 ...
+            # Find the subcircuit name token (last word that doesn't look like a node)
+            subckt = "?"
+            pin_count = 5
+            for k in range(len(parts) - 1, 0, -1):
+                if parts[k].lower() == "uopamp_lvl2":
+                    subckt = parts[k]
+                    pin_count = k - 1
+                    break
+            comp.update({"type": "opamp", "nodes": parts[1:pin_count + 1], "subckt": subckt,
+                         "subckt_args": " ".join(parts[pin_count + 2:])})
+        else:
+            comp.update({"type": "unknown", "nodes": [], "raw": line})
+        components.append(comp)
+    return components
+
+
+def emit_asc(components, out_path: Path, title: str):
+    """Emit an .asc file with all components placed in a grid, each pin
+    stubbed out to a net label."""
+    lines = ["Version 4", "SHEET 1 8000 8000"]
+    flags_emitted = set()  # avoid duplicate flag at same coord
+
+    # Lay out components on a grid
+    placeable = [c for c in components if c.get("type") not in (None, "directive", "unknown") and c.get("nodes")]
+    text_directives = [c for c in components if c.get("type") in ("directive", "unknown")]
+
+    for i, comp in enumerate(placeable):
+        row = i // ROW_LEN
+        col = i % ROW_LEN
+        x = col * COMPONENT_PITCH + 64
+        y = row * COMPONENT_VPITCH + 64
+
+        ctype = comp["type"]
+        # Map our types to LTspice symbol names
+        sym_map = {
+            "res": "res", "cap": "cap", "diode": "diode",
+            "npn": "npn", "pnp": "pnp",
+            "njf": "njf", "pjf": "pjf",
+            "voltage": "voltage",
+            "bv": "bv", "bi": "bi",
+            "sw": "sw",
+            "opamp": "opamp2",   # generic 5-pin opamp from LTspice library
+        }
+        sym = sym_map.get(ctype, "res")
+        # Pin offsets keyed by symbol family
+        offs_key = ctype if ctype in PIN_OFFSETS else sym.split("/")[-1]
+        pin_offs = PIN_OFFSETS.get(offs_key, [(0, 0)] * max(1, len(comp.get("nodes", []))))
+
+        lines.append(f"SYMBOL {sym} {x} {y} R0")
+        lines.append(f"SYMATTR InstName {comp['ref']}")
+        if "value" in comp:
+            lines.append(f"SYMATTR Value {comp['value']}")
+        elif "model" in comp:
+            lines.append(f"SYMATTR Value {comp['model']}")
+        elif "expr" in comp:
+            # B-source: the value attribute holds the expression
+            # LTspice expects the form "V=..." or "I=..."
+            lines.append(f"SYMATTR Value {comp['expr']}")
+        elif ctype == "opamp":
+            lines.append(f"SYMATTR Value uopamp_lvl2")
+            if comp.get("subckt_args"):
+                lines.append(f"SYMATTR Value2 {comp['subckt_args']}")
+
+        # For each terminal, emit a wire stub and a flag
+        nodes = comp.get("nodes", [])
+        for k, node in enumerate(nodes):
+            if k >= len(pin_offs):
+                continue
+            px, py = pin_offs[k]
+            pin_x = x + px
+            pin_y = y + py
+            # Stub direction: if pin on left side of symbol, stub goes left;
+            # if right, stub goes right; if top, up; if bottom, down.
+            sym_w = max(p[0] for p in pin_offs) + 16
+            sym_h = max(p[1] for p in pin_offs) + 16
+            if px < 8:                 # left edge
+                end_x, end_y = pin_x - STUB_LEN, pin_y
+            elif px > sym_w - 16:      # right edge
+                end_x, end_y = pin_x + STUB_LEN, pin_y
+            elif py < 8:               # top
+                end_x, end_y = pin_x, pin_y - STUB_LEN
+            else:                       # bottom
+                end_x, end_y = pin_x, pin_y + STUB_LEN
+            lines.append(f"WIRE {pin_x} {pin_y} {end_x} {end_y}")
+            flag_key = (end_x, end_y)
+            if flag_key not in flags_emitted:
+                lines.append(f"FLAG {end_x} {end_y} {node}")
+                flags_emitted.add(flag_key)
+
+    # Add directives as a TEXT block
+    if text_directives:
+        text_x = 64
+        text_y = (len(placeable) // ROW_LEN + 2) * COMPONENT_VPITCH
+        text_block = "\\n".join(t["text"] if t["type"] == "directive"
+                                else f"; UNKNOWN: {t.get('raw','')}"
+                                for t in text_directives)
+        lines.append(f"TEXT {text_x} {text_y} Left 2 !{text_block}")
+
+    # Title text
+    lines.insert(2, f"TEXT 64 16 Left 4 ;{title}")
+
+    out_path.write_text("\n".join(lines) + "\n")
+    print(f"Wrote {out_path} ({len(placeable)} components, {len(text_directives)} directives)")
+
+
+def main():
+    tube = sys.argv[1] if len(sys.argv) > 1 else "ilc11_7"
+    sys.path.insert(0, str(HERE))
+    import test_closed_loop as m
+    if tube not in m.TUBES:
+        print(f"Unknown tube {tube}; available: {list(m.TUBES.keys())}")
+        sys.exit(1)
+    spec = m.TUBES[tube]
+    mc = {k: spec[k] for k in ("r_amb", "sigma_eps_A", "c_th",
+                               "r_top_ref", "r_bot_ref", "r_sense")}
+    if spec.get("booster"): mc["booster"] = True
+    if spec.get("c_ap") is not None: mc["c_ap"] = spec["c_ap"]
+    if spec.get("buf_fb1") is not None: mc["buf_fb1"] = spec["buf_fb1"]
+    if spec.get("wien_alpha") is not None: mc["wien_alpha"] = spec["wien_alpha"]
+    netlist = m.make_netlist(HERE / f"_unused.data",
+                             v_preset=0.55, t_ramp=0.1,
+                             r_int_scale=spec["r_int_scale"], mc=mc)
+    components = parse_netlist(netlist)
+    out_path = HERE / f"regulator_{tube}.asc"
+    title = f"VFD-filament regulator for {spec['name']} (tube={tube})"
+    emit_asc(components, out_path, title)
+
+
+if __name__ == "__main__":
+    main()
