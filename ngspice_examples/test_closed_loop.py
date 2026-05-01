@@ -199,6 +199,9 @@ def make_netlist(data_path: Path,
     opamp_diff = _opamp("vos_diff")
     opamp_dem  = _opamp("vos_dem")
     opamp_int  = _opamp("vos_int")
+    opamp_buf0 = _opamp("vos_buf0")
+    opamp_bufo = _opamp("vos_buf_osc")
+    opamp_bufa = _opamp("vos_buf_ap")
     # Output stages: when use_booster=True, the textbook JFET-VCR architecture is:
     #   Buffer 0  attenuates V_osc to keep JFET in linear region (V_DS << V_GS-Vto).
     #             Passive divider on V_osc gives v_atten_input (high-Z), op-amp
@@ -231,11 +234,11 @@ def make_netlist(data_path: Path,
 * keeping V_DS in the JFET's linear region.
 R_atten_top  v_osc          v_atten_input 56k
 R_atten_bot  v_atten_input  0             9.1k
-XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp}
+XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp_buf0}
 
 * Buffer 1: V_drv_atten -> V_osc_drive (gain k_buf, class-AB BC337/BC327)
 * Feedback divider R_buf1_fb1:R_buf1_fb2 sets per-tube k_buf
-XU_buf_osc   v_drv_atten n_buf_osc_fb vcc vee n_buf_osc_out {opamp}
+XU_buf_osc   v_drv_atten n_buf_osc_fb vcc vee n_buf_osc_out {opamp_bufo}
 R_buf1_fb1   v_osc_drive n_buf_osc_fb {buf_fb1:.6g}
 R_buf1_fb2   n_buf_osc_fb 0           1k
 R_obb_top vcc q_o_bn 680
@@ -246,7 +249,7 @@ Q_o_npn  vcc q_o_bn v_osc_drive QBC337
 Q_o_pnp  vee q_o_bp v_osc_drive QBC327
 
 * Buffer 2: V_ap -> V_ap_drive (gain k_buf, class-AB BC337/BC327)
-XU_buf_ap    v_ap        n_buf_ap_fb  vcc vee n_buf_ap_out {opamp}
+XU_buf_ap    v_ap        n_buf_ap_fb  vcc vee n_buf_ap_out {opamp_bufa}
 R_buf2_fb1   v_ap_drive  n_buf_ap_fb  {buf_fb1:.6g}
 R_buf2_fb2   n_buf_ap_fb 0            1k
 R_abb_top vcc q_a_bn 680
