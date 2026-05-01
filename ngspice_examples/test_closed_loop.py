@@ -58,16 +58,19 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
 #   ILC1-1/8: 26.4   ->  scale 0.30 × 24  = 7.20
 TUBES = {
     "iv3":     _make_tube("IV-3",     R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100,  r_int_scale=0.3),
-    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True),
+    # IV-6 and ILC1-1/8 use r_int_scale=0.42 = 0.3 * (k_buf/k_atten) to
+    # compensate for the 1.41x signal gain through the buffer chain. Keeping
+    # r_int_scale=0.3 over-drives the loop's bandwidth by the same factor and
+    # causes overshoot.
+    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.42, booster=True),
     # ILC1-1/7 needs full all-pass swing for its 5 V_RMS = 7 V_pk filament
     # voltage. c_ap=1uF moves the all-pass corner an order of magnitude lower
     # so at V_ctl=-1 V (R_DS~1k) the all-pass shift reaches near -180 deg,
-    # giving |V_osc - V_ap| ~ 2 |V_osc| at max drive. (wien_alpha=0.3 was
-    # tried but actually REDUCES V_osc amplitude rather than increases it,
-    # because the BJT clamp's soft-knee response is set by the (1+Rfb/Rg)
-    # gain margin, not just the threshold.)
+    # giving |V_osc - V_ap| ~ 2 |V_osc| at max drive. r_int_scale=0.3 is fine
+    # because the loop is operating near max drive (V_ctl close to anti-windup
+    # at 0) so transient overshoot is naturally limited.
     "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, c_ap=1e-6),
-    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True),
+    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.42, booster=True),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
 # two non-inverting unity-gain op-amp + class-AB BC337/BC327 BJT pair buffers
