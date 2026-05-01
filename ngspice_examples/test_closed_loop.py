@@ -36,7 +36,7 @@ TAU_TH = 0.100
 #   R_target = R_sen * R_top_ref / R_bot_ref, with a deliberate 1% offset.
 def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                r_int_scale=0.3, booster=False,
-               wien_alpha=None, c_ap=None):
+               wien_alpha=None, c_ap=None, buf_fb1=None):
     R_top_ref = R_op * 0.99 * R_bot_ref / R_sen   # 1% off-target for cold-start kick
     P_op = V_op * V_op / R_op
     R_amb = R_op / (T_op / T_AMB) ** 1.2
@@ -46,7 +46,7 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                 r_amb=R_amb, sigma_eps_A=sigma_eps_A, c_th=c_th,
                 r_top_ref=R_top_ref, r_bot_ref=R_bot_ref, r_sense=R_sen,
                 r_int_scale=r_int_scale, booster=booster,
-                wien_alpha=wien_alpha, c_ap=c_ap)
+                wien_alpha=wien_alpha, c_ap=c_ap, buf_fb1=buf_fb1)
 
 # r_int_scale per tube: option-A's 0.3 was tuned for the IV-3 bridge gain.
 # Bridge sensitivity ~ V_drive*R_sen/(R_op+R_sen)^2 changes per tube, so
@@ -58,19 +58,14 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
 #   ILC1-1/8: 26.4   ->  scale 0.30 × 24  = 7.20
 TUBES = {
     "iv3":     _make_tube("IV-3",     R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100,  r_int_scale=0.3),
-    # IV-6 and ILC1-1/8 use r_int_scale=0.42 = 0.3 * (k_buf/k_atten) to
-    # compensate for the 1.41x signal gain through the buffer chain. Keeping
-    # r_int_scale=0.3 over-drives the loop's bandwidth by the same factor and
-    # causes overshoot.
-    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.42, booster=True),
-    # ILC1-1/7 needs full all-pass swing for its 5 V_RMS = 7 V_pk filament
-    # voltage. c_ap=1uF moves the all-pass corner an order of magnitude lower
-    # so at V_ctl=-1 V (R_DS~1k) the all-pass shift reaches near -180 deg,
-    # giving |V_osc - V_ap| ~ 2 |V_osc| at max drive. r_int_scale=0.3 is fine
-    # because the loop is operating near max drive (V_ctl close to anti-windup
-    # at 0) so transient overshoot is naturally limited.
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, c_ap=1e-6),
-    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.42, booster=True),
+    # Per-tube buf_fb1 sets buffer gain via R_fb1:R_fb2(=1k):
+    #   buf_fb1 = 6.2k -> k_buf = 7.2 (matches k_atten=7.15, unity overall gain)
+    #   buf_fb1 = 9.1k -> k_buf = 10.1 (1.41x net gain, for ILC1-1/7)
+    # Smaller tubes don't need the extra drive and would limit-cycle if given
+    # too much. ILC1-1/7's 5 V_RMS filament drive demands the higher k_buf.
+    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, c_ap=1e-6, buf_fb1=9.1e3),
+    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
 # two non-inverting unity-gain op-amp + class-AB BC337/BC327 BJT pair buffers
@@ -212,6 +207,12 @@ def make_netlist(data_path: Path,
     # When booster is on, the all-pass JFET drain (and R_ap1) tap into
     # v_drv_atten (low-Z attenuated signal). Otherwise they tap into v_osc.
     v_osc_jfet  = "v_drv_atten" if use_booster else "v_osc"
+    # Per-tube buffer gain via R_buf_fb1 (feedback resistor); R_buf_fb2 = 1k.
+    # k_buf = 1 + R_buf_fb1 / R_buf_fb2. Default R_buf_fb1 = 6.2k -> k_buf=7.2,
+    # which matches k_atten = 7.15 for unity overall signal gain (small tubes).
+    # ILC1-1/7 overrides to R_buf_fb1 = 9.1k -> k_buf = 10.1, giving 1.41x net
+    # signal gain to deliver the 8.5 V_pk drive its 5 V_RMS filament needs.
+    buf_fb1 = mc.get("buf_fb1", 6.2e3)
     booster_lines = ""
     if use_booster:
         booster_lines = f"""
@@ -224,9 +225,9 @@ R_atten_bot  v_atten_input  0             9.1k
 XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp}
 
 * Buffer 1: V_drv_atten -> V_osc_drive (gain k_buf, class-AB BC337/BC327)
-* Feedback divider R_buf1_fb1:R_buf1_fb2 = 9.1k:1k -> k_buf = 10.1
+* Feedback divider R_buf1_fb1:R_buf1_fb2 sets per-tube k_buf
 XU_buf_osc   v_drv_atten n_buf_osc_fb vcc vee n_buf_osc_out {opamp}
-R_buf1_fb1   v_osc_drive n_buf_osc_fb 9.1k
+R_buf1_fb1   v_osc_drive n_buf_osc_fb {buf_fb1:.6g}
 R_buf1_fb2   n_buf_osc_fb 0           1k
 R_obb_top vcc q_o_bn 680
 D_obb_top q_o_bn n_buf_osc_out Dbias
@@ -237,7 +238,7 @@ Q_o_pnp  vee q_o_bp v_osc_drive QBC327
 
 * Buffer 2: V_ap -> V_ap_drive (gain k_buf, class-AB BC337/BC327)
 XU_buf_ap    v_ap        n_buf_ap_fb  vcc vee n_buf_ap_out {opamp}
-R_buf2_fb1   v_ap_drive  n_buf_ap_fb  9.1k
+R_buf2_fb1   v_ap_drive  n_buf_ap_fb  {buf_fb1:.6g}
 R_buf2_fb2   n_buf_ap_fb 0            1k
 R_abb_top vcc q_a_bn 680
 D_abb_top q_a_bn n_buf_ap_out Dbias
@@ -1069,6 +1070,8 @@ def main():
                 mc["booster"] = True
             if spec.get("wien_alpha") is not None:
                 mc["wien_alpha"] = spec["wien_alpha"]
+            if spec.get("buf_fb1") is not None:
+                mc["buf_fb1"] = spec["buf_fb1"]
             if spec.get("c_ap") is not None:
                 mc["c_ap"] = spec["c_ap"]
             r = run_one(f"tube_{name}", v_preset=v_p, t_ramp=t_r,
