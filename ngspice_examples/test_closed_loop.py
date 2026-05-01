@@ -108,10 +108,16 @@ C_HF  = C_HF_BASE
 
 T_END = 5.000
 
-# TLV9104 input offset voltage: typ +/-0.3 mV, max +/-1.5 mV (datasheet).
-# Use worst case to expose integrator-windup-from-offset.
-OPAMP = ("uopamp_lvl2 Avol=3.16meg GBW=1meg Rin=100g Rout=10 "
-         "Iq=600u Ilimit=1 Vrail=100m Vmax=20 Vos=1.5m")
+# TLV9154 input offset voltage: typ +/-0.5 mV, max +/-2.5 mV (datasheet).
+# Higher-voltage successor to TLV9104: 4.5 - 40 V supply range, 4.5 MHz GBW
+# vs TLV9104's 1.8 - 5.5 V / 1 MHz. Lets us run the regulator from +/-9 V
+# rails so the bridge has comfortable swing headroom for the larger tubes.
+OPAMP = ("uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 "
+         "Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.5m")
+# Supply rails (volts). +/-9 V is comfortable for TLV9154 (range 4.5..40 V
+# supply) and gives the buffer class-AB output ~+/-8.4 V swing capability.
+VCC = 9.0
+VEE = -9.0
 
 # Soft-start: at power-on, hold V_int_out at V_PRESET via a switch that
 # opens after T_RAMP. Mimics a real RC + Zener + analog-switch POR network.
@@ -173,13 +179,13 @@ def make_netlist(data_path: Path,
     wien_alpha_eff = mc.get("wien_alpha") or ALPHA
     rtop_bjt = (1 - wien_alpha_eff) * R_TOT_BJT
     rbot_bjt = wien_alpha_eff * R_TOT_BJT
-    vos_v   = mc.get("vos_v", 1.5e-3)
+    vos_v   = mc.get("vos_v", 2.5e-3)  # TLV9154 worst-case Vos
     jfet_vp = mc.get("jfet_vp", -1.5)
     jfet_beta = mc.get("jfet_beta", 1.0e-3)
     def _opamp(key):
         v = mc.get(key, vos_v)
-        return (f"uopamp_lvl2 Avol=3.16meg GBW=1meg Rin=100g Rout=10 "
-                f"Iq=600u Ilimit=1 Vrail=100m Vmax=20 Vos={v:.6e}")
+        return (f"uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 "
+                f"Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos={v:.6e}")
     opamp = _opamp("vos_v")          # back-compat default for any unmarked usage
     opamp_osc  = _opamp("vos_osc")
     opamp_ap   = _opamp("vos_ap")
@@ -242,8 +248,8 @@ Q_a_pnp  vee q_a_bp v_ap_drive QBC327
 .param C_th={c_th_eff:.6e}
 .param fil_exp={fil_exp:.4f}
 
-Vcc  vcc 0  5
-Vee  vee 0 -5
+Vcc  vcc 0  {VCC}
+Vee  vee 0 {VEE}
 
 * === Wien bridge oscillator (alpha=0.5) ===
 R1   v_osc  ns   {r1_wien:.6g}
@@ -262,11 +268,17 @@ Rbot2 b2    fb    {rbot_bjt:.6g}
 XU_osc np nn vcc vee v_osc {opamp_osc}
 
 * === JFET-controlled all-pass: V_ap = V_osc * (1 - jwR_DS C)/(1 + jwR_DS C) ===
-* Two equal R from V_osc and from V_ap into op-amp's V- (inverting unity gain).
-R_ap1 v_osc n_ap_minus {R_AP:.6g}
+* All-pass input is taken from {v_osc_drive} (the buffer output) when a
+* buffer is in use, NOT from v_osc directly. This isolates v_osc from the
+* nonlinear JFET load -- the JFET's V_DS-dependent I-V creates asymmetric
+* loading on v_osc that pulls the positive half-cycle harder than the
+* negative, distorting V_osc by ~20% when J_var is connected directly to
+* v_osc. Routing J_var via the buffer puts the JFET load on the low-Z
+* buffer output instead, leaving v_osc clean.
+R_ap1 {v_osc_drive} n_ap_minus {R_AP:.6g}
 R_ap2 v_ap  n_ap_minus {R_AP:.6g}
 * JFET R_DS in series from V_osc to V+ (the cap-shunted node).
-J_var v_osc v_ctl n_ap_plus J201
+J_var {v_osc_drive} v_ctl n_ap_plus J201
 C_ap n_ap_plus 0 {c_ap_v:.6e}    IC=0
 XU_ap n_ap_plus n_ap_minus vcc vee v_ap {opamp_ap}
 .model J201 NJF(Vto={jfet_vp:.4f} Beta={jfet_beta:.4e} Lambda=0)
