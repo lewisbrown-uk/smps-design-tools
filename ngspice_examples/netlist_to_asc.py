@@ -26,24 +26,37 @@ COMPONENT_VPITCH = 256         # vertical pitch between rows
 ROW_LEN = 8                    # components per row before wrapping
 STUB_LEN = 64                  # length of wire stub from each terminal
 
-# LTspice symbol pin offsets (relative to symbol origin, R0 rotation).
-# These come from the standard LTspice symbol library. They are approximate;
-# user should drag wires/labels in LTspice if they don't quite line up after
-# moving symbols around.
+# LTspice symbol pin offsets (relative to symbol origin, R0 rotation),
+# from the actual symbols in /lib/sym. PIN_DIRECTIONS gives the direction
+# the stub wire should be drawn from each pin so it doesn't run back through
+# the symbol body.
 PIN_OFFSETS = {
-    "res":     [(16,   0), (16,  80)],         # 2 pins vertical
+    "res":     [(16,  16), (16,  96)],
     "cap":     [(16,   0), (16,  64)],
-    "diode":   [(16,   0), (16,  64)],         # anode top, cathode bottom
-    "npn":     [(64,  16), (0,   48), (64,  80)],   # C, B, E
-    "pnp":     [(64,  16), (0,   48), (64,  80)],
-    "njf":     [(64,  16), (0,   48), (64,  80)],   # D, G, S
-    "pjf":     [(64,  16), (0,   48), (64,  80)],
-    "voltage": [(16,   0), (16,  80)],         # + top, - bottom
-    "sw":      [(0,    0), (96,   0), (32,  32), (64,  32)],   # in, out, ctrl+, ctrl-
+    "diode":   [(16,   0), (16,  64)],
+    "voltage": [(16,   0), (16,  96)],
+    "npn":     [(64,  16), (16,  64), (64,  96)],   # C, B, E
+    "pnp":     [(64,  16), (16,  64), (64,  96)],
+    "njf":     [(32,   0), (0,   64), (32,  96)],   # D, G, S
+    "pjf":     [(32,   0), (0,   64), (32,  96)],
+    "sw":      [(16,  64), (16,   0), (48,  16), (48,  48)],   # +, -, ctrl+, ctrl-
     "bv":      [(16,   0), (16,  80)],
     "bi":      [(16,   0), (16,  80)],
-    # Op-amp 5-pin (+IN, -IN, V+, V-, OUT); LTspice's opamp2.asy uses these
-    "opamp":   [(0,    32), (0,   64), (16,  16), (16,  80), (96,  48)],
+    "opamp":   [(0,   32), (0,   64), (32,   0), (32,  96), (96,  48)],
+}
+PIN_DIRECTIONS = {  # direction for each stub: "up", "down", "left", "right"
+    "res":     ["up",    "down"],
+    "cap":     ["up",    "down"],
+    "diode":   ["up",    "down"],
+    "voltage": ["up",    "down"],
+    "npn":     ["up",    "left",  "down"],   # C up, B left, E down
+    "pnp":     ["up",    "left",  "down"],
+    "njf":     ["up",    "left",  "down"],   # D up, G left, S down
+    "pjf":     ["up",    "left",  "down"],
+    "sw":      ["down",  "up",    "right",  "right"],
+    "bv":      ["up",    "down"],
+    "bi":      ["up",    "down"],
+    "opamp":   ["left",  "left",  "up",     "down",  "right"],   # +IN, -IN, V+, V-, OUT
 }
 
 
@@ -186,24 +199,22 @@ def emit_asc(components, out_path: Path, title: str):
 
         # For each terminal, emit a wire stub and a flag
         nodes = comp.get("nodes", [])
+        pin_dirs = PIN_DIRECTIONS.get(offs_key, ["down"] * len(pin_offs))
         for k, node in enumerate(nodes):
             if k >= len(pin_offs):
                 continue
             px, py = pin_offs[k]
             pin_x = x + px
             pin_y = y + py
-            # Stub direction: if pin on left side of symbol, stub goes left;
-            # if right, stub goes right; if top, up; if bottom, down.
-            sym_w = max(p[0] for p in pin_offs) + 16
-            sym_h = max(p[1] for p in pin_offs) + 16
-            if px < 8:                 # left edge
-                end_x, end_y = pin_x - STUB_LEN, pin_y
-            elif px > sym_w - 16:      # right edge
-                end_x, end_y = pin_x + STUB_LEN, pin_y
-            elif py < 8:               # top
+            direction = pin_dirs[k] if k < len(pin_dirs) else "down"
+            if direction == "up":
                 end_x, end_y = pin_x, pin_y - STUB_LEN
-            else:                       # bottom
+            elif direction == "down":
                 end_x, end_y = pin_x, pin_y + STUB_LEN
+            elif direction == "left":
+                end_x, end_y = pin_x - STUB_LEN, pin_y
+            else:  # right
+                end_x, end_y = pin_x + STUB_LEN, pin_y
             lines.append(f"WIRE {pin_x} {pin_y} {end_x} {end_y}")
             flag_key = (end_x, end_y)
             if flag_key not in flags_emitted:
