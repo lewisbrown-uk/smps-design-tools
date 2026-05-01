@@ -96,7 +96,9 @@ R_INT_BASE = 100e3
 C_INT_BASE = 1.0 / (2 * np.pi * 5.0 * R_INT_BASE)
 R_PID_BASE = 1e6
 C_PID_BASE = 1e-9
-C_HF_BASE  = 1.6e-9
+C_HF_BASE  = 10e-9   # bumped from 1.6n to push HF pole from 332 Hz to 53 Hz
+                     # (gives 25 dB attenuation at 1 kHz to suppress demod
+                     # feedthrough that limit-cycles the boosted-tube loops)
 # Module-level "current" values (used in make_netlist when not overridden)
 R_INT = R_INT_BASE
 C_INT = C_INT_BASE
