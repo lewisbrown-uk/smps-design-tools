@@ -1,40 +1,52 @@
-* Wien bridge oscillator with diode-connected-2N3904 amplitude limiting
-* f0 = 1 / (2*pi*R*C) = 1 kHz  (R=10k, C=15.915n)  -> 100 cycles = 100 ms
+* Diode-limited Wien bridge oscillator (1 kHz, R=10k, C=15.915n -> 100 cycles)
+*
+* Op-amp now modelled by Ste Kulov's universal Level-1 macromodel (single
+* dominant pole, no rail saturation). Parameters tuned so the dominant
+* pole sits comfortably above f0 -- this matches what a fast audio op-amp
+* (LM4562 / OPA1612 with closed-loop gain 3.2) actually behaves like in
+* this band. The clamp diodes hold V(out) to ~1.8 V peak so the op-amp
+* never sees its rails: the simpler Level-1 model is faithful.
+*
+* Library:
+*   uopamp.lib  -- universal op-amp macromodel (Ste Kulov, 2019)
+*   AN-138 (Analog Devices) for the underlying topology
 
-* --- Wien positive-feedback network: out -> non-inverting input (np) ---
-* Series arm (high-pass): R1 in series with C1
-* Shunt arm (low-pass):   R2 in parallel with C2
+.include uopamp.lib
+
+* --- Wien positive-feedback network ---
 R1   out  ns   10k
 C1   ns   np   15.915n  IC=0
 R2   np   0    10k
-C2   np   0    15.915n  IC=10m       ; small power-on charge on shunt cap kicks startup
+C2   np   0    15.915n  IC=10m       ; small power-on charge kicks startup
 
-* --- Negative feedback with diode-connected 2N3904 amplitude clamp ---
-* Small-signal gain = 1 + (Rfa+Rfb)/Rg = 1 + 22k/10k = 3.2 for startup.
-* Q1, Q2 are antiparallel: each has base shorted to collector, so the BE
-* junction acts as the clamping diode. Q1 conducts when V(fb) > V(out)+Vbe;
-* Q2 conducts when V(out) > V(fb)+Vbe. The 2N3904 has finite beta so a
-* small base current flows through the (now zero-resistance) BC short --
-* this softens the knee slightly compared to a plain signal diode.
+* --- Negative feedback with antiparallel diode-connected 2N3904 clamp ---
 Rg   nn   0    10k
 Rfa  nn   fb   10k
 Rfb  fb   out  12k
-Q1   fb   fb   out  Q2N3904        ; anode=fb, cathode=out
-Q2   out  out  fb   Q2N3904        ; anode=out, cathode=fb
+Q1   fb   fb   out  Q2N3904
+Q2   out  out  fb   Q2N3904
 
-* --- Behavioural op-amp: A0=1e5, +/-15 V rails, 100 kHz pole, unity-gain buffer ---
-Bgain oe   0   V = max(-15, min(15, 1e5*(V(np)-V(nn))))
-Rop   oe   oa  1k
-Cop   oa   0   1.59n     IC=0
-Ebuf  out  0   oa  0     1.0
+* --- Power supplies (+/- 15 V) ---
+Vcc  vcc 0  15
+Vee  vee 0 -15
 
-* Standard Motorola 2N3904 SPICE model.
+* --- Op-amp: universal Level-2 macromodel, NE5532 audio op-amp specs.
+* Includes rail saturation, quiescent current, and Vos/current-limit
+* modelling. Ilimit is held at 1 A rather than NE5532's actual 38 mA:
+* the macromodel's V9/V10 source offsets ({Ilimit-545m}) only cancel
+* their diode V_BE drops correctly when Ilimit >= 545 mA. Below that
+* the I-clamp fires at a few hundred mV (N001 - OUT) and chokes
+* oscillator startup. The actual NE5532 current limit isn't being
+* exercised here (loop currents are sub-mA) so this fudge is faithful.
+XU1  np nn vcc vee out uopamp_lvl2
++    Avol=100k GBW=10meg Rin=100k Rout=30 Iq=8m Ilimit=1 Vrail=1.4 Vmax=40
+
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
 + ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
 + CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p MJE=.2593 VJE=.75
 + TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
 
-.tran 10u 100m UIC
+.tran 1u 100m UIC
 
 .control
 run

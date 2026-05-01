@@ -1,0 +1,142 @@
+* VFD-filament regulator netlist for IV-3 (tube=iv3)
+* Generated from test_closed_loop.py make_netlist; matches the
+* netlist that the corresponding regulator_iv3.asc was
+* converted from. Use to cross-check LTspice's generated netlist.
+
+* Closed-loop VFD-filament regulator with thermal model
+
+.include /home/user/smps-design-tools/ngspice_examples/uopamp.lib
+
+.param T_amb=300.0
+.param R_amb=30.8203
+.param sigma_eps_A=2.490660e-14
+.param C_th=5.100872e-06
+.param fil_exp=1.2000
+
+Vcc  vcc 0  9.0
+Vee  vee 0 -9.0
+
+* === Wien bridge oscillator (alpha=0.5) ===
+R1   v_osc  ns   10000
+C1   ns     np   1.591500e-08  IC=0
+R2   np     0    10000
+C2   np     0    1.591500e-08  IC=10m
+Rg   nn     0    10k
+Rfa  nn     fb   10k
+Rfb  fb     v_osc  12k
+Q1   fb     b1    v_osc Q2N3904
+Q2   v_osc  b2    fb    Q2N3904
+Rtop1 fb    b1    120000
+Rbot1 b1    v_osc 120000
+Rtop2 v_osc b2    120000
+Rbot2 b2    fb    120000
+XU_osc np nn vcc vee v_osc uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+
+* === JFET-controlled all-pass: V_ap = V_osc * (1 - jwR_DS C)/(1 + jwR_DS C) ===
+* All-pass input is taken from v_osc: when a buffer chain is in use,
+* this is v_drv_atten (low-Z attenuated signal from Buffer 0); otherwise it
+* is v_osc directly. Attenuation keeps V_DS << V_GS-Vto so the JFET stays
+* in its linear region, eliminating the asymmetric V_GS shift caused by the
+* model's drain/source swap when V_DS reverses polarity.
+R_ap1 v_osc n_ap_minus 1590
+R_ap2 v_ap  n_ap_minus 1590
+* JFET R_DS in series from V_drv_atten (or V_osc) to V+ (cap-shunted node).
+J_var v_osc v_ctl n_ap_plus J201
+C_ap n_ap_plus 0 1.000000e-07    IC=0
+XU_ap n_ap_plus n_ap_minus vcc vee v_ap uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+.model J201 NJF(Vto=-1.5000 Beta=1.0000e-03 Lambda=0)
+
+* === AC Wheatstone bridge ===
+* Filament arm: V_osc -> R_filament(thermal) -> node_A -> R_sense -> V_ap
+B_fil v_osc node_A I = (V(v_osc) - V(node_A)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
+R_sen node_A v_ap 10
+* Reference arm: V_osc -> R_top_ref -> node_B -> R_sense_ref -> V_ap
+* R_top_ref nominal 99 ohm (1% off the 100-ohm filament target) so the bridge
+* has a non-zero error signal at cold-start. With MC on, this is multiplied
+* by k_r_top_ref tolerance.
+R_top_ref v_osc node_B 990
+R_bot_ref node_B v_ap  100
+
+* === Filament thermal subnet ===
+B_pelec 0 T_node I = (V(v_osc)-V(node_A))*(V(v_osc)-V(node_A)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
+B_prad  T_node 0 I = sigma_eps_A * (V(T_node)^4 - T_amb^4)
+C_th T_node 0 {C_th} IC=300.0
+B_R r_fil 0 V = R_amb * (V(T_node)/T_amb)^fil_exp
+
+* === Difference amp (1-op-amp subtractor, gain 1) ===
+R_a1 node_A n_diff_minus 10000
+R_a2 n_diff_minus n_diff 10000
+R_b1 node_B n_diff_plus 10000
+R_b2 n_diff_plus 0 10000
+XU_diff n_diff_plus n_diff_minus vcc vee n_diff uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+
+* === Comparator (behavioural sign of V_osc) ===
+B_cmp n_cmp 0 V = 5 * tanh(V(v_osc) * 1000)
+
+* === Polarity-switching demodulator ===
+.model swMod SW(VT=0 VH=0.1 RON=10 ROFF=1G)
+S1 n_diff vplus n_cmp 0 swMod
+S2 0      vplus 0     n_cmp swMod
+R_bias vplus 0 1Meg
+R_din n_diff n_dem_minus 10k
+R_dfb n_demout n_dem_minus 10k
+XU_dem vplus n_dem_minus vcc vee n_demout uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+
+* === Integrator -> V_ctl (loop amp) ===
+* V_ctl_raw = -1/(R*C) * integral(V_demout). Cold filament: V_demout < 0,
+* so V_ctl_raw integrates positive. We want V_ctl negative when cold so
+* the JFET stays pinched off. Wire B_invert to flip sign.
+* PID compensator (single-op-amp form):
+*   Input: R_INT || C_PID  (the parallel cap adds derivative action)
+*   Feedback: R_PID in series with C_INT (the series R adds proportional)
+* Transfer function: H(s) = -(R_PID + 1/sC_INT)(1 + sR_INT*C_PID) / R_INT
+*   Ki = 1/(R_INT * C_INT)         integrator (DC dominates)
+*   Kp = R_PID/R_INT + C_PID/C_INT proportional (mid-band)
+*   Kd = R_PID * C_PID             derivative (HF, fights overshoot)
+R_intin  n_demout n_int_minus 30000
+C_intin  n_demout n_int_minus 1.000000e-09
+R_intfb  n_int_pidp v_int_out 300000
+* Realistic startup: cap begins uncharged (no IC). Loop self-starts from
+* the intentional 1% bridge mismatch above + Vos drift in the demod and
+* integrator op-amps.
+C_intfb  n_int_minus n_int_pidp 3.183099e-07  IC=0
+* HF rolloff cap: in parallel with R_PID to limit HF gain and suppress
+* the f0 ripple from V_demod that the D term would otherwise pump
+* through to V_ctl.
+C_hf     n_int_pidp v_int_out 1.000000e-08     IC=0
+XU_int 0 n_int_minus vcc vee v_int_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+
+* Anti-windup: clamp v_int_out at [0, +1.0] V to match the V_ctl range.
+B_aw v_int_out 0 I = (V(v_int_out) > 1.0) * (V(v_int_out) - 1.0) * 1e3
++                  + (V(v_int_out) < 0) * V(v_int_out) * 1e3
+
+* Map integrator output to JFET range [-1.0, 0]: invert.
+B_ctl v_ctl 0 V = max(-1.0, min(0, -V(v_int_out)))
+
+* === Soft-start network (V_PRESET = 0.55, T_RAMP = 0.1 s) ===
+* During the first T_RAMP seconds, a switch ties v_int_out to V_PRESET
+* via a low-Z path, forcing the integrator output into the neighbourhood
+* of its expected steady state. After T_RAMP the switch opens and the
+* loop takes over. T_RAMP=0 disables (loop starts from zero).
+* VT=0.5 / VH=0 makes the switch trip cleanly at V_ss=0.5 (i.e., closed when
+* V_ss = 1 during the ramp, opens when V_ss = 0 after).
+.model swSS SW(VT=0.5 VH=0 RON=0.01 ROFF=1G)
+V_preset_src v_preset_node 0 0.5500
+V_ss vss 0 PWL(0 1 9.999900e-02 1 1.000000e-01 0 1 0)
+S_ss v_int_out v_preset_node vss 0 swSS
+
+* === 2N3904 ===
+.model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
++ ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
++ CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p MJE=.2593 VJE=.75
++ TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
+
+.options reltol=1e-6 abstol=1p chgtol=1f
+.tran 10u 5.0 UIC
+
+.control
+run
+wrdata /home/user/smps-design-tools/ngspice_examples/_iv3_unused.data v(v_osc) v(v_ap) v(node_A) v(node_B) v(n_diff) v(n_demout) v(v_ctl) v(v_int_out) v(T_node) v(r_fil)
+.endcontrol
+
+.end

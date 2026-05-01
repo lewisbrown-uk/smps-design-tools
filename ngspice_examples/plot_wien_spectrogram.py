@@ -27,10 +27,13 @@ nperseg = 2048
 hop = 64
 win = hann(nperseg, sym=False)
 stft = ShortTimeFFT(win, hop=hop, fs=fs, scale_to="magnitude")
-Sx = stft.stft(x)
+# Restrict to fully-valid frames so window straddling the edges doesn't
+# show up as a broadband flash from the implicit zero-padding.
+p_lo, p_hi = stft.lower_border_end[1], stft.upper_border_begin(len(x))[1]
+Sx = stft.stft(x, p0=p_lo, p1=p_hi)
 mag_db = 20 * np.log10(np.abs(Sx) + 1e-12)
 
-t_frames = stft.t(len(x))
+t_frames = stft.t(len(x), p0=p_lo, p1=p_hi)
 freqs = stft.f
 
 f_lim = 5_000  # show up to 5 kHz; harmonics from diode clipping live here

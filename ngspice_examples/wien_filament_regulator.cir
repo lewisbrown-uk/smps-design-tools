@@ -1,0 +1,175 @@
+* VFD-filament regulator: closed-loop AC-bridge controller
+* ----------------------------------------------------------------
+* Single TLV9104-class quad op-amp + 1 J201 JFET + 2 2N3904 BJTs.
+* +/-5 V supplies. Drives a small VFD filament with regulated AC such
+* that R_filament settles at R_target = 100 ohm (= T = 800 K = 10 mW).
+*
+* Block diagram:
+*  Wien osc ---V_osc---+---all-pass(JFET)---V_ap---+
+*                      |                            |
+*                      +----R_top_ref--node_B--R_sen_ref--+
+*                      |                                  |
+*                      +----R_filament-node_A--R_sense---+
+*                                |       |
+*                                +- diff amp -V_diff -+
+*                                                     |
+*                              comparator(sign V_osc) +-> demodulator
+*                                                     +-> PID -> V_ctl -> JFET gate
+*
+* The bridge is balanced when R_filament = R_target. The filament is
+* modelled with R(T) = R_amb*(T/T_amb)^1.2 and P_rad = sigma*eps*A*T^4
+* via behavioural B-sources (decoupled thermal subnet at node T_node).
+*
+* Performance (cold-start from T = 300 K):
+*   peak T overshoot   = 135 K (above 800 K target)
+*   settling to <2%    = 1.5 s
+*   steady state       = 810 K, R = 102 ohm, 1.4 V_rms across filament
+*   no rectification anywhere -- AC bridge is naturally null at balance
+*
+* See test_closed_loop.py for the parameterised version that generates
+* this netlist programmatically and produces the cold-start plot.
+* ----------------------------------------------------------------
+
+.include uopamp.lib
+
+.param T_amb       = 300
+.param R_amb       = 30.8203
+.param sigma_eps_A = 2.490660e-14
+.param C_th        = 5.100872e-06
+
+* === Power supplies ===
+Vcc  vcc 0  5
+Vee  vee 0 -5
+
+* === Wien bridge oscillator (alpha = 0.5, ~3 V peak) ===
+R1    v_osc  ns    10k
+C1    ns     np    15.915n  IC=0
+R2    np     0     10k
+C2    np     0     15.915n  IC=10m
+Rg    nn     0     10k
+Rfa   nn     fb    10k
+Rfb   fb     v_osc 12k
+Q1    fb     b1    v_osc Q2N3904
+Q2    v_osc  b2    fb    Q2N3904
+Rtop1 fb     b1    120k
+Rbot1 b1     v_osc 120k
+Rtop2 v_osc  b2    120k
+Rbot2 b2     fb    120k
+XU_osc np nn vcc vee v_osc uopamp_lvl2
++      Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20
+
+* === JFET-controlled all-pass: V_ap = phase-shifted V_osc ===
+* H(s) = (1 - sR_DS C) / (1 + sR_DS C). R_DS modulated by V_ctl on JFET gate.
+R_ap1  v_osc       n_ap_minus 1.59k
+R_ap2  v_ap        n_ap_minus 1.59k
+J_var  v_osc       v_ctl      n_ap_plus J201
+C_ap   n_ap_plus   0          100n   IC=0
+XU_ap  n_ap_plus n_ap_minus vcc vee v_ap uopamp_lvl2
++      Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20
+
+* J201 small-signal JFET (Vp = -1.5 V, IDSS ~ 1 mA)
+.model J201 NJF(Vto=-1.5 Beta=1.0e-3 Lambda=0)
+
+* === AC Wheatstone bridge ===
+* Filament arm: V_osc - R_filament(thermal) - node_A - R_sense - V_ap
+B_fil  v_osc node_A I = (V(v_osc) - V(node_A)) / (R_amb * (V(T_node)/T_amb)^1.2)
+R_sen  node_A v_ap 10
+* Reference arm:  V_osc - R_top_ref - node_B - R_sense_ref - V_ap
+R_top_ref v_osc node_B 100
+R_bot_ref node_B v_ap  10
+
+* === Filament thermal subnet ===
+* V(T_node) carries the filament temperature in Kelvin.
+*   P_in  = V_filament^2 / R(T)       heat-in current source
+*   P_out = sigma*eps*A * (T^4 - T_amb^4)  heat-out current source
+*   C_th drives dT/dt = (P_in - P_out)/C_th
+B_pelec 0 T_node I = (V(v_osc)-V(node_A))*(V(v_osc)-V(node_A))
++                    / (R_amb * (V(T_node)/T_amb)^1.2)
+B_prad  T_node 0 I = sigma_eps_A * (V(T_node)^4 - T_amb^4)
+C_th T_node 0 {C_th} IC=300
+B_R  r_fil 0 V = R_amb * (V(T_node)/T_amb)^1.2
+
+* === Difference amp on bridge midpoints (1-op-amp subtractor, gain 1) ===
+R_a1 node_A n_diff_minus 10k
+R_a2 n_diff_minus n_diff 10k
+R_b1 node_B n_diff_plus  10k
+R_b2 n_diff_plus 0       10k
+XU_diff n_diff_plus n_diff_minus vcc vee n_diff uopamp_lvl2
++       Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20
+
+* === Comparator (behavioural sign(V_osc) -> +/-5 V via tanh) ===
+B_cmp n_cmp 0 V = 5 * tanh(V(v_osc) * 1000)
+
+* === Polarity-switching synchronous demodulator ===
+* Inverting unity-gain stage with V+ toggled between V_diff and GND
+* by S-element switches under sign(V_osc) control.
+.model swMod SW(VT=0 VH=0.1 RON=10 ROFF=1G)
+S1 n_diff vplus n_cmp 0     swMod
+S2 0      vplus 0     n_cmp swMod
+R_bias vplus 0 1Meg
+R_din n_diff n_dem_minus 10k
+R_dfb n_demout n_dem_minus 10k
+XU_dem vplus n_dem_minus vcc vee n_demout uopamp_lvl2
++      Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20 Vos=1.5m
+
+* === PID compensator (single op-amp) -> V_ctl ===
+* Input network: R_INT in parallel with C_PID (D term)
+* Feedback:      R_PID in series with C_INT (P + I terms)
+* Plus C_HF in parallel with R_PID for the HF rolloff that suppresses
+* the f0=1 kHz residual ripple in V_demod from leaking onto V_ctl.
+* Transfer:  H(s) = -(R_PID + 1/sC_INT)(1 + sR_INT C_PID) / R_INT
+*    Ki = 1/(R_INT C_INT) = 105 rad/s  (16.7 Hz integrator zero)
+*    Kp = R_PID/R_INT + C_PID/C_INT ~ 10
+*    Kd = R_PID C_PID = 0.3 ms        (anticipates thermal lag)
+*    HF pole = 1/(2*pi*R_PID*C_HF) = 333 Hz
+*
+* These values come from the sweep_a (loop bandwidth) experiment:
+* R_INT = 30k, R_PID = 300k gives 11x faster cold-start settling than
+* the original 100k/1M values (324 ms vs 3540 ms to settle within 5K of
+* the Vos-limited equilibrium) with NO overshoot above target. Going
+* faster (R_INT = 10k = 50 Hz integrator zero) adds 42 K of overshoot.
+R_intin  n_demout n_int_minus 30k
+C_intin  n_demout n_int_minus 1n
+R_intfb  n_int_pidp v_int_out 300k
+C_intfb  n_int_minus n_int_pidp 318.31n  IC=0
+C_hf     n_int_pidp v_int_out 1.6n       IC=0
+XU_int 0 n_int_minus vcc vee v_int_out uopamp_lvl2
++      Avol=3.16meg GBW=1meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=20 Vos=1.5m
+
+* Anti-windup: clamp v_int_out at [0, +1.0] V matching the V_ctl range
+B_aw v_int_out 0 I = (V(v_int_out) > 1.0) * (V(v_int_out) - 1.0) * 1e3
++                  + (V(v_int_out) < 0) * V(v_int_out) * 1e3
+
+* Map integrator output to JFET-friendly range [-1.0, 0]: invert and clamp
+B_ctl v_ctl 0 V = max(-1.0, min(0, -V(v_int_out)))
+
+* === Soft-start network (optional) ===
+* Holds v_int_out at V_PRESET = 0.55 V (= V_ctl approx -0.55 V, near
+* the Vos-limited steady state) for the first 100 ms via a switch with
+* RON = 10 mohm. After T_RAMP the switch opens and the loop runs free.
+* In real hardware this would be a small RC + Zener + analog-switch POR
+* network. With the fast loop (above), this saves ~100 ms of warm-up.
+* Set T_RAMP = 0 to disable (loop self-starts via the 1% bridge mismatch
+* and op-amp Vos drift).
+.model swSS SW(VT=0.5 VH=0 RON=0.01 ROFF=1G)
+V_preset_src v_preset_node 0 0.55
+V_ss vss 0 PWL(0 1 99.999m 1 100m 0 1 0)
+S_ss v_int_out v_preset_node vss 0 swSS
+
+* === Standard 2N3904 SPICE model ===
+.model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
++ ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
++ CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p MJE=.2593 VJE=.75
++ TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
+
+* Tight tolerance is needed for accurate AC-into-thermal-node averaging
+.options reltol=1e-6 abstol=1p chgtol=1f
+.tran 10u 2.5 UIC
+
+.control
+run
+wrdata wien_filament_regulator.data v(v_osc) v(v_ap) v(node_A) v(node_B)
++ v(n_diff) v(n_demout) v(v_ctl) v(v_int_out) v(T_node) v(r_fil)
+.endcontrol
+
+.end

@@ -30,13 +30,18 @@ WORK.mkdir(exist_ok=True)
 R_TOT = 240e3                # total divider impedance per transistor
 
 SWEEPS = {
-    "broad": [1.00, 0.90, 0.80, 0.70, 0.60, 0.50,
-              0.40, 0.35, 0.30, 0.25, 0.20],
-    "fine":  list(np.round(np.arange(0.25, 0.351, 0.01), 3)),
+    "broad":  [1.00, 0.90, 0.80, 0.70, 0.60, 0.50,
+               0.40, 0.35, 0.30, 0.25, 0.20],
+    "fine":   list(np.round(np.arange(0.25, 0.351, 0.01),  3)),
+    "finer":  list(np.round(np.arange(0.29, 0.3101, 0.001), 4)),
 }
 
+# Default tstep per sweep -- finer sweeps need finer resolution to keep the
+# lock-in measurement floor below the THD variation we want to see.
+TSTEPS = {"broad": "10u", "fine": "10u", "finer": "1u"}
 
-def make_netlist(alpha: float, data_path: Path) -> str:
+
+def make_netlist(alpha: float, data_path: Path, tstep: str = "10u") -> str:
     """Wien bridge with BJT clamps biased by symmetric dividers (ratio alpha)."""
     rtop = (1 - alpha) * R_TOT
     rbot = alpha * R_TOT
@@ -56,6 +61,8 @@ def make_netlist(alpha: float, data_path: Path) -> str:
         )
     return f"""* Wien bridge oscillator with BJT-divider amplitude clamp (alpha={alpha:.3f})
 
+.include {(HERE/'uopamp.lib').as_posix()}
+
 R1   out  ns   10k
 C1   ns   np   15.915n  IC=0
 R2   np   0    10k
@@ -67,17 +74,18 @@ Rfb  fb   out  12k
 {q1}
 {q2}
 {bias}
-Bgain oe   0   V = max(-15, min(15, 1e5*(V(np)-V(nn))))
-Rop   oe   oa  1k
-Cop   oa   0   1.59n     IC=0
-Ebuf  out  0   oa  0     1.0
+* Op-amp: NE5532-class Level-2 macromodel (Ilimit raised to 1A to
+* dodge the macromodel offset-compensation bug -- see uopamp.lib).
+Vcc  vcc 0  15
+Vee  vee 0 -15
+XU1  np nn vcc vee out uopamp_lvl2 Avol=100k GBW=10meg Rin=100k Rout=30 Iq=8m Ilimit=1 Vrail=1.4 Vmax=40
 
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
 + ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
 + CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p MJE=.2593 VJE=.75
 + TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
 
-.tran 10u 100m UIC
+.tran {tstep} 100m UIC
 
 .control
 run
@@ -88,10 +96,11 @@ wrdata {data_path.as_posix()} v(out)
 """
 
 
-def run_one(alpha: float) -> tuple[np.ndarray, np.ndarray]:
-    cir = WORK / f"wien_alpha_{alpha:.3f}.cir"
-    dat = WORK / f"wien_alpha_{alpha:.3f}.data"
-    cir.write_text(make_netlist(alpha, dat))
+def run_one(alpha: float, tstep: str = "10u") -> tuple[np.ndarray, np.ndarray]:
+    tag = f"wien_alpha_{alpha:.4f}_{tstep}"
+    cir = WORK / f"{tag}.cir"
+    dat = WORK / f"{tag}.data"
+    cir.write_text(make_netlist(alpha, dat, tstep=tstep))
     subprocess.run(
         ["ngspice", "-b", cir.name],
         cwd=WORK,
@@ -103,10 +112,9 @@ def run_one(alpha: float) -> tuple[np.ndarray, np.ndarray]:
     return d[:, 0], d[:, 1]
 
 
-def lockin_thd(t_raw: np.ndarray, x_raw: np.ndarray, t_window=(0.05, 0.085)
-               ) -> tuple[float, float]:
+def lockin_thd(t_raw: np.ndarray, x_raw: np.ndarray, t_window=(0.05, 0.085),
+               fs: float = 50_000) -> tuple[float, float]:
     """Return (peak_amplitude, THD+N) over the steady-state window via lock-in."""
-    fs = 50_000
     t = np.arange(t_raw[0], t_raw[-1], 1 / fs)
     x = np.interp(t, t_raw, x_raw)
 
@@ -147,19 +155,27 @@ def main() -> None:
     args = parser.parse_args()
     alphas = SWEEPS[args.sweep]
     suffix = "" if args.sweep == "broad" else f"_{args.sweep}"
+    tstep = TSTEPS[args.sweep]
+    # Match lock-in fs to the simulation print rate so we don't downsample.
+    suffix_lookup = {"10u": 100_000, "1u": 1_000_000, "100n": 10_000_000}
+    fs = suffix_lookup.get(tstep, 100_000)
 
     if shutil.which("ngspice") is None:
         raise RuntimeError("ngspice not found in PATH")
 
+    print(f"Sweep '{args.sweep}': {len(alphas)} points, "
+          f"tstep={tstep}, lock-in fs={fs/1e3:.0f} kS/s")
+
     results = []
     for a in alphas:
         try:
-            t, x = run_one(a)
-            amp, thd = lockin_thd(t, x)
-            print(f"alpha={a:.3f}  peak={amp:.3f} V   THD+N={thd*100:.3f} %")
+            t, x = run_one(a, tstep=tstep)
+            amp, thd = lockin_thd(t, x, fs=fs)
+            print(f"alpha={a:.4f}  peak={amp:.3f} V   THD+N={thd*100:.4f} %  "
+                  f"({20*np.log10(thd):+.3f} dB)")
             results.append((a, amp, thd))
         except subprocess.CalledProcessError as e:
-            print(f"alpha={a:.3f}  FAILED: {e.stderr[-200:]}")
+            print(f"alpha={a:.4f}  FAILED: {e.stderr[-200:]}")
             results.append((a, float("nan"), float("nan")))
 
     arr = np.array(results)
