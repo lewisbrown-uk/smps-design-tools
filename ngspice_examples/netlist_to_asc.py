@@ -39,7 +39,7 @@ PIN_OFFSETS = {
     "pnp":     [(64,  16), (16,  64), (64,  96)],
     "njf":     [(32,   0), (0,   64), (32,  96)],   # D, G, S
     "pjf":     [(32,   0), (0,   64), (32,  96)],
-    "sw":      [(16,  64), (16,   0), (48,  16), (48,  48)],   # +, -, ctrl+, ctrl-
+    "sw":      [(-32, -16), (32, -16), (-32, 16), (32, 16)],   # n+, n-, ctrl+, ctrl-
     "bv":      [(16,   0), (16,  80)],
     "bi":      [(16,   0), (16,  80)],
     "opamp":   [(0,   32), (0,   64), (32,   0), (32,  96), (96,  48)],
@@ -53,7 +53,7 @@ PIN_DIRECTIONS = {  # direction for each stub: "up", "down", "left", "right"
     "pnp":     ["up",    "left",  "down"],
     "njf":     ["up",    "left",  "down"],   # D up, G left, S down
     "pjf":     ["up",    "left",  "down"],
-    "sw":      ["down",  "up",    "right",  "right"],
+    "sw":      ["up",    "up",    "down",   "down"],
     "bv":      ["up",    "down"],
     "bi":      ["up",    "down"],
     "opamp":   ["left",  "left",  "up",     "down",  "right"],   # +IN, -IN, V+, V-, OUT
