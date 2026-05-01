@@ -170,8 +170,15 @@ def make_netlist(data_path: Path,
     sigma_eps_A_eff = mc.get("sigma_eps_A", SIGMA_EPS_A * g("k_sigma_eps_A"))
     c_th_eff  = mc.get("c_th",      C_TH * g("k_c_th"))
     fil_exp = mc.get("fil_exp", 1.2)
-    r_a1 = 10e3 * g("k_r_a1"); r_a2 = 10e3 * g("k_r_a2")
-    r_b1 = 10e3 * g("k_r_b1"); r_b2 = 10e3 * g("k_r_b2")
+    # Diff-amp resistor network: bumped 10k -> 1Meg to eliminate asymmetric
+    # loading of node_A vs node_B. Filament arm Thevenin is ~25 ohm; reference
+    # arm Thevenin is 400-833 ohm depending on tube. With 10k diff-amp R, the
+    # ~3-5% loading shift on node_B vs <0.5% on node_A drives the loop to
+    # settle at a non-bridge-balance operating point (off-target T).
+    # 1 Meg makes loading <0.1% on both sides; Johnson noise still <5 uV/sqrtHz
+    # bandwidth, op-amp input bias current at 10 pA gives <10 uV offset.
+    r_a1 = 1e6 * g("k_r_a1"); r_a2 = 1e6 * g("k_r_a2")
+    r_b1 = 1e6 * g("k_r_b1"); r_b2 = 1e6 * g("k_r_b2")
     c_ap_v = mc.get("c_ap", C_AP * g("k_c_ap"))
     # Wien BJT amplitude clamp: alpha sets the V_osc clamp threshold (lower
     # alpha -> higher peak amplitude). Default 0.5 keeps clamp at ~3 V_pk on
