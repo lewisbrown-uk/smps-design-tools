@@ -72,7 +72,7 @@ R_sen node_A v_ap_drive 2
 * R_top_ref nominal 99 ohm (1% off the 100-ohm filament target) so the bridge
 * has a non-zero error signal at cold-start. With MC on, this is multiplied
 * by k_r_top_ref tolerance.
-R_top_ref v_osc_drive node_B 792
+R_top_ref v_osc_drive node_B 800
 R_bot_ref node_B v_ap_drive  200
 
 * === Difference amp (1-op-amp subtractor, gain 1) ===

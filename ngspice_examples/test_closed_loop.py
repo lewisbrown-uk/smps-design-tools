@@ -37,7 +37,12 @@ TAU_TH = 0.100
 def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                r_int_scale=0.3, booster=False,
                wien_alpha=None, c_ap=None, buf_fb1=None):
-    R_top_ref = R_op * 0.99 * R_bot_ref / R_sen   # 1% off-target for cold-start kick
+    # Bridge target R = R_op * R_bot_ref / R_sen, set to give R_filament = R_op
+    # at the operating temperature T_op. (An earlier version had a 1% offset
+    # for "cold-start kick", but that's unnecessary -- the filament starts at
+    # R_amb which is far below R_target, so V_diff is large at cold-start
+    # regardless. Soft-start preloads the integrator anyway.)
+    R_top_ref = R_op * R_bot_ref / R_sen
     P_op = V_op * V_op / R_op
     R_amb = R_op / (T_op / T_AMB) ** 1.2
     sigma_eps_A = P_op / (T_op ** 4 - T_AMB ** 4)
