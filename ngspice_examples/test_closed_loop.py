@@ -394,25 +394,29 @@ C_intfb  n_int_minus n_int_pidp {c_int:.6e}  IC=0
 C_hf     n_int_pidp v_int_out {c_hf:.6e}     IC=0
 XU_int 0 n_int_minus vcc vee v_int_out {opamp_int}
 
-* Back-calculation anti-windup: V_ctl is allowed to range from -1.0 to +0.4 V.
-* +0.4 V is just below the JFET gate-source diode forward-conduction threshold
-* (~+0.6 V); going positive lets the JFET conduct harder (smaller R_DS) so the
-* all-pass produces less phase shift and less drive -- needed for ILC1-1/7
-* whose minimum drive at V_ctl=0 is still too high. The hard-clamp form
-* previously used (B_aw clamping V_int_out to [0, 1]) prevented this.
-*
-* Tracking form: I_aw = K_b * (V_ctl_commanded - V_ctl_actual)
-* where V_ctl_commanded = -V_int_out (unsaturated)
-*       V_ctl_actual    = clamped to [-1, +0.4]
-* When saturated, K_b * tracking error pulls V_int_out toward the value
-* that would yield V_ctl_actual unsaturated. K_b = 1e3 chosen to be much
-* faster than the integrator's natural time constant so the integrator
-* follows the clamp without lag.
-B_aw v_int_out 0 I = (V(v_int_out) > 1.0) * (V(v_int_out) - 1.0) * 1e3
-+                  + (V(v_int_out) < -0.4) * (V(v_int_out) + 0.4) * 1e3
+* Anti-windup: real-circuit clamp on V_int_out using two silicon diodes
+* referenced to precision voltage sources. The diodes forward-conduct when
+* V_int_out exceeds +1.0 V (Vf ~0.7V over the +0.3V reference) or goes
+* below -0.4 V (Vf ~0.7V under the -1.1V reference), pulling V_int_out
+* back into [-0.4, +1.0]. The integrator op-amp's open-loop drive
+* against the diode's finite Ron sets the steady-state clamp accuracy
+* (~tens of mV).
+* In production the precision references would be Zeners + dividers off
+* the +/-9 V rails, or band-gap parts (TL431, REF03 etc.).
+V_clamp_hi v_clamp_hi 0  0.3
+V_clamp_lo v_clamp_lo 0 -1.1
+D_aw_hi    v_int_out  v_clamp_hi Dclamp
+D_aw_lo    v_clamp_lo v_int_out  Dclamp
+.model Dclamp D(IS=1n N=2.0 RS=100)
 
-* Map integrator output to JFET V_ctl range [-1.0, +0.4].
-B_ctl v_ctl 0 V = max(-1.0, min(0.4, -V(v_int_out)))
+* Inverter: V_ctl = -V_int_out via op-amp unity-gain inverting stage.
+* Replaces the previous B_ctl behavioural source. The JFET's intrinsic
+* gate-source diode forward-conducts at ~+0.6 V which acts as a soft
+* upper limit on V_ctl on its own; the V_int_out clamp above limits
+* it to +0.4 V well before that, so the JFET gate sees a clean signal.
+R_inv1 v_int_out n_inv_minus 100k
+R_inv2 n_inv_minus v_ctl     100k
+XU_inv 0 n_inv_minus vcc vee v_ctl {opamp}
 
 * === Soft-start network (V_PRESET = {v_preset}, T_RAMP = {t_ramp} s) ===
 * During the first T_RAMP seconds, a switch ties v_int_out to V_PRESET
