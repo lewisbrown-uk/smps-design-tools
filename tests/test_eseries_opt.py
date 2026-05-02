@@ -169,13 +169,14 @@ def test_breakdown_is_populated_per_target():
 
 # ---------- Constraints ----------
 
-def test_constraint_filters_to_feasible_only():
+def test_constraint_range_filters_to_feasible_only():
+    """range=(lo, hi) shortcut: equivalent to predicate=lambda z: lo<=z<=hi
+       with an auto-generated bounder."""
     p = Problem()
     p.add(Resistor("R1", e_series=24, range=(1e3, 1e6)))
     p.add(Resistor("R2", e_series=24, range=(1e3, 1e6)))
     p.add_target("ratio", lambda R1, R2: R2 / (R1 + R2), target=0.5)
-    p.add_constraint("Zout", lambda R1, R2: R1 + R2,
-                     lambda z: 19e3 <= z <= 21e3)
+    p.add_constraint("Zout", lambda R1, R2: R1 + R2, range=(19e3, 21e3))
 
     results = p.solve(strategy="brute", n_results=10)
     assert results, "expected at least one feasible candidate"
@@ -184,12 +185,91 @@ def test_constraint_filters_to_feasible_only():
         assert 19e3 <= z <= 21e3
 
 
-def test_no_feasible_assignment_returns_empty_list():
+def test_constraint_explicit_predicate_still_supported():
+    """predicate= is the escape hatch for non-range checks (half-open
+       intervals, set membership, multi-variate conditions)."""
     p = Problem()
     p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
     p.add_target("x", lambda R: R, target=1e3)
-    p.add_constraint("impossible", lambda R: R, lambda r: r > 1e9)
+    p.add_constraint("impossible", lambda R: R, predicate=lambda r: r > 1e9)
     assert p.solve(strategy="brute") == []
+
+
+def test_constraint_range_works_in_vectorised_mode():
+    """range= predicates use bitwise & so they broadcast under
+       BruteForce(vectorise=True). Chained-comparison user predicates
+       would trip 'truth value of an array is ambiguous' here."""
+    p = Problem()
+    p.add(Resistor("R1", e_series=24, range=(1e3, 1e4)))
+    p.add(Resistor("R2", e_series=24, range=(1e3, 1e4)))
+    p.add_target("ratio", lambda R1, R2: R2 / (R1 + R2), target=0.5)
+    p.add_constraint("Zout", lambda R1, R2: R1 + R2, range=(15e3, 18e3))
+
+    results = p.solve(strategy=BruteForce(vectorise=True), n_results=5)
+    assert results
+    for r in results:
+        z = r.values["R1"] + r.values["R2"]
+        assert 15e3 <= z <= 18e3
+
+
+def test_constraint_auto_bounder_tight_on_monotonic_expression():
+    """Corner evaluation is tight (and sound) when the expression is
+       monotonic in each free variable. Sum-of-resistances is the
+       canonical case; the bound equals the true min/max over the box."""
+    p = Problem()
+    p.add(Resistor("R1", e_series=24, range=(1e3, 1e4)))
+    p.add(Resistor("R2", e_series=24, range=(1e3, 1e4)))
+    p.add_constraint("Zout", lambda R1, R2: R1 + R2, range=(15e3, 25e3))
+
+    con = p.constraints[0]
+    # Both free: sum spans (1k+1k, 10k+10k)
+    lo, hi = con.bounder({}, {"R1": (1e3, 1e4), "R2": (1e3, 1e4)})
+    assert lo == pytest.approx(2e3)
+    assert hi == pytest.approx(20e3)
+    # R1 fixed, R2 free
+    lo, hi = con.bounder({"R1": 5e3}, {"R2": (1e3, 1e4)})
+    assert lo == pytest.approx(6e3)
+    assert hi == pytest.approx(15e3)
+    # All fixed: degenerate point
+    lo, hi = con.bounder({"R1": 4e3, "R2": 6e3}, {})
+    assert lo == hi == pytest.approx(10e3)
+
+
+def test_constraint_explicit_bounder_overrides_auto():
+    """User-supplied bounder= takes priority over the auto-generated one."""
+    user_bounder = lambda fixed, free: (-1.0, 1.0)
+    p = Problem()
+    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    p.add_constraint("z", lambda R: R, range=(1e3, 1e4),
+                     bounder=user_bounder)
+
+    assert p.constraints[0].bounder is user_bounder
+
+
+def test_constraint_predicate_path_leaves_bounder_none():
+    """Without range= or explicit bounder=, B&B has no info to prune;
+       Constraint.bounder stays None to signal that."""
+    p = Problem()
+    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    p.add_constraint("z", lambda R: R, predicate=lambda r: r > 5e3)
+    assert p.constraints[0].bounder is None
+
+
+def test_constraint_requires_range_or_predicate():
+    """add_constraint without either form must raise — ambiguous intent."""
+    p = Problem()
+    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    with pytest.raises(ValueError, match="range.*predicate"):
+        p.add_constraint("z", lambda R: R)
+
+
+def test_constraint_range_and_predicate_together_raises():
+    """Specifying both is ambiguous — pick one."""
+    p = Problem()
+    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    with pytest.raises(ValueError, match="range= or predicate="):
+        p.add_constraint("z", lambda R: R,
+                         predicate=lambda r: True, range=(0, 1e9))
 
 
 # ---------- WeightedSum ranking (default) ----------

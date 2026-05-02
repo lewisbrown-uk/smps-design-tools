@@ -1,6 +1,6 @@
 import itertools
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -34,6 +34,43 @@ class Constraint:
     name: str
     expr: Callable
     predicate: Callable
+    bounder: Optional[Callable] = None
+    """``bounder(fixed_kwargs, free_ranges) -> (lo, hi)`` returns the value
+    range of ``expr`` over a partial assignment — fixed components and the
+    (lo, hi) ranges of the free ones. Used by BranchAndBound for subtree
+    pruning. Auto-generated when the constraint is added with ``range=``;
+    must be supplied explicitly alongside a custom ``predicate=`` to enable
+    pruning. ``None`` means B&B can't prune on this constraint."""
+
+
+def _range_predicate(lo, hi):
+    """Predicate equivalent to ``lo <= z <= hi`` but using bitwise ``&``,
+    so it broadcasts cleanly under ``BruteForce(vectorise=True)`` without
+    tripping the chained-comparison 'truth value of an array is ambiguous'
+    error. Bitwise ``&`` on bool returns 0/1 in scalar mode (still truthy)
+    so it works in both modes uniformly."""
+    return lambda z: (lo <= z) & (z <= hi)
+
+
+def _corner_bounder(expr):
+    """Auto-generated bounder via corner evaluation: evaluates ``expr`` at
+    every combination of (lo, hi) endpoints of the free components, returns
+    (min, max). Tight (and sound) for expressions monotonic in each free
+    variable — sums, ratios, products of components, which covers most
+    circuit constraints. Non-monotonic expressions can have interior
+    extrema that corner evaluation misses; supply an explicit ``bounder=``
+    in those cases."""
+    def bounder(fixed_kwargs, free_ranges):
+        free_names = list(free_ranges)
+        if not free_names:
+            v = expr(**fixed_kwargs)
+            return (v, v)
+        values = []
+        for corner in itertools.product(*(free_ranges[n] for n in free_names)):
+            kwargs = {**fixed_kwargs, **dict(zip(free_names, corner))}
+            values.append(expr(**kwargs))
+        return (min(values), max(values))
+    return bounder
 
 
 def _error(actual, target, metric):
@@ -93,8 +130,46 @@ class Problem:
             )
         self.targets.append(Target(name, expr, target, weight, metric))
 
-    def add_constraint(self, name, expr, predicate):
-        self.constraints.append(Constraint(name, expr, predicate))
+    def add_constraint(self, name, expr, predicate=None, *,
+                       range=None, bounder=None):
+        """Add a hard feasibility constraint.
+
+        Provide either:
+
+        - ``range=(lo, hi)``: ``expr`` must satisfy ``lo <= expr <= hi``.
+          A bitwise-safe predicate and a corner-evaluation bounder are
+          auto-generated. This is the common path for circuit constraints
+          (impedance windows, current/voltage limits, ratio bands).
+        - ``predicate=fn`` (positional or keyword): explicit boolean
+          callable on the value of ``expr``. Use for non-range checks.
+          Optionally pair with ``bounder=`` to enable BranchAndBound
+          subtree pruning.
+
+        Args:
+            name:      Identifier.
+            expr:      ``(**components) -> value`` being constrained.
+            predicate: ``(value) -> bool``. Required if ``range`` is None.
+            range:     ``(lo, hi)`` shortcut.
+            bounder:   ``(fixed_kwargs, free_ranges) -> (lo, hi)`` over
+                       partial assignments. Used by BranchAndBound.
+                       Auto-generated when ``range=`` is supplied.
+        """
+        if range is not None:
+            if predicate is not None:
+                raise ValueError(
+                    f"Constraint '{name}': specify either range= or "
+                    f"predicate=, not both"
+                )
+            lo, hi = range
+            predicate = _range_predicate(lo, hi)
+            if bounder is None:
+                bounder = _corner_bounder(expr)
+        elif predicate is None:
+            raise ValueError(
+                f"Constraint '{name}' needs either range=(lo, hi) "
+                f"or predicate="
+            )
+        self.constraints.append(Constraint(name, expr, predicate, bounder))
 
     def solve(self, strategy="auto", n_results=10, rank=None,
               sensitivity_tol=0.01):
