@@ -16,7 +16,7 @@ pytestmark = pytest.mark.skipif(
     shutil.which("ngspice") is None, reason="ngspice not installed"
 )
 
-from utils.tolerance import NgspiceBackend, analyze
+from utils.tolerance import NgspiceBackend, CachedBackend, analyze
 
 
 # AC sweep on a single-pole RC LP. .meas must live inside a .control
@@ -134,6 +134,49 @@ def test_workers_speedup_with_ngspice_backend():
     assert t_serial / t_parallel > 1.5, (
         f"expected > 1.5× speedup, got {t_serial/t_parallel:.2f}× "
         f"(serial={t_serial:.2f}s, parallel={t_parallel:.2f}s)"
+    )
+
+
+def test_cached_ngspice_persists_across_runs(tmp_path):
+    """Run a small MC twice with a persistent cache; the second run
+    must serve every sample from disk and finish much faster than
+    the cache-warming run. End-to-end check that the headline payoff
+    of the slice — re-running a sweep is near-instant — actually works."""
+    import time
+
+    db = tmp_path / "ngspice_cache.sqlite"
+    backend = NgspiceBackend(template=RC_TEMPLATE, outputs=["fc"])
+    common = dict(
+        nominal_values={"R": 1e3, "C": 1e-9},
+        passive_tolerances={"R": 0.01, "C": 0.05},
+        spec={"fc": ("within", 0.05)},
+        n_mc=30, seed=600, workers=4,
+    )
+
+    # n_mc samples + 1 nominal-evaluation done by analyze() up-front
+    expected_calls = common["n_mc"] + 1
+
+    cached1 = CachedBackend(backend, path=db)
+    t0 = time.perf_counter()
+    r1 = analyze(metrics=cached1, **common)
+    t_cold = time.perf_counter() - t0
+    assert cached1.misses == expected_calls and cached1.hits == 0
+    cached1.close()
+
+    cached2 = CachedBackend(NgspiceBackend(template=RC_TEMPLATE,
+                                           outputs=["fc"]), path=db)
+    t0 = time.perf_counter()
+    r2 = analyze(metrics=cached2, **common)
+    t_warm = time.perf_counter() - t0
+    cached2.close()
+
+    assert cached2.hits == expected_calls and cached2.misses == 0
+    assert r1.samples_pass == r2.samples_pass
+    # Warm cache should be at least 5× faster than cold (typically
+    # 50-100×; threshold is conservative to avoid flaky CI)
+    assert t_cold / t_warm > 5, (
+        f"expected cache to give >5× speedup, got {t_cold/t_warm:.1f}× "
+        f"(cold={t_cold:.2f}s, warm={t_warm:.2f}s)"
     )
 
 

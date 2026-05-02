@@ -5,6 +5,7 @@ values, runs ``ngspice -b``, parses the ``.meas`` output. Drop-in for
 the ``metrics=`` argument of ``analyze`` — the rest of the library is
 unchanged.
 """
+import hashlib
 import math
 import re
 import shutil
@@ -103,6 +104,23 @@ class NgspiceBackend:
         self.outputs = list(outputs)
         self.ngspice = ngspice
         self.timeout = timeout
+
+    def signature(self):
+        """Stable identifier for this backend's template + outputs.
+
+        Used by ``CachedBackend`` to isolate cache namespaces — if you
+        change the template, the new backend's signature differs and
+        the previous template's cached values won't be returned for
+        the new circuit. Callable templates fall back to their ``repr``,
+        which is enough to distinguish *different* function objects
+        but won't catch in-place edits to a function's body."""
+        if isinstance(self.template, str):
+            template_part = self.template
+        else:
+            template_part = repr(self.template)
+        digest_input = (template_part + "\x00"
+                        + ",".join(self.outputs)).encode()
+        return hashlib.sha256(digest_input).hexdigest()[:16]
 
     def _render(self, values):
         if callable(self.template):

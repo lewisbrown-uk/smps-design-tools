@@ -5,7 +5,7 @@ import pytest
 import matplotlib
 matplotlib.use("Agg")  # headless; must come before any pyplot import
 
-from utils.tolerance import analyze, YieldReport, MetricStats
+from utils.tolerance import analyze, YieldReport, MetricStats, CachedBackend
 
 
 # ---------- Report shape ----------
@@ -559,6 +559,148 @@ def test_workers_propagates_metric_exception():
             spec={"v": ("<", 1e9)},
             n_mc=20, workers=4,
         )
+
+
+# ---------- CachedBackend ----------
+
+class _CountingBackend:
+    """Lightweight stand-in for an expensive backend — counts calls so
+    we can assert the cache prevents recomputation. Has a signature so
+    different instances are isolated under one cache file."""
+    def __init__(self, name="default"):
+        self.calls = 0
+        self.name = name
+    def __call__(self, **values):
+        self.calls += 1
+        return {"sum": sum(values.values())}
+    def signature(self):
+        return f"counting:{self.name}"
+
+
+def test_cached_backend_in_memory_hit_skips_recompute():
+    base = _CountingBackend()
+    cached = CachedBackend(base)
+    r1 = cached(R=1.0, C=2.0)
+    r2 = cached(R=1.0, C=2.0)
+    assert r1 == r2 == {"sum": 3.0}
+    assert base.calls == 1
+    assert cached.hits == 1
+    assert cached.misses == 1
+
+
+def test_cached_backend_distinct_args_both_compute():
+    base = _CountingBackend()
+    cached = CachedBackend(base)
+    cached(R=1.0)
+    cached(R=2.0)
+    cached(R=1.0)
+    assert base.calls == 2
+    assert cached.hits == 1
+    assert cached.misses == 2
+
+
+def test_cached_backend_persists_to_sqlite(tmp_path):
+    """A new CachedBackend instance pointing at the same sqlite file
+    should serve cached values from the previous run — the headline
+    persistent-cache promise."""
+    db = tmp_path / "cache.sqlite"
+    base1 = _CountingBackend()
+    cached1 = CachedBackend(base1, path=db)
+    cached1(R=1.0, C=2.0)
+    cached1.close()
+
+    base2 = _CountingBackend()
+    cached2 = CachedBackend(base2, path=db)
+    r = cached2(R=1.0, C=2.0)
+    assert r == {"sum": 3.0}
+    assert base2.calls == 0   # served from disk; backend never called
+    assert cached2.hits == 1
+    cached2.close()
+
+
+def test_cached_backend_signature_isolates_namespaces(tmp_path):
+    """Two backends with different signatures sharing one cache file
+    must not see each other's entries — otherwise swapping templates
+    would silently return wrong data."""
+    db = tmp_path / "cache.sqlite"
+    base_a = _CountingBackend(name="A")
+    base_b = _CountingBackend(name="B")
+    cached_a = CachedBackend(base_a, path=db)
+    cached_b = CachedBackend(base_b, path=db)
+    cached_a(x=1.0)
+    cached_b(x=1.0)
+    # B should NOT find A's cached value
+    assert base_a.calls == 1
+    assert base_b.calls == 1
+    cached_a.close(); cached_b.close()
+
+
+def test_cached_backend_clear_drops_only_own_signature(tmp_path):
+    db = tmp_path / "cache.sqlite"
+    base_a = _CountingBackend(name="A")
+    base_b = _CountingBackend(name="B")
+    cached_a = CachedBackend(base_a, path=db)
+    cached_b = CachedBackend(base_b, path=db)
+    cached_a(x=1.0); cached_b(x=1.0)
+    cached_a.clear()
+
+    # Re-instantiate to confirm disk state matches expectations
+    cached_a.close(); cached_b.close()
+    cached_a2 = CachedBackend(_CountingBackend(name="A"), path=db)
+    cached_b2 = CachedBackend(_CountingBackend(name="B"), path=db)
+    cached_a2(x=1.0); cached_b2(x=1.0)
+    assert cached_a2.misses == 1   # cleared, recomputed
+    assert cached_b2.hits == 1     # untouched
+    cached_a2.close(); cached_b2.close()
+
+
+def test_cached_backend_thread_safe_with_workers():
+    """Cache must be safe under analyze(workers=N). Repeat the same
+    yield computation twice; the second run is fully cache-served and
+    must give bit-identical results without raising."""
+    base = _CountingBackend(name="thread")
+    cached = CachedBackend(base)
+
+    common = dict(
+        nominal_values={"R": 1e3, "C": 1e-9},
+        passive_tolerances={"R": 0.01, "C": 0.05},
+        metrics=cached,
+        spec={"sum": ("<", 1e9)},
+        n_mc=200, seed=777, workers=4,
+    )
+    r1 = analyze(**common)
+    calls_after_first = base.calls
+    r2 = analyze(**common)
+    assert r1.samples_pass == r2.samples_pass
+    assert r1.metric_stats["sum"].mean == r2.metric_stats["sum"].mean
+    # Second run: every sample served from cache
+    assert base.calls == calls_after_first
+
+
+def test_cached_backend_handles_nan_outputs():
+    """NaN must round-trip through json so failed samples cache too —
+    otherwise repeated runs would re-execute every previously-failed
+    simulation."""
+    class NaNBackend:
+        def __init__(self): self.calls = 0
+        def __call__(self, **v): self.calls += 1; return {"x": float("nan")}
+        def signature(self): return "nan"
+    base = NaNBackend()
+    cached = CachedBackend(base)
+    r1 = cached(a=1.0)
+    r2 = cached(a=1.0)
+    assert math.isnan(r1["x"]) and math.isnan(r2["x"])
+    assert base.calls == 1
+
+
+def test_cached_backend_explicit_signature_overrides_auto():
+    """User-supplied signature= takes precedence over wrapped.signature()
+    — escape hatch for sharing a cache across two backends that you
+    know are equivalent."""
+    base = _CountingBackend(name="A")
+    cached = CachedBackend(base, signature="custom-namespace")
+    cached(x=1.0)
+    assert cached.signature == "custom-namespace"
 
 
 # ---------- Monotonicity ----------
