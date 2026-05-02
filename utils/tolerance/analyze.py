@@ -120,7 +120,8 @@ def _evaluate(value, op, threshold, nominal_value):
 
 def analyze(*, nominal_values, passive_tolerances, metrics, spec,
             n_mc=1000, seed=None,
-            tolerance_sigma=3.0, distribution="gaussian"):
+            tolerance_sigma=3.0, distribution="gaussian",
+            workers=1):
     """Monte-Carlo yield analysis on a circuit candidate.
 
     Args:
@@ -156,6 +157,16 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
             - ``{"C": "uniform"}`` — uniform Cs, gaussian everything else
             - ``{"C1": "uniform"}`` — uniform on just one capacitor
 
+        workers: Number of concurrent metric evaluations via
+            ``ThreadPoolExecutor``. Default 1 (serial). Threads (not
+            processes) so the metrics callable doesn't have to be
+            picklable; ngspice's ``subprocess.run`` releases the GIL
+            during the simulator wait, so N threads → N concurrent
+            ngspice processes with near-linear speedup. For pure-Python
+            closed-form metrics ``workers > 1`` has no effect (GIL).
+            Sample order is preserved so results are deterministic for
+            a given seed regardless of ``workers``.
+
     Returns:
         YieldReport with overall pass count, per-spec pass count, and
         the nominal metric values.
@@ -183,6 +194,8 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
         raise ValueError(
             f"tolerance_sigma must be positive, got {tolerance_sigma}"
         )
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
 
     component_types = {n: _classify(n, passive_tolerances)
                        for n in nominal_values}
@@ -213,12 +226,30 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
     metric_keys = list(nominal_metrics)
     metric_arrays = {k: np.empty(n_mc) for k in metric_keys}
 
+    sample_dicts = [
+        {names[j]: samples[i, j] for j in range(len(names))}
+        for i in range(n_mc)
+    ]
+
+    if workers == 1:
+        sample_results = (metrics(**s) for s in sample_dicts)
+    else:
+        # ThreadPoolExecutor.map preserves submission order, so the
+        # accumulation loop sees samples in the same order as workers=1
+        # — yields are bit-identical for a given seed regardless of
+        # parallelism.
+        from concurrent.futures import ThreadPoolExecutor
+        ex = ThreadPoolExecutor(max_workers=workers)
+        try:
+            sample_results = list(ex.map(lambda s: metrics(**s),
+                                         sample_dicts))
+        finally:
+            ex.shutdown(wait=True)
+
     per_spec_pass = {k: 0 for k in spec}
     failure_modes = {}
     samples_pass = 0
-    for i in range(n_mc):
-        sample = {names[j]: samples[i, j] for j in range(len(names))}
-        m = metrics(**sample)
+    for i, m in enumerate(sample_results):
         for k in metric_keys:
             metric_arrays[k][i] = m[k]
         failing = []

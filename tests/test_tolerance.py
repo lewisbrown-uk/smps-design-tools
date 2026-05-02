@@ -513,6 +513,54 @@ def test_tolerance_sigma_non_positive_raises():
         )
 
 
+# ---------- Parallelism ----------
+
+def test_workers_match_serial_results():
+    """workers > 1 must give bit-identical yield + per-spec pass +
+    failure_modes as the serial path. Sample order is preserved by
+    ThreadPoolExecutor.map, so determinism per seed is unchanged."""
+    common = dict(
+        nominal_values={"R": 1e3, "C": 1e-9},
+        passive_tolerances={"R": 0.01, "C": 0.05},
+        metrics=lambda R, C: {"fc": 1 / (2 * math.pi * R * C)},
+        spec={"fc": ("within", 0.02)},
+        n_mc=500, seed=999,
+    )
+    serial = analyze(workers=1, **common)
+    parallel = analyze(workers=4, **common)
+    assert parallel.samples_pass == serial.samples_pass
+    assert parallel.per_spec_pass == serial.per_spec_pass
+    assert parallel.failure_modes == serial.failure_modes
+
+
+def test_workers_zero_or_negative_raises():
+    with pytest.raises(ValueError, match="workers"):
+        analyze(
+            nominal_values={"R": 1e3},
+            passive_tolerances={"R": 0.01},
+            metrics=lambda R: {"v": R},
+            spec={"v": ("<", 1e9)},
+            n_mc=10, workers=0,
+        )
+
+
+def test_workers_propagates_metric_exception():
+    """An exception inside metrics() under workers > 1 must surface,
+    not silently produce a partial yield report. ThreadPoolExecutor.map
+    re-raises on iteration; we must not swallow it."""
+    def bad_metrics(R):
+        raise RuntimeError("simulated metric failure")
+
+    with pytest.raises(RuntimeError, match="simulated metric failure"):
+        analyze(
+            nominal_values={"R": 1e3},
+            passive_tolerances={"R": 0.01},
+            metrics=bad_metrics,
+            spec={"v": ("<", 1e9)},
+            n_mc=20, workers=4,
+        )
+
+
 # ---------- Monotonicity ----------
 
 def test_looser_spec_yields_at_least_as_much_as_tighter():

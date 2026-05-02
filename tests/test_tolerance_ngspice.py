@@ -102,6 +102,41 @@ def test_ngspice_template_syntax_error_raises():
         backend()
 
 
+def test_workers_speedup_with_ngspice_backend():
+    """ngspice runs in a subprocess, releasing the GIL during the wait.
+    workers > 1 should therefore give a meaningful wall-clock speedup
+    even though Python threads (not processes) are doing the dispatch.
+    Threshold is conservative — we assert > 1.5× on 4 workers, which
+    leaves headroom for thread-startup overhead and is well below the
+    theoretical 4× ceiling. The point is to catch a regression where
+    parallelism is silently broken, not to pin down the exact factor."""
+    import time
+
+    backend = NgspiceBackend(template=RC_TEMPLATE, outputs=["fc"])
+    common = dict(
+        nominal_values={"R": 1e3, "C": 1e-9},
+        passive_tolerances={"R": 0.01, "C": 0.05},
+        metrics=backend,
+        spec={"fc": ("within", 0.05)},
+        n_mc=40, seed=400,
+    )
+    t0 = time.perf_counter(); serial = analyze(workers=1, **common)
+    t_serial = time.perf_counter() - t0
+
+    t0 = time.perf_counter(); parallel = analyze(workers=4, **common)
+    t_parallel = time.perf_counter() - t0
+
+    # Determinism: same MC samples → same metric distribution either way
+    assert parallel.samples_pass == serial.samples_pass
+
+    # Speedup: at minimum 1.5× on 4 workers (real number is usually 3-4×
+    # but the floor catches "parallelism silently broken")
+    assert t_serial / t_parallel > 1.5, (
+        f"expected > 1.5× speedup, got {t_serial/t_parallel:.2f}× "
+        f"(serial={t_serial:.2f}s, parallel={t_parallel:.2f}s)"
+    )
+
+
 def test_analyze_with_ngspice_backend_matches_closed_form_yield():
     """End-to-end: identical seed + same nominal/tolerances on the RC
     LP, run once with the closed-form metric and once with ngspice.
