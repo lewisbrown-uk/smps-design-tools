@@ -31,7 +31,7 @@ import test_closed_loop as m
 F0 = 1000.0
 
 
-def run_for_thd(tube_key: str, extra_signals: list[str]):
+def run_for_thd(tube_key: str, extra_signals: list[str], booster: bool):
     spec = m.TUBES[tube_key]
     mc = {k: spec[k] for k in ("r_amb", "sigma_eps_A", "c_th",
                                "r_top_ref", "r_bot_ref", "r_sense")}
@@ -45,8 +45,10 @@ def run_for_thd(tube_key: str, extra_signals: list[str]):
     dat = work / f"thd_{tube_key}.data"
     netlist = m.make_netlist(dat, v_preset=0.55, t_ramp=0.1,
                              r_int_scale=spec["r_int_scale"], mc=mc)
-    sigs = ["v(v_osc)"] + extra_signals + [
-        "v(v_ap)", "v(v_ap_drive)",
+    # v_ap_drive only exists as a separate node in booster mode; without
+    # the booster, the bridge takes v_ap directly.
+    bridge_drive = ["v(v_ap_drive)"] if booster else []
+    sigs = ["v(v_osc)"] + extra_signals + ["v(v_ap)"] + bridge_drive + [
         "v(node_A)", "v(node_B)", "v(n_diff)"]
     new_wrdata = f"wrdata {dat.as_posix()} " + " ".join(sigs)
     netlist = "\n".join(
@@ -125,7 +127,7 @@ def main():
     booster = bool(spec.get("booster"))
     extra = ["v(v_drv_atten)"] if booster else []
     print(f"Running closed-loop sim for {tube} (booster={'on' if booster else 'off'})...")
-    res = run_for_thd(tube, extra)
+    res = run_for_thd(tube, extra, booster)
     t = res["t"]
     print(f"Captured {len(t)} samples, t = {t[0]:.3f} .. {t[-1]:.3f} s")
 
@@ -137,7 +139,10 @@ def main():
     signals = ["v(v_osc)"]
     if booster:
         signals.append("v(v_drv_atten)")
-    signals += ["v(v_ap)", "v(v_ap_drive)", "v(node_A)", "v(node_B)", "v(n_diff)"]
+    signals += ["v(v_ap)"]
+    if booster:
+        signals.append("v(v_ap_drive)")
+    signals += ["v(node_A)", "v(node_B)", "v(n_diff)"]
 
     print(f"{'Signal':<18s} {'A1 [Vpk]':>9s} {'THD':>8s}  Harmonic ratios (% of A1)")
     print(f"{'':18s} {'':9s} {'':8s}  H2     H3     H4     H5     H6     H7")
