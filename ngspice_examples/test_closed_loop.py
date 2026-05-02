@@ -199,6 +199,7 @@ def make_netlist(data_path: Path,
     opamp_diff = _opamp("vos_diff")
     opamp_dem  = _opamp("vos_dem")
     opamp_int  = _opamp("vos_int")
+    opamp_cmp  = _opamp("vos_cmp")
     opamp_buf0 = _opamp("vos_buf0")
     opamp_bufo = _opamp("vos_buf_osc")
     opamp_bufa = _opamp("vos_buf_ap")
@@ -352,7 +353,13 @@ R_b2 n_diff_plus 0 {r_b2:.6g}
 XU_diff n_diff_plus n_diff_minus vcc vee n_diff {opamp_diff}
 
 * === Comparator (behavioural sign of V_osc) ===
-B_cmp n_cmp 0 V = 5 * tanh(V(v_osc) * 1000)
+* Comparator: open-loop op-amp (one channel of the second TLV9154 quad).
+* V+ = v_osc, V- = 0; output saturates to ~+/-(Vcc - Vrail) on each rail
+* whenever |V_osc| exceeds the input-referred Vos. Slew-rate / GBW determine
+* the rise/fall time of the comparator output (fast at 4.5 MHz GBW vs
+* the 1 kHz V_osc); Vos creates a small zero-crossing offset that the
+* synchronous demodulator inherits as a phase shift in its reference.
+XU_cmp v_osc 0 vcc vee n_cmp {opamp_cmp}
 
 * === Polarity-switching demodulator ===
 .model swMod SW(VT=0 VH=0.1 RON=10 ROFF=1G)
