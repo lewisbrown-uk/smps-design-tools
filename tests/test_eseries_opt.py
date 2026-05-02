@@ -4,7 +4,7 @@ import pytest
 
 from utils.eseries_opt import (
     Problem, Resistor, Capacitor, Inductor,
-    Lexicographic, Pareto, FactorOne, BruteForce,
+    Lexicographic, Pareto, FactorOne, BruteForce, RelaxAndSnap,
 )
 
 
@@ -321,13 +321,54 @@ def test_branch_and_bound_solves_simple_problem():
     p.solve(strategy="bnb")
 
 
-@pytest.mark.xfail(raises=NotImplementedError, strict=True,
-                   reason="RelaxAndSnap deferred")
-def test_relax_and_snap_solves_simple_problem():
+def test_relax_and_snap_single_component_finds_nearest_e_series():
+    """Continuous optimum equals the target; snap to the nearest E-series."""
     p = Problem()
-    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    p.add(Resistor("R", e_series=24, range=(1e3, 1e4)))
     p.add_target("v", lambda R: R, target=4.7e3, metric="abs")
-    p.solve(strategy="relax")
+    best = p.solve(strategy=RelaxAndSnap(), n_results=1)[0]
+    assert best.values["R"] == pytest.approx(4.7e3)
+
+
+def test_relax_and_snap_matches_brute_force_on_unique_optimum():
+    """Both strategies should find (10k, 10n) on a single-decade RC where
+       the constant-fc curve only touches the box at the corner."""
+    def make():
+        p = Problem()
+        p.add(Resistor("R",  e_series=24, range=(1e3, 1e4)))
+        p.add(Capacitor("C", e_series=24, range=(1e-9, 1e-8)))
+        target = 1 / (2 * math.pi * 1e4 * 1e-8)
+        p.add_target("fc", lambda R, C: 1 / (2 * math.pi * R * C),
+                     target=target)
+        return p
+
+    brute = make().solve(strategy="brute", n_results=1)[0]
+    relax = make().solve(strategy=RelaxAndSnap(), n_results=1)[0]
+
+    assert relax.values["R"] == pytest.approx(brute.values["R"])
+    assert relax.values["C"] == pytest.approx(brute.values["C"])
+    assert relax.error == pytest.approx(brute.error, abs=1e-9)
+
+
+def test_relax_and_snap_handles_problem_too_big_for_brute():
+    """4-component E96 over 4 decades is ~21B candidates, well past the
+       BruteForce hard cap. Auto-dispatch should pick RelaxAndSnap and
+       return a result. Optimality is not guaranteed (the snap K-neighbourhood
+       may exclude the true discrete optimum); this test exercises the
+       pipeline, not the quality."""
+    p = Problem()
+    for n in ("R1", "R2", "R3", "R4"):
+        p.add(Resistor(n, e_series=96, range=(1e3, 1e6)))
+    p.add_target("sum",
+                 lambda R1, R2, R3, R4: R1 + R2 + R3 + R4,
+                 target=4e4, metric="abs")
+
+    results = p.solve(n_results=1)   # auto-dispatch -> RelaxAndSnap
+    assert len(results) == 1
+    s = sum(results[0].values.values())
+    # Loose: continuous solver lands on the sum=4e4 hyperplane and snap
+    # finds something within an E-series-spacing's worth of the optimum.
+    assert s == pytest.approx(4e4, rel=0.1)
 
 
 def test_factor_one_finds_exact_solution():

@@ -1,4 +1,6 @@
 sympy
 matplotlib
 jupyter
+numpy
+scipy
 

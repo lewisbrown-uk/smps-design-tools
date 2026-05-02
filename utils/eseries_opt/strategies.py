@@ -212,11 +212,93 @@ def _adjacent(values, ideal):
 
 
 class RelaxAndSnap:
-    """Continuous solve via scipy.optimize then enumerate the K nearest
-       E-series values per component. Not yet implemented."""
+    """Continuous solve via scipy.optimize, then enumerate the K nearest
+    E-series values per component and brute-force the K^N neighbourhood.
+
+    Default for >=4 components in auto-dispatch. Optimal when the discrete
+    optimum lies geometrically near the continuous one — typical for smooth
+    objectives. Can miss the true discrete optimum when the continuous
+    landscape is flat (many points achieve the same continuous error) and
+    the snap neighbourhood happens to fall in a ridge that excludes the
+    discrete winner. Increase ``k`` to widen the neighbourhood at the cost
+    of K^N evaluations.
+
+    The continuous solve runs in log10-space so wide-ranging components
+    (1k-1M) get balanced gradient/scale treatment. Constraint predicates
+    are enforced via a large additive penalty in the continuous objective.
+
+    Args:
+        k:      Number of nearest E-series values per component to enumerate
+                in the snap step. Default 5.
+        method: scipy.optimize method. "differential_evolution" (default)
+                is a global solver and handles non-smooth, non-convex
+                composite-error landscapes; pass an scipy.optimize.minimize
+                method name (e.g. "L-BFGS-B") for fast local search.
+        seed:   Random seed for differential_evolution. Set for determinism.
+    """
+
+    def __init__(self, k=5, method="differential_evolution", seed=0):
+        self.k = k
+        self.method = method
+        self.seed = seed
 
     def solve(self, problem, n_results, ranker):
-        raise NotImplementedError("RelaxAndSnap not yet implemented")
+        try:
+            from scipy.optimize import differential_evolution, minimize
+        except ImportError:
+            raise ImportError(
+                "RelaxAndSnap requires scipy. Install with: pip install scipy"
+            ) from None
+        from .problem import _error
+
+        names = [c.name for c in problem.components]
+        bounds_log = [(np.log10(c.range[0]), np.log10(c.range[1]))
+                      for c in problem.components]
+
+        def composite_error(log_x):
+            x = 10.0 ** np.asarray(log_x)
+            kwargs = {n: float(v) for n, v in zip(names, x)}
+            penalty = 0.0
+            for con in problem.constraints:
+                if not con.predicate(con.expr(**kwargs)):
+                    penalty += 1e12
+            err = 0.0
+            for t in problem.targets:
+                err += t.weight * float(_error(t.expr(**kwargs),
+                                               t.target, t.metric))
+            return err + penalty
+
+        if self.method == "differential_evolution":
+            result = differential_evolution(composite_error, bounds_log,
+                                            seed=self.seed, tol=1e-7,
+                                            polish=True)
+        else:
+            x0 = np.array([(lo + hi) / 2 for lo, hi in bounds_log])
+            result = minimize(composite_error, x0,
+                              method=self.method, bounds=bounds_log)
+        ideal = 10.0 ** np.asarray(result.x)
+
+        neighbourhoods = []
+        for comp, ideal_v in zip(problem.components, ideal):
+            vals = comp.values()
+            k = min(self.k, len(vals))
+            log_dists = np.abs(np.log10(vals) - np.log10(ideal_v))
+            idx = np.argpartition(log_dists, k - 1)[:k]
+            neighbourhoods.append(vals[idx])
+
+        candidates = []
+        for combo in itertools.product(*neighbourhoods):
+            kwargs = {n: float(v) for n, v in zip(names, combo)}
+            if not all(con.predicate(con.expr(**kwargs))
+                       for con in problem.constraints):
+                continue
+            breakdown = {
+                t.name: float(_error(t.expr(**kwargs), t.target, t.metric))
+                for t in problem.targets
+            }
+            candidates.append(Result(values=dict(kwargs), breakdown=breakdown))
+
+        return ranker.rank(candidates, problem.targets)[:n_results]
 
 
 class BranchAndBound:
