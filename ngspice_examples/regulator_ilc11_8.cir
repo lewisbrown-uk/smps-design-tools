@@ -46,9 +46,27 @@ C_ap n_ap_plus 0 1.000000e-07    IC=0
 XU_ap n_ap_plus n_ap_minus vcc vee v_ap uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 .model J201 NJF(Vto=-1.5000 Beta=1.0000e-03 Lambda=0)
 
+* === Tube filament thermal-electrical macromodel ===
+* The filament behaves as a non-linear resistor R(T) = R_amb*(T/T_amb)^fil_exp
+* with thermal capacity C_th and radiative cooling sigma*eps*A*(T^4-T_amb^4).
+* Encapsulated as a subcircuit so the controller netlist doesn't carry
+* behavioural sources directly -- this is a model of the tube itself.
+*   Terminals: v_top, v_bot   (filament endpoints, AC drive across these)
+*              T_node          (internal thermal node, exposed for monitoring)
+*              r_fil           (instantaneous R(T) as voltage, for monitoring)
+* All physical parameters are global .params (R_amb, sigma_eps_A, C_th,
+* T_amb, fil_exp) so a single instantiation is enough.
+.subckt filament v_top v_bot T_node r_fil
+B_fil   v_top v_bot I = (V(v_top) - V(v_bot)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
+B_pelec 0 T_node    I = (V(v_top)-V(v_bot))*(V(v_top)-V(v_bot)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
+B_prad  T_node 0    I = sigma_eps_A * (V(T_node)^4 - T_amb^4)
+C_th    T_node 0    {C_th} IC=300.0
+B_R     r_fil 0     V = R_amb * (V(T_node)/T_amb)^fil_exp
+.ends filament
+
 * === AC Wheatstone bridge ===
-* Filament arm: V_osc -> R_filament(thermal) -> node_A -> R_sense -> V_ap
-B_fil v_osc_drive node_A I = (V(v_osc_drive) - V(node_A)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
+* Filament arm: V_osc -> filament(thermal) -> node_A -> R_sense -> V_ap
+X_filament v_osc_drive node_A T_node r_fil filament
 R_sen node_A v_ap_drive 2
 * Reference arm: V_osc -> R_top_ref -> node_B -> R_sense_ref -> V_ap
 * R_top_ref nominal 99 ohm (1% off the 100-ohm filament target) so the bridge
@@ -56,12 +74,6 @@ R_sen node_A v_ap_drive 2
 * by k_r_top_ref tolerance.
 R_top_ref v_osc_drive node_B 792
 R_bot_ref node_B v_ap_drive  200
-
-* === Filament thermal subnet ===
-B_pelec 0 T_node I = (V(v_osc_drive)-V(node_A))*(V(v_osc_drive)-V(node_A)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
-B_prad  T_node 0 I = sigma_eps_A * (V(T_node)^4 - T_amb^4)
-C_th T_node 0 {C_th} IC=300.0
-B_R r_fil 0 V = R_amb * (V(T_node)/T_amb)^fil_exp
 
 * === Difference amp (1-op-amp subtractor, gain 1) ===
 R_a1 node_A n_diff_minus 1e+06
@@ -71,7 +83,13 @@ R_b2 n_diff_plus 0 1e+06
 XU_diff n_diff_plus n_diff_minus vcc vee n_diff uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 
 * === Comparator (behavioural sign of V_osc) ===
-B_cmp n_cmp 0 V = 5 * tanh(V(v_osc) * 1000)
+* Comparator: open-loop op-amp (one channel of the second TLV9154 quad).
+* V+ = v_osc, V- = 0; output saturates to ~+/-(Vcc - Vrail) on each rail
+* whenever |V_osc| exceeds the input-referred Vos. Slew-rate / GBW determine
+* the rise/fall time of the comparator output (fast at 4.5 MHz GBW vs
+* the 1 kHz V_osc); Vos creates a small zero-crossing offset that the
+* synchronous demodulator inherits as a phase shift in its reference.
+XU_cmp v_osc 0 vcc vee n_cmp uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 
 * === Polarity-switching demodulator ===
 .model swMod SW(VT=0 VH=0.1 RON=10 ROFF=1G)
@@ -106,25 +124,29 @@ C_intfb  n_int_minus n_int_pidp 3.183099e-07  IC=0
 C_hf     n_int_pidp v_int_out 1.000000e-08     IC=0
 XU_int 0 n_int_minus vcc vee v_int_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 
-* Back-calculation anti-windup: V_ctl is allowed to range from -1.0 to +0.4 V.
-* +0.4 V is just below the JFET gate-source diode forward-conduction threshold
-* (~+0.6 V); going positive lets the JFET conduct harder (smaller R_DS) so the
-* all-pass produces less phase shift and less drive -- needed for ILC1-1/7
-* whose minimum drive at V_ctl=0 is still too high. The hard-clamp form
-* previously used (B_aw clamping V_int_out to [0, 1]) prevented this.
-*
-* Tracking form: I_aw = K_b * (V_ctl_commanded - V_ctl_actual)
-* where V_ctl_commanded = -V_int_out (unsaturated)
-*       V_ctl_actual    = clamped to [-1, +0.4]
-* When saturated, K_b * tracking error pulls V_int_out toward the value
-* that would yield V_ctl_actual unsaturated. K_b = 1e3 chosen to be much
-* faster than the integrator's natural time constant so the integrator
-* follows the clamp without lag.
-B_aw v_int_out 0 I = (V(v_int_out) > 1.0) * (V(v_int_out) - 1.0) * 1e3
-+                  + (V(v_int_out) < -0.4) * (V(v_int_out) + 0.4) * 1e3
+* Anti-windup: real-circuit clamp on V_int_out using two silicon diodes
+* referenced to precision voltage sources. The diodes forward-conduct when
+* V_int_out exceeds +1.0 V (Vf ~0.7V over the +0.3V reference) or goes
+* below -0.4 V (Vf ~0.7V under the -1.1V reference), pulling V_int_out
+* back into [-0.4, +1.0]. The integrator op-amp's open-loop drive
+* against the diode's finite Ron sets the steady-state clamp accuracy
+* (~tens of mV).
+* In production the precision references would be Zeners + dividers off
+* the +/-9 V rails, or band-gap parts (TL431, REF03 etc.).
+V_clamp_hi v_clamp_hi 0  0.3
+V_clamp_lo v_clamp_lo 0 -1.1
+D_aw_hi    v_int_out  v_clamp_hi Dclamp
+D_aw_lo    v_clamp_lo v_int_out  Dclamp
+.model Dclamp D(IS=1n N=2.0 RS=100)
 
-* Map integrator output to JFET V_ctl range [-1.0, +0.4].
-B_ctl v_ctl 0 V = max(-1.0, min(0.4, -V(v_int_out)))
+* Inverter: V_ctl = -V_int_out via op-amp unity-gain inverting stage.
+* Replaces the previous B_ctl behavioural source. The JFET's intrinsic
+* gate-source diode forward-conducts at ~+0.6 V which acts as a soft
+* upper limit on V_ctl on its own; the V_int_out clamp above limits
+* it to +0.4 V well before that, so the JFET gate sees a clean signal.
+R_inv1 v_int_out n_inv_minus 100k
+R_inv2 n_inv_minus v_ctl     100k
+XU_inv 0 n_inv_minus vcc vee v_ctl uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 
 * === Soft-start network (V_PRESET = 0.55, T_RAMP = 0.1 s) ===
 * During the first T_RAMP seconds, a switch ties v_int_out to V_PRESET
