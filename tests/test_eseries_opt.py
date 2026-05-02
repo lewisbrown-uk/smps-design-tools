@@ -450,22 +450,63 @@ def test_branch_and_bound_rejects_non_weighted_sum_ranker():
         p.solve(strategy="bnb", rank=Pareto())
 
 
-def test_branch_and_bound_designs_sallen_key_butterworth_filter():
-    """B&B on the Sallen-Key Butterworth problem — same circuit and
-    targets as the RelaxAndSnap counterpart, with auto-generated
-    bounders. The unique E12 discrete optimum (R1=R2=10k, C1=10n,
-    C2=22n) hits both fc and Q targets exactly while satisfying Z_in.
+def _sallen_key_q_bounder(fixed, free_ranges):
+    """Sound bounder for Q = √(R1·R2·C2/C1) / (R1+R2).
 
-    Behavioural documentation around bounder soundness: Q is
-    non-monotonic in R1 alone (interior max at R1=R2), so its corner
-    bounder is technically unsound. In *this* problem, however, the
-    Q values at the bounder's underestimate-of-max are still well
-    above the target Q ≈ 0.74, so the relevant lower-bound calculation
-    (min error in subtree) returns 0 truthfully, and B&B agrees with
-    BruteForce. A different Q target close to the bounder's
-    underestimate of max-Q could expose the unsoundness — users who
-    rely on B&B for Q-sensitive Sallen-Key designs should supply an
-    explicit ``bounder=`` for the Q target."""
+    Q factors as ``f(R1, R2) · √(C2/C1)`` where the two parts depend on
+    disjoint variables, so min/max of the product are products of the
+    per-factor min/max. The auto-generated corner bounder underestimates
+    the true max because ``f(R1, R2) = √(R1·R2)/(R1+R2)`` has a constant
+    maximum 0.5 along the diagonal R1=R2 — interior to the box, not at
+    its corners. f has no interior critical points off the diagonal, so
+    its minimum is at one of the four R-corners. ``√(C2/C1)`` is
+    monotonic in each of C1, C2.
+    """
+    def span(name):
+        return (fixed[name], fixed[name]) if name in fixed else free_ranges[name]
+
+    R1_lo, R1_hi = span("R1")
+    R2_lo, R2_hi = span("R2")
+    C1_lo, C1_hi = span("C1")
+    C2_lo, C2_hi = span("C2")
+
+    def f(r1, r2):
+        return math.sqrt(r1 * r2) / (r1 + r2)
+
+    diag_intersects = max(R1_lo, R2_lo) <= min(R1_hi, R2_hi)
+    f_corners = [f(R1_lo, R2_lo), f(R1_lo, R2_hi),
+                 f(R1_hi, R2_lo), f(R1_hi, R2_hi)]
+    f_max = 0.5 if diag_intersects else max(f_corners)
+    f_min = min(f_corners)
+
+    sqrt_ratio_max = math.sqrt(C2_hi / C1_lo)
+    sqrt_ratio_min = math.sqrt(C2_lo / C1_hi)
+
+    return (f_min * sqrt_ratio_min, f_max * sqrt_ratio_max)
+
+
+def test_branch_and_bound_designs_sallen_key_butterworth_filter():
+    """B&B on the Sallen-Key Butterworth problem with an explicit sound
+    bounder for the Q target.
+
+    Why a custom bounder: Q's expression is non-monotonic in R1 alone
+    (interior max along the R1=R2 diagonal), so the auto-generated
+    corner bounder underestimates the true max-Q whenever the diagonal
+    sits interior to the (R1, R2) box rather than touching a corner.
+    For B&B that's a soundness hazard — an underestimated upper bound
+    on Q can falsely report 'target Q not in this subtree's range',
+    pruning the optimum.
+
+    The custom bounder factors Q as f(R1, R2) · √(C2/C1) (disjoint
+    variables → product of per-factor extrema), uses 0.5 as the analytic
+    max of f when the diagonal intersects the (R1, R2) box, and falls
+    back to corner evaluation only when it doesn't. fc remains on the
+    auto-bounder — it's monotonic in each variable, so corner evaluation
+    is already sound and tight.
+
+    The unique E12 discrete optimum (R1=R2=10k, C1=10n, C2=22n) hits
+    both targets exactly while satisfying Z_in. B&B agrees with
+    BruteForce."""
     def make():
         p = Problem()
         p.add(Resistor("R1",  e_series=12, range=(1e3, 1e4)))
@@ -483,7 +524,8 @@ def test_branch_and_bound_designs_sallen_key_butterworth_filter():
         p.add_target("Q",
                      lambda R1, R2, C1, C2:
                          math.sqrt(R1 * R2 * C2 / C1) / (R1 + R2),
-                     target=Q_target)
+                     target=Q_target,
+                     bounder=_sallen_key_q_bounder)
         p.add_constraint("Z_in",
                          lambda R1, R2, C1, C2: R1 + R2,
                          range=(15e3, 25e3))
@@ -499,10 +541,40 @@ def test_branch_and_bound_designs_sallen_key_butterworth_filter():
     assert brute.values["C2"] == pytest.approx(2.2e-8)
     assert brute.error == pytest.approx(0.0, abs=1e-9)
 
-    # B&B finds the same circuit despite Q's non-monotonicity.
+    # B&B with the sound Q bounder finds the same circuit.
     for name in ("R1", "R2", "C1", "C2"):
         assert bnb.values[name] == pytest.approx(brute.values[name])
     assert bnb.error == pytest.approx(brute.error, abs=1e-9)
+
+
+def test_sallen_key_q_bounder_is_sound_where_auto_corner_is_not():
+    """Direct check that the custom Q bounder catches an interior
+    diagonal maximum that the auto-corner bounder misses.
+
+    For Q = f(R1,R2)·√(C2/C1) where f = √(R1·R2)/(R1+R2), f attains its
+    maximum value 0.5 along the diagonal R1=R2. When the box has
+    asymmetric R-ranges (R1 and R2 ranges don't share endpoints), the
+    diagonal endpoints sit *interior* to the box, not at corners. Corner
+    evaluation therefore underestimates max-Q.
+    """
+    # Asymmetric R-ranges; diagonal R1=R2 ∈ [3k, 5k] is interior.
+    fixed = {}
+    free = {
+        "R1": (1e3, 5e3), "R2": (3e3, 1e4),
+        "C1": (1e-8, 1e-8), "C2": (2.2e-8, 2.2e-8),
+    }
+
+    # True max-Q along the diagonal: Q(R, R) = √(C2/C1) / 2 = √2.2 / 2.
+    diagonal_Q = math.sqrt(2.2e-8 / 1e-8) / 2
+
+    sound_lo, sound_hi = _sallen_key_q_bounder(fixed, free)
+    assert sound_hi >= diagonal_Q   # sound: upper bound covers the truth
+
+    # Auto-corner bounder strictly underestimates the max here.
+    from utils.eseries_opt.problem import _corner_bounder
+    expr = lambda R1, R2, C1, C2: math.sqrt(R1 * R2 * C2 / C1) / (R1 + R2)
+    auto_lo, auto_hi = _corner_bounder(expr)(fixed, free)
+    assert auto_hi < diagonal_Q     # unsound: misses the interior max
 
 
 def test_target_auto_bounder_set_by_default():
