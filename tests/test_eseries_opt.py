@@ -3,7 +3,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import pytest
 
 from utils.eseries_opt import (
-    Problem, Resistor, Capacitor,
+    Problem, Resistor, Capacitor, Inductor,
     Lexicographic, Pareto,
 )
 
@@ -122,6 +122,38 @@ def test_n_results_caps_output_length():
 
     results = p.solve(strategy="brute", n_results=3)
     assert len(results) == 3
+
+
+def test_inductor_in_lc_resonance_problem():
+    """LC tank: f0 = 1/(2π√(LC)). Verifies Inductor enumerates and composes
+       with other components in a multi-component objective."""
+    p = Problem()
+    p.add(Inductor("L",  e_series=12, range=(1e-6, 1e-4)))
+    p.add(Capacitor("C", e_series=12, range=(1e-9, 1e-7)))
+    p.add_target("f0", lambda L, C: 1 / (2 * math.pi * math.sqrt(L * C)),
+                 target=1e6)
+
+    best = p.solve(strategy="brute", n_results=1)[0]
+    f0 = 1 / (2 * math.pi * math.sqrt(best.values["L"] * best.values["C"]))
+    assert abs(f0 - 1e6) / 1e6 < 0.05   # within 5% of 1 MHz on E12
+
+
+def test_log_metric_is_symmetric_in_scale():
+    """log metric = |ln(actual/target)|. When the target lies at the geometric
+       mean of two adjacent E-series values, both should rank equal — unlike
+       the relative-error metric, which would prefer the lower one."""
+    p = Problem()
+    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    target = math.sqrt(2.7e3 * 3.3e3)   # geometric mean of E12 neighbours
+    p.add_target("v", lambda R: R, target=target, metric="log")
+
+    results = p.solve(strategy="brute", n_results=2)
+    top_two = sorted(r.values["R"] for r in results[:2])
+    assert top_two[0] == pytest.approx(2.7e3)
+    assert top_two[1] == pytest.approx(3.3e3)
+    assert results[0].error == pytest.approx(results[1].error, rel=1e-9)
+    expected = abs(math.log(2.7e3 / target))
+    assert results[0].error == pytest.approx(expected, rel=1e-9)
 
 
 def test_breakdown_is_populated_per_target():
