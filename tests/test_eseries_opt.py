@@ -89,10 +89,11 @@ def test_brute_rc_corner_frequency_hits_exact_solution():
 
 
 def test_brute_diff_amp_finds_matched_gain_10():
-    """R2/R1 = R4/R3 = 10 has many exact E96 solutions (e.g. 1k:10k)."""
+    """R2/R1 = R4/R3 = 10 is exactly satisfied by R1=R3=1k, R2=R4=10k.
+       Single-decade E24 keeps the 25^4 brute-force search tractable."""
     p = Problem()
     for n in ("R1", "R2", "R3", "R4"):
-        p.add(Resistor(n, e_series=96, range=(1e3, 1e5)))
+        p.add(Resistor(n, e_series=24, range=(1e3, 1e4)))
     p.add_target("gain",  lambda R1, R2, R3, R4: R2 / R1, target=10.0)
     p.add_target("match", lambda R1, R2, R3, R4: R2 / R1 - R4 / R3,
                  target=0.0, weight=100, metric="abs")

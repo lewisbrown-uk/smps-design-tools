@@ -1,59 +1,27 @@
-"""E-series optimisation framework — stub.
+"""E-series optimisation framework.
 
-Public surface only; everything that does real work raises NotImplementedError.
-This stub exists so tests/test_eseries_opt.py collects per-test rather than
-failing wholesale at import. Replace with the real implementation.
+Define a Problem with E-series-constrained components, soft targets, and
+optional hard constraints, then solve to get ranked candidate assignments.
+
+    import math
+    from utils.eseries_opt import Problem, Resistor, Capacitor
+
+    p = Problem()
+    p.add(Resistor("R",  e_series=96, range=(1e3, 1e5)))
+    p.add(Capacitor("C", e_series=24, range=(1e-9, 1e-6)))
+    p.add_target("fc", lambda R, C: 1/(2*math.pi*R*C), target=1591.55)
+    for r in p.solve(n_results=5):
+        print(r)
 """
 
+from .components import Component, Resistor, Capacitor, Inductor
+from .problem import Problem, Target, Constraint
+from .result import Result
+from .ranking import WeightedSum, Lexicographic, Pareto
 
-class Component:
-    def __init__(self, name, e_series, range, unit=""):
-        self.name = name
-        self.e_series = e_series
-        self.range = range
-        self.unit = unit
-
-    def values(self):
-        raise NotImplementedError
-
-
-class Resistor(Component):
-    pass
-
-
-class Capacitor(Component):
-    pass
-
-
-class Inductor(Component):
-    pass
-
-
-class Lexicographic:
-    def __init__(self, order, epsilon=0.0):
-        self.order = order
-        self.epsilon = epsilon
-
-
-class Pareto:
-    def __init__(self):
-        pass
-
-
-class Problem:
-    def __init__(self):
-        self.components = []
-        self.targets = []
-        self.constraints = []
-
-    def add(self, component):
-        raise NotImplementedError
-
-    def add_target(self, name, expr, target, weight=1.0, metric="rel"):
-        raise NotImplementedError
-
-    def add_constraint(self, name, expr, predicate):
-        raise NotImplementedError
-
-    def solve(self, strategy="auto", n_results=10, rank=None, sensitivity_tol=0.01):
-        raise NotImplementedError
+__all__ = [
+    "Component", "Resistor", "Capacitor", "Inductor",
+    "Problem", "Target", "Constraint",
+    "Result",
+    "WeightedSum", "Lexicographic", "Pareto",
+]
