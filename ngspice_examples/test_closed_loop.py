@@ -315,9 +315,27 @@ C_ap n_ap_plus 0 {c_ap_v:.6e}    IC=0
 XU_ap n_ap_plus n_ap_minus vcc vee v_ap {opamp_ap}
 .model J201 NJF(Vto={jfet_vp:.4f} Beta={jfet_beta:.4e} Lambda=0)
 
+* === Tube filament thermal-electrical macromodel ===
+* The filament behaves as a non-linear resistor R(T) = R_amb*(T/T_amb)^fil_exp
+* with thermal capacity C_th and radiative cooling sigma*eps*A*(T^4-T_amb^4).
+* Encapsulated as a subcircuit so the controller netlist doesn't carry
+* behavioural sources directly -- this is a model of the tube itself.
+*   Terminals: v_top, v_bot   (filament endpoints, AC drive across these)
+*              T_node          (internal thermal node, exposed for monitoring)
+*              r_fil           (instantaneous R(T) as voltage, for monitoring)
+* All physical parameters are global .params (R_amb, sigma_eps_A, C_th,
+* T_amb, fil_exp) so a single instantiation is enough.
+.subckt filament v_top v_bot T_node r_fil
+B_fil   v_top v_bot I = (V(v_top) - V(v_bot)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
+B_pelec 0 T_node    I = (V(v_top)-V(v_bot))*(V(v_top)-V(v_bot)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
+B_prad  T_node 0    I = sigma_eps_A * (V(T_node)^4 - T_amb^4)
+C_th    T_node 0    {{C_th}} IC={T_AMB}
+B_R     r_fil 0     V = R_amb * (V(T_node)/T_amb)^fil_exp
+.ends filament
+
 * === AC Wheatstone bridge ===
-* Filament arm: V_osc -> R_filament(thermal) -> node_A -> R_sense -> V_ap
-B_fil {v_osc_drive} node_A I = (V({v_osc_drive}) - V(node_A)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
+* Filament arm: V_osc -> filament(thermal) -> node_A -> R_sense -> V_ap
+X_filament {v_osc_drive} node_A T_node r_fil filament
 R_sen node_A {v_ap_drive} {r_sense_v:.6g}
 * Reference arm: V_osc -> R_top_ref -> node_B -> R_sense_ref -> V_ap
 * R_top_ref nominal 99 ohm (1% off the 100-ohm filament target) so the bridge
@@ -325,12 +343,6 @@ R_sen node_A {v_ap_drive} {r_sense_v:.6g}
 * by k_r_top_ref tolerance.
 R_top_ref {v_osc_drive} node_B {r_top_ref:.6g}
 R_bot_ref node_B {v_ap_drive}  {r_bot_ref:.6g}
-
-* === Filament thermal subnet ===
-B_pelec 0 T_node I = (V({v_osc_drive})-V(node_A))*(V({v_osc_drive})-V(node_A)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
-B_prad  T_node 0 I = sigma_eps_A * (V(T_node)^4 - T_amb^4)
-C_th T_node 0 {{C_th}} IC={T_AMB}
-B_R r_fil 0 V = R_amb * (V(T_node)/T_amb)^fil_exp
 
 * === Difference amp (1-op-amp subtractor, gain 1) ===
 R_a1 node_A n_diff_minus {r_a1:.6g}
