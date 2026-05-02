@@ -9,11 +9,13 @@ from .strategies import BruteForce, FactorOne, RelaxAndSnap, BranchAndBound
 
 _VALID_METRICS = {"rel", "abs", "log"}
 
+# String-shortcut registry for parameterless strategies. FactorOne is
+# omitted because it requires explicit configuration — pass an instance
+# to solve(strategy=FactorOne(pivot=..., target=..., solver=...)) instead.
 _STRATEGIES = {
-    "brute":  BruteForce,
-    "factor": FactorOne,
-    "relax":  RelaxAndSnap,
-    "bnb":    BranchAndBound,
+    "brute": BruteForce,
+    "relax": RelaxAndSnap,
+    "bnb":   BranchAndBound,
 }
 
 
@@ -100,10 +102,15 @@ class Problem:
         if strategy == "auto":
             strat = (BruteForce() if len(self.components) <= 3
                      else RelaxAndSnap())
-        elif strategy in _STRATEGIES:
+        elif isinstance(strategy, str):
+            if strategy not in _STRATEGIES:
+                raise ValueError(
+                    f"Unknown strategy: {strategy!r}. "
+                    f"Known: {sorted(_STRATEGIES)}"
+                )
             strat = _STRATEGIES[strategy]()
         else:
-            raise ValueError(f"Unknown strategy: {strategy}")
+            strat = strategy   # pre-constructed strategy instance
 
         ranker = rank if rank is not None else WeightedSum()
         results = strat.solve(self, n_results=n_results, ranker=ranker)

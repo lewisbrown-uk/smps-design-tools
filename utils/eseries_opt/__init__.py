@@ -18,10 +18,12 @@ from .components import Component, Resistor, Capacitor, Inductor
 from .problem import Problem, Target, Constraint
 from .result import Result
 from .ranking import WeightedSum, Lexicographic, Pareto
+from .strategies import FactorOne
 
 __all__ = [
     "Component", "Resistor", "Capacitor", "Inductor",
     "Problem", "Target", "Constraint",
     "Result",
     "WeightedSum", "Lexicographic", "Pareto",
+    "FactorOne",
 ]

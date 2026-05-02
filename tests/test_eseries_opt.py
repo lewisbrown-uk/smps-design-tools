@@ -4,7 +4,7 @@ import pytest
 
 from utils.eseries_opt import (
     Problem, Resistor, Capacitor, Inductor,
-    Lexicographic, Pareto,
+    Lexicographic, Pareto, FactorOne,
 )
 
 
@@ -261,14 +261,58 @@ def test_relax_and_snap_solves_simple_problem():
     p.solve(strategy="relax")
 
 
-@pytest.mark.xfail(raises=NotImplementedError, strict=True,
-                   reason="FactorOne deferred")
-def test_factor_one_solves_two_component_rc():
+def test_factor_one_finds_exact_solution():
+    """fc = 1/(2π·10k·10n) ≈ 1591.55 Hz; FactorOne should snap C to 10nF
+       given R=10k and find error=0."""
     p = Problem()
-    p.add(Resistor("R",  e_series=96, range=(1e3, 1e5)))
+    p.add(Resistor("R",  e_series=24, range=(1e3, 1e5)))
     p.add(Capacitor("C", e_series=24, range=(1e-9, 1e-6)))
-    p.add_target("fc", lambda R, C: 1 / (2 * math.pi * R * C), target=1234.0)
-    p.solve(strategy="factor")
+    target = 1 / (2 * math.pi * 1e4 * 1e-8)
+    p.add_target("fc", lambda R, C: 1 / (2 * math.pi * R * C), target=target)
+
+    factor = FactorOne(
+        pivot="C", target="fc",
+        solver=lambda fc, R: 1 / (2 * math.pi * R * fc),
+    )
+    best = p.solve(strategy=factor, n_results=1)[0]
+    assert best.values["R"] == pytest.approx(1e4)
+    assert best.values["C"] == pytest.approx(1e-8)
+    assert best.error == pytest.approx(0.0, abs=1e-9)
+
+
+def test_factor_one_matches_brute_force_on_single_target():
+    """FactorOne is exact for single-target problems with a monotonic pivot.
+       Should agree with BruteForce on the global optimum."""
+    def make():
+        p = Problem()
+        p.add(Resistor("R",  e_series=24, range=(1e3, 1e5)))
+        p.add(Capacitor("C", e_series=12, range=(1e-9, 1e-6)))
+        p.add_target("fc", lambda R, C: 1 / (2 * math.pi * R * C),
+                     target=1234.0)
+        return p
+
+    brute = make().solve(strategy="brute", n_results=1)[0]
+
+    factor = FactorOne(
+        pivot="C", target="fc",
+        solver=lambda fc, R: 1 / (2 * math.pi * R * fc),
+    )
+    factor_best = make().solve(strategy=factor, n_results=1)[0]
+
+    assert factor_best.values["R"] == pytest.approx(brute.values["R"])
+    assert factor_best.values["C"] == pytest.approx(brute.values["C"])
+
+
+def test_factor_one_unknown_pivot_raises():
+    p = Problem()
+    p.add(Resistor("R",  e_series=12, range=(1e3, 1e4)))
+    p.add(Capacitor("C", e_series=12, range=(1e-9, 1e-7)))
+    p.add_target("fc", lambda R, C: 1 / (2 * math.pi * R * C), target=1e3)
+
+    factor = FactorOne(pivot="X", target="fc",
+                       solver=lambda fc, R: 1 / (2 * math.pi * R * fc))
+    with pytest.raises(ValueError, match="pivot"):
+        p.solve(strategy=factor)
 
 
 @pytest.mark.xfail(raises=NotImplementedError, strict=True,
