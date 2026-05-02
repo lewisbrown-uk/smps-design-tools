@@ -450,6 +450,61 @@ def test_branch_and_bound_rejects_non_weighted_sum_ranker():
         p.solve(strategy="bnb", rank=Pareto())
 
 
+def test_branch_and_bound_designs_sallen_key_butterworth_filter():
+    """B&B on the Sallen-Key Butterworth problem — same circuit and
+    targets as the RelaxAndSnap counterpart, with auto-generated
+    bounders. The unique E12 discrete optimum (R1=R2=10k, C1=10n,
+    C2=22n) hits both fc and Q targets exactly while satisfying Z_in.
+
+    Behavioural documentation around bounder soundness: Q is
+    non-monotonic in R1 alone (interior max at R1=R2), so its corner
+    bounder is technically unsound. In *this* problem, however, the
+    Q values at the bounder's underestimate-of-max are still well
+    above the target Q ≈ 0.74, so the relevant lower-bound calculation
+    (min error in subtree) returns 0 truthfully, and B&B agrees with
+    BruteForce. A different Q target close to the bounder's
+    underestimate of max-Q could expose the unsoundness — users who
+    rely on B&B for Q-sensitive Sallen-Key designs should supply an
+    explicit ``bounder=`` for the Q target."""
+    def make():
+        p = Problem()
+        p.add(Resistor("R1",  e_series=12, range=(1e3, 1e4)))
+        p.add(Resistor("R2",  e_series=12, range=(1e3, 1e4)))
+        p.add(Capacitor("C1", e_series=12, range=(1e-9, 1e-7)))
+        p.add(Capacitor("C2", e_series=12, range=(1e-9, 1e-7)))
+
+        fc_target = 1 / (2 * math.pi * math.sqrt(1e4 * 1e4 * 1e-8 * 2.2e-8))
+        Q_target  = math.sqrt(1e4 * 1e4 * 2.2e-8 / 1e-8) / (2 * 1e4)
+
+        p.add_target("fc",
+                     lambda R1, R2, C1, C2:
+                         1 / (2 * math.pi * math.sqrt(R1 * R2 * C1 * C2)),
+                     target=fc_target)
+        p.add_target("Q",
+                     lambda R1, R2, C1, C2:
+                         math.sqrt(R1 * R2 * C2 / C1) / (R1 + R2),
+                     target=Q_target)
+        p.add_constraint("Z_in",
+                         lambda R1, R2, C1, C2: R1 + R2,
+                         range=(15e3, 25e3))
+        return p
+
+    brute = make().solve(strategy="brute", n_results=1)[0]
+    bnb   = make().solve(strategy="bnb",   n_results=1)[0]
+
+    # BruteForce confirms the unique E12 design hits all targets exactly.
+    assert brute.values["R1"] == pytest.approx(1e4)
+    assert brute.values["R2"] == pytest.approx(1e4)
+    assert brute.values["C1"] == pytest.approx(1e-8)
+    assert brute.values["C2"] == pytest.approx(2.2e-8)
+    assert brute.error == pytest.approx(0.0, abs=1e-9)
+
+    # B&B finds the same circuit despite Q's non-monotonicity.
+    for name in ("R1", "R2", "C1", "C2"):
+        assert bnb.values[name] == pytest.approx(brute.values[name])
+    assert bnb.error == pytest.approx(brute.error, abs=1e-9)
+
+
 def test_target_auto_bounder_set_by_default():
     """add_target without bounder= auto-generates a corner bounder so
        B&B has pruning info on every target by default."""
