@@ -502,25 +502,62 @@ def test_relax_and_snap_matches_brute_force_on_unique_optimum():
     assert relax.error == pytest.approx(brute.error, abs=1e-9)
 
 
-def test_relax_and_snap_handles_problem_too_big_for_brute():
-    """4-component E96 over 4 decades is ~21B candidates, well past the
-       BruteForce hard cap. Auto-dispatch should pick RelaxAndSnap and
-       return a result. Optimality is not guaranteed (the snap K-neighbourhood
-       may exclude the true discrete optimum); this test exercises the
-       pipeline, not the quality."""
+def test_relax_and_snap_designs_sallen_key_butterworth_filter():
+    """Sallen-Key unity-gain low-pass: 2R + 2C with two coupled targets
+    (fc, Q) and an input-impedance constraint Z_in = R1+R2 ∈ [15k, 25k].
+    The targets are pinned to the E12 design (R1=R2=10k, C1=10n, C2=22n)
+    which gives fc ≈ 1073 Hz, Q ≈ 0.742, Z_in = 20k — i.e. a discrete
+    optimum that hits both targets exactly while satisfying the
+    constraint, so RelaxAndSnap has a well-defined point to converge to.
+
+    Real 4-component test, replacing the synthetic R1+R2+R3+R4 sum
+    target whose 3D hyperplane of continuous optima made the discrete
+    result essentially arbitrary.
+
+    Note: Q is non-monotonic in R1 alone (interior max at R1=R2), so its
+    auto-generated corner bounder is unsound — corner evaluation can
+    miss interior extrema. B&B users designing Sallen-Key would need an
+    explicit bounder for Q. RelaxAndSnap doesn't use bounders, so this
+    test is unaffected."""
     p = Problem()
-    for n in ("R1", "R2", "R3", "R4"):
-        p.add(Resistor(n, e_series=96, range=(1e3, 1e6)))
-    p.add_target("sum",
-                 lambda R1, R2, R3, R4: R1 + R2 + R3 + R4,
-                 target=4e4, metric="abs")
+    p.add(Resistor("R1",  e_series=12, range=(1e3, 1e4)))
+    p.add(Resistor("R2",  e_series=12, range=(1e3, 1e4)))
+    p.add(Capacitor("C1", e_series=12, range=(1e-9, 1e-7)))
+    p.add(Capacitor("C2", e_series=12, range=(1e-9, 1e-7)))
+
+    fc_target = 1 / (2 * math.pi * math.sqrt(1e4 * 1e4 * 1e-8 * 2.2e-8))
+    Q_target  = math.sqrt(1e4 * 1e4 * 2.2e-8 / 1e-8) / (2 * 1e4)
+
+    p.add_target("fc",
+                 lambda R1, R2, C1, C2:
+                     1 / (2 * math.pi * math.sqrt(R1 * R2 * C1 * C2)),
+                 target=fc_target)
+    p.add_target("Q",
+                 lambda R1, R2, C1, C2:
+                     math.sqrt(R1 * R2 * C2 / C1) / (R1 + R2),
+                 target=Q_target)
+    p.add_constraint("Z_in",
+                     lambda R1, R2, C1, C2: R1 + R2,
+                     range=(15e3, 25e3))
 
     results = p.solve(n_results=1)   # auto-dispatch -> RelaxAndSnap
-    assert len(results) == 1
-    s = sum(results[0].values.values())
-    # Loose: continuous solver lands on the sum=4e4 hyperplane and snap
-    # finds something within an E-series-spacing's worth of the optimum.
-    assert s == pytest.approx(4e4, rel=0.1)
+    assert results
+
+    v = results[0].values
+    actual_fc  = 1 / (2 * math.pi * math.sqrt(
+        v["R1"] * v["R2"] * v["C1"] * v["C2"]))
+    actual_Q   = math.sqrt(v["R1"] * v["R2"] * v["C2"] / v["C1"]) \
+                 / (v["R1"] + v["R2"])
+    actual_Zin = v["R1"] + v["R2"]
+
+    # Hard constraint must hold
+    assert 15e3 <= actual_Zin <= 25e3
+    # Targets within typical filter-design tolerances. Loose because the
+    # snap K-neighbourhood may not contain the exact discrete optimum
+    # depending on where DE lands on the (fc, Q)-feasible 1-DOF curve
+    # restricted by the Z_in band.
+    assert actual_fc == pytest.approx(fc_target, rel=0.15)
+    assert actual_Q  == pytest.approx(Q_target,  rel=0.15)
 
 
 def test_factor_one_finds_exact_solution():
