@@ -302,7 +302,106 @@ class RelaxAndSnap:
 
 
 class BranchAndBound:
-    """Reserved. Will accept per-target bound= callables to prune subtrees."""
+    """Depth-first branch-and-bound over E-series values.
+
+    At each internal node (a partial assignment), computes a lower bound
+    on the WeightedSum composite error for any completion using each
+    target's bounder, and prunes the subtree if that bound exceeds the
+    worst error among the current top-N candidates. Also prunes when any
+    range= constraint is provably infeasible (its value range as bounded
+    over the subtree cannot intersect the constraint's accepting band).
+
+    Soundness: bounds are only as sound as the bounders. The default
+    auto-generated corner-evaluation bounders are sound for expressions
+    monotonic in each component, which covers most circuit objectives
+    and constraints. Non-monotonic expressions need an explicit
+    ``bounder=`` to avoid silently pruning correct solutions.
+
+    Targets without a bounder contribute zero to the lower bound (no
+    pruning info on that target). Constraints without ``value_range``
+    (i.e., custom predicate=) cannot be used for subtree pruning;
+    they're only checked at leaves.
+
+    Restricted to WeightedSum ranking — the lower-bound mechanism
+    assumes a sum-of-weighted-errors composite.
+    """
 
     def solve(self, problem, n_results, ranker):
-        raise NotImplementedError("BranchAndBound not yet implemented")
+        import heapq
+        from .problem import _error, _min_error
+        from .ranking import WeightedSum
+
+        if not isinstance(ranker, WeightedSum):
+            raise ValueError(
+                f"BranchAndBound only supports WeightedSum ranking "
+                f"(got {type(ranker).__name__})."
+            )
+
+        weights = {t.name: t.weight for t in problem.targets}
+        heap = []          # max-heap-by-negation: (-error, id, Result)
+        counter = [0]
+
+        def best_so_far():
+            if len(heap) < n_results:
+                return float("inf")
+            return -heap[0][0]
+
+        def add_leaf(values_dict, breakdown):
+            composite = sum(weights[k] * v for k, v in breakdown.items())
+            r = Result(values=values_dict, breakdown=breakdown, error=composite)
+            entry = (-composite, counter[0], r)
+            counter[0] += 1
+            if len(heap) < n_results:
+                heapq.heappush(heap, entry)
+            else:
+                heapq.heappushpop(heap, entry)
+
+        def free_ranges_for(remaining):
+            return {c.name: (c.range[0], c.range[1]) for c in remaining}
+
+        def lower_bound(fixed, remaining):
+            free_r = free_ranges_for(remaining)
+            lb = 0.0
+            for t in problem.targets:
+                if t.bounder is None:
+                    continue
+                vlo, vhi = t.bounder(fixed, free_r)
+                lb += t.weight * _min_error(vlo, vhi, t.target, t.metric)
+            return lb
+
+        def is_feasible(fixed, remaining):
+            free_r = free_ranges_for(remaining)
+            for con in problem.constraints:
+                if con.bounder is None or con.value_range is None:
+                    continue   # arbitrary predicate; can't prune ahead of leaf
+                vlo, vhi = con.bounder(fixed, free_r)
+                lo, hi = con.value_range
+                if vhi < lo or vlo > hi:
+                    return False
+            return True
+
+        def branch(fixed, remaining):
+            if not remaining:
+                for con in problem.constraints:
+                    if not con.predicate(con.expr(**fixed)):
+                        return
+                breakdown = {
+                    t.name: float(_error(t.expr(**fixed), t.target, t.metric))
+                    for t in problem.targets
+                }
+                add_leaf(dict(fixed), breakdown)
+                return
+
+            if not is_feasible(fixed, remaining):
+                return
+            if lower_bound(fixed, remaining) >= best_so_far():
+                return
+
+            comp = remaining[0]
+            rest = remaining[1:]
+            for value in comp.values():
+                branch({**fixed, comp.name: float(value)}, rest)
+
+        branch({}, list(problem.components))
+
+        return sorted([r for _, _, r in heap], key=lambda r: r.error)[:n_results]

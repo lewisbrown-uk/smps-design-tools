@@ -392,13 +392,85 @@ def test_brute_force_vectorised_rejects_math_module_lambda():
 # Marked strict=True so they fail loudly the moment the implementation lands
 # without removing the marker.
 
-@pytest.mark.xfail(raises=NotImplementedError, strict=True,
-                   reason="BranchAndBound deferred")
-def test_branch_and_bound_solves_simple_problem():
+# ---------- BranchAndBound ----------
+
+def test_branch_and_bound_finds_exact_solution():
+    """Single-component, target on E-series: B&B finds it exactly."""
     p = Problem()
     p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
     p.add_target("v", lambda R: R, target=4.7e3, metric="abs")
-    p.solve(strategy="bnb")
+    best = p.solve(strategy="bnb", n_results=1)[0]
+    assert best.values["R"] == pytest.approx(4.7e3)
+    assert best.error == pytest.approx(0.0)
+
+
+def test_branch_and_bound_matches_brute_force_on_unique_optimum():
+    """Two-component RC with unique optimum (R=10k, C=10n at corner of
+       single-decade box). B&B's auto-bounders should let it agree with
+       BruteForce on the global optimum."""
+    def make():
+        p = Problem()
+        p.add(Resistor("R",  e_series=24, range=(1e3, 1e4)))
+        p.add(Capacitor("C", e_series=24, range=(1e-9, 1e-8)))
+        target = 1 / (2 * math.pi * 1e4 * 1e-8)
+        p.add_target("fc", lambda R, C: 1 / (2 * math.pi * R * C),
+                     target=target)
+        return p
+
+    brute = make().solve(strategy="brute", n_results=1)[0]
+    bnb   = make().solve(strategy="bnb",   n_results=1)[0]
+    assert bnb.values["R"] == pytest.approx(brute.values["R"])
+    assert bnb.values["C"] == pytest.approx(brute.values["C"])
+    assert bnb.error == pytest.approx(brute.error, abs=1e-9)
+
+
+def test_branch_and_bound_honours_range_constraint():
+    """B&B prunes subtrees where the constraint's value range can't
+       overlap the accepting band, then verifies feasibility at leaves."""
+    p = Problem()
+    p.add(Resistor("R1", e_series=24, range=(1e3, 1e4)))
+    p.add(Resistor("R2", e_series=24, range=(1e3, 1e4)))
+    p.add_target("ratio", lambda R1, R2: R2 / (R1 + R2), target=0.5)
+    p.add_constraint("Zout", lambda R1, R2: R1 + R2, range=(15e3, 18e3))
+
+    results = p.solve(strategy="bnb", n_results=5)
+    assert results
+    for r in results:
+        z = r.values["R1"] + r.values["R2"]
+        assert 15e3 <= z <= 18e3
+
+
+def test_branch_and_bound_rejects_non_weighted_sum_ranker():
+    """B&B's lower-bound mechanism assumes a sum-of-weighted-errors
+       composite — Lex/Pareto don't fit that contract."""
+    p = Problem()
+    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    p.add_target("v", lambda R: R, target=4.7e3, metric="abs")
+    with pytest.raises(ValueError, match="WeightedSum"):
+        p.solve(strategy="bnb", rank=Pareto())
+
+
+def test_target_auto_bounder_set_by_default():
+    """add_target without bounder= auto-generates a corner bounder so
+       B&B has pruning info on every target by default."""
+    p = Problem()
+    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    p.add_target("v", lambda R: R, target=4.7e3, metric="abs")
+    assert p.targets[0].bounder is not None
+    # Verify it computes correctly: R ∈ [1k, 10k] gives bound (1k, 10k)
+    lo, hi = p.targets[0].bounder({}, {"R": (1e3, 1e4)})
+    assert lo == pytest.approx(1e3)
+    assert hi == pytest.approx(1e4)
+
+
+def test_target_explicit_bounder_preserved():
+    """User-supplied bounder= overrides the auto-generated one."""
+    user_bounder = lambda fixed, free: (0.0, 0.0)
+    p = Problem()
+    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    p.add_target("v", lambda R: R, target=4.7e3, metric="abs",
+                 bounder=user_bounder)
+    assert p.targets[0].bounder is user_bounder
 
 
 def test_relax_and_snap_single_component_finds_nearest_e_series():

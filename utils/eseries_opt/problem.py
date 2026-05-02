@@ -27,6 +27,15 @@ class Target:
     target: float
     weight: float = 1.0
     metric: str = "rel"
+    bounder: Optional[Callable] = None
+    """``bounder(fixed_kwargs, free_ranges) -> (vlo, vhi)`` returns the
+    value range of ``expr`` over a partial assignment. Used by
+    BranchAndBound to compute lower bounds on per-target error and prune
+    subtrees. Auto-generated as a corner-evaluation bounder by
+    ``add_target``. Sound (and tight) when ``expr`` is monotonic in each
+    free component; override with an explicit ``bounder=`` for
+    non-monotonic expressions where corner evaluation can miss interior
+    extrema."""
 
 
 @dataclass
@@ -35,12 +44,14 @@ class Constraint:
     expr: Callable
     predicate: Callable
     bounder: Optional[Callable] = None
-    """``bounder(fixed_kwargs, free_ranges) -> (lo, hi)`` returns the value
-    range of ``expr`` over a partial assignment — fixed components and the
-    (lo, hi) ranges of the free ones. Used by BranchAndBound for subtree
-    pruning. Auto-generated when the constraint is added with ``range=``;
-    must be supplied explicitly alongside a custom ``predicate=`` to enable
-    pruning. ``None`` means B&B can't prune on this constraint."""
+    """``bounder(fixed_kwargs, free_ranges) -> (vlo, vhi)`` for this
+    constraint's expression. Auto-generated when the constraint is added
+    with ``range=``; must be supplied explicitly alongside a custom
+    ``predicate=``. ``None`` means B&B can't prune on this constraint."""
+    value_range: Optional[tuple] = None
+    """Set to ``(lo, hi)`` when constraint added via ``range=``, else
+    ``None``. B&B uses this with ``bounder`` to decide if a subtree is
+    provably infeasible (``vhi < lo or vlo > hi``)."""
 
 
 def _range_predicate(lo, hi):
@@ -88,6 +99,31 @@ def _error(actual, target, metric):
     raise ValueError(f"Unknown metric: {metric}")
 
 
+def _min_error(vlo, vhi, target, metric):
+    """Lower bound on the error metric over an expression value range.
+    Used by BranchAndBound: if the expression's value lies in [vlo, vhi]
+    for some completion, the achievable error is at least this. Zero when
+    the target lies inside the range; otherwise the error at the closer
+    endpoint."""
+    if vlo > vhi:
+        vlo, vhi = vhi, vlo
+    if metric == "abs":
+        if vlo <= target <= vhi:
+            return 0.0
+        return min(abs(vlo - target), abs(vhi - target))
+    if metric == "rel":
+        if target == 0:
+            raise ValueError("metric='rel' is undefined when target=0; use 'abs'")
+        if vlo <= target <= vhi:
+            return 0.0
+        return min(abs(vlo - target), abs(vhi - target)) / abs(target)
+    if metric == "log":
+        if vlo <= target <= vhi:
+            return 0.0
+        return min(abs(np.log(vlo / target)), abs(np.log(vhi / target)))
+    raise ValueError(f"Unknown metric: {metric}")
+
+
 def _sensitivity(problem, result, tol):
     """Worst-case weighted-sum error at the 2^N tolerance corners."""
     names = [c.name for c in problem.components]
@@ -123,12 +159,28 @@ class Problem:
         self.components.append(component)
         return component
 
-    def add_target(self, name, expr, target, weight=1.0, metric="rel"):
+    def add_target(self, name, expr, target, weight=1.0, metric="rel",
+                   bounder=None):
+        """Add a soft optimisation target.
+
+        Args:
+            name:    Identifier.
+            expr:    ``(**components) -> value``.
+            target:  Desired value of expr.
+            weight:  Multiplier in the WeightedSum composite.
+            metric:  ``"rel"`` (default), ``"abs"``, or ``"log"``.
+            bounder: Optional ``(fixed_kwargs, free_ranges) -> (vlo, vhi)``
+                     for BranchAndBound subtree pruning. Auto-generated
+                     as a corner-evaluation bounder if not supplied;
+                     override for non-monotonic expressions.
+        """
         if metric not in _VALID_METRICS:
             raise ValueError(
                 f"Unknown metric: {metric}. Valid: {sorted(_VALID_METRICS)}"
             )
-        self.targets.append(Target(name, expr, target, weight, metric))
+        if bounder is None:
+            bounder = _corner_bounder(expr)
+        self.targets.append(Target(name, expr, target, weight, metric, bounder))
 
     def add_constraint(self, name, expr, predicate=None, *,
                        range=None, bounder=None):
@@ -154,6 +206,7 @@ class Problem:
                        partial assignments. Used by BranchAndBound.
                        Auto-generated when ``range=`` is supplied.
         """
+        value_range = None
         if range is not None:
             if predicate is not None:
                 raise ValueError(
@@ -162,6 +215,7 @@ class Problem:
                 )
             lo, hi = range
             predicate = _range_predicate(lo, hi)
+            value_range = (lo, hi)
             if bounder is None:
                 bounder = _corner_bounder(expr)
         elif predicate is None:
@@ -169,7 +223,9 @@ class Problem:
                 f"Constraint '{name}' needs either range=(lo, hi) "
                 f"or predicate="
             )
-        self.constraints.append(Constraint(name, expr, predicate, bounder))
+        self.constraints.append(
+            Constraint(name, expr, predicate, bounder, value_range)
+        )
 
     def solve(self, strategy="auto", n_results=10, rank=None,
               sensitivity_tol=0.01):
