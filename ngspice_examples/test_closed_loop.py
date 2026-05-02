@@ -411,16 +411,16 @@ C_hf     n_int_pidp v_int_out {c_hf:.6e}     IC=0
 XU_int 0 n_int_minus vcc vee v_int_out {opamp_int}
 
 * Anti-windup: real-circuit clamp on V_int_out using two silicon diodes
-* referenced to precision voltage sources. The diodes forward-conduct when
-* V_int_out exceeds +1.0 V (Vf ~0.7V over the +0.3V reference) or goes
-* below -0.4 V (Vf ~0.7V under the -1.1V reference), pulling V_int_out
-* back into [-0.4, +1.0]. The integrator op-amp's open-loop drive
-* against the diode's finite Ron sets the steady-state clamp accuracy
-* (~tens of mV).
-* In production the precision references would be Zeners + dividers off
-* the +/-9 V rails, or band-gap parts (TL431, REF03 etc.).
-V_clamp_hi v_clamp_hi 0  0.3
-V_clamp_lo v_clamp_lo 0 -1.1
+* referenced to precision voltage sources. Sized for the 2N5457 V_to=-2.5V
+* operating range: V_int_out ~= -V_ctl, so the loop needs V_int_out in
+* [0, 2.5] to span the JFET's useful R_DS range. Clamp range chosen as
+* [-0.3, +2.5] V (small negative margin keeps the gate reverse-biased).
+* The diodes forward-conduct when V_int_out exceeds +2.5 V (Vf ~0.7V over
+* the +1.8V reference) or goes below -0.3 V (Vf ~0.7V under the +0.3V
+* reference). In production the precision references would be Zeners +
+* dividers off the +/-9 V rails, or band-gap parts (TL431, REF03 etc.).
+V_clamp_hi v_clamp_hi 0  1.8
+V_clamp_lo v_clamp_lo 0  0.3
 D_aw_hi    v_int_out  v_clamp_hi Dclamp
 D_aw_lo    v_clamp_lo v_int_out  Dclamp
 .model Dclamp D(IS=1n N=2.0 RS=100)
