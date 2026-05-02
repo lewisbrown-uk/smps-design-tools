@@ -192,18 +192,24 @@ def make_netlist(data_path: Path,
     rtop_bjt = (1 - wien_alpha_eff) * R_TOT_BJT
     rbot_bjt = wien_alpha_eff * R_TOT_BJT
     vos_v   = mc.get("vos_v", 2.5e-3)  # TLV9154 worst-case Vos
+    # Chopper-stabilised Vos for the demodulator and integrator op-amps
+    # (e.g. OPA2188 dual chopper: Vos < 5 uV). The Vos sensitivity sweep
+    # (PR #16) showed these two op-amps dominate the loop's Vos error
+    # budget; with TLV9154-grade 2.5 mV Vos here the residual T error
+    # is ~30 K, vs ~5 K with chopper.
+    vos_chopper = mc.get("vos_chopper", 5e-6)
     jfet_vp = mc.get("jfet_vp", -1.5)
     jfet_beta = mc.get("jfet_beta", 1.0e-3)
-    def _opamp(key):
-        v = mc.get(key, vos_v)
+    def _opamp(key, default=None):
+        v = mc.get(key, default if default is not None else vos_v)
         return (f"uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 "
                 f"Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos={v:.6e}")
     opamp = _opamp("vos_v")          # back-compat default for any unmarked usage
     opamp_osc  = _opamp("vos_osc")
     opamp_ap   = _opamp("vos_ap")
     opamp_diff = _opamp("vos_diff")
-    opamp_dem  = _opamp("vos_dem")
-    opamp_int  = _opamp("vos_int")
+    opamp_dem  = _opamp("vos_dem", default=vos_chopper)
+    opamp_int  = _opamp("vos_int", default=vos_chopper)
     opamp_cmp  = _opamp("vos_cmp")
     opamp_buf0 = _opamp("vos_buf0")
     opamp_bufo = _opamp("vos_buf_osc")

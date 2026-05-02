@@ -98,7 +98,7 @@ S2 0      vplus 0     n_cmp swMod
 R_bias vplus 0 1Meg
 R_din n_diff n_dem_minus 10k
 R_dfb n_demout n_dem_minus 10k
-XU_dem vplus n_dem_minus vcc vee n_demout uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+XU_dem vplus n_dem_minus vcc vee n_demout uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=5.000000e-06
 
 * === Integrator -> V_ctl (loop amp) ===
 * V_ctl_raw = -1/(R*C) * integral(V_demout). Cold filament: V_demout < 0,
@@ -122,7 +122,7 @@ C_intfb  n_int_minus n_int_pidp 3.183099e-07  IC=0
 * the f0 ripple from V_demod that the D term would otherwise pump
 * through to V_ctl.
 C_hf     n_int_pidp v_int_out 1.000000e-08     IC=0
-XU_int 0 n_int_minus vcc vee v_int_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+XU_int 0 n_int_minus vcc vee v_int_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=5.000000e-06
 
 * Anti-windup: real-circuit clamp on V_int_out using two silicon diodes
 * referenced to precision voltage sources. The diodes forward-conduct when
