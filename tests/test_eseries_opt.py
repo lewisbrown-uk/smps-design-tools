@@ -505,23 +505,123 @@ def test_factor_one_unknown_pivot_raises():
         p.solve(strategy=factor)
 
 
-@pytest.mark.xfail(raises=NotImplementedError, strict=True,
-                   reason="Lexicographic ranking deferred")
-def test_lexicographic_orders_by_priority():
+# ---------- Lexicographic ranking ----------
+
+def test_lexicographic_strict_orders_by_priority():
+    """Strict lex (epsilon=0): every primary-tied candidate ranks above
+       any candidate with worse primary, regardless of secondary.
+       Distinguishing case: WeightedSum would prefer a primary-suboptimal
+       candidate that hits secondary perfectly, lex would not."""
+    def make():
+        p = Problem()
+        p.add(Resistor("R1", e_series=24, range=(1e3, 1e4)))
+        p.add(Resistor("R2", e_series=24, range=(1e3, 1e4)))
+        p.add_target("primary",   lambda R1, R2: R1,
+                     target=2.2e3, metric="abs")
+        p.add_target("secondary", lambda R1, R2: R2,
+                     target=4.7e3, metric="abs")
+        return p
+
+    lex = make().solve(strategy="brute",
+                       rank=Lexicographic(["primary", "secondary"]),
+                       n_results=5)
+    ws  = make().solve(strategy="brute", n_results=5)
+
+    # Both pick (2.2k, 4.7k) at the top — error 0 on both targets.
+    assert lex[0].values["R1"] == pytest.approx(2.2e3)
+    assert lex[0].values["R2"] == pytest.approx(4.7e3)
+    assert ws[0].values["R1"]  == pytest.approx(2.2e3)
+    assert ws[0].values["R2"]  == pytest.approx(4.7e3)
+
+    # Lex's #2 stays in the primary-perfect band (R1=2.2k, R2 next-best).
+    assert lex[1].breakdown["primary"] == pytest.approx(0.0)
+
+    # WS's #2 sacrifices primary to keep secondary perfect: any (R1!=2.2k,
+    # R2=4.7k) is total error 200 < (2.2k, R2 next-best) at total 400.
+    assert ws[1].breakdown["primary"] > 0.0
+    assert ws[1].breakdown["secondary"] == pytest.approx(0.0)
+
+
+def test_lexicographic_epsilon_widens_tie_band():
+    """With epsilon > 0, candidates within epsilon of the best primary
+       error are tied and resolved by secondary. Target lies between two
+       E-series values so the primary-best is genuinely tied."""
     p = Problem()
     p.add(Resistor("R1", e_series=24, range=(1e3, 1e4)))
     p.add(Resistor("R2", e_series=24, range=(1e3, 1e4)))
-    p.add_target("primary",   lambda R1, R2: R1, target=2.2e3, metric="abs")
+    # 2.3k lies between E24's 2.2k and 2.4k (both primary error 100).
+    p.add_target("primary",   lambda R1, R2: R1, target=2.3e3, metric="abs")
     p.add_target("secondary", lambda R1, R2: R2, target=4.7e3, metric="abs")
-    p.solve(strategy="brute", rank=Lexicographic(["primary", "secondary"]))
+
+    # epsilon=200: tie band [100, 300] includes R1 in {2k, 2.2k, 2.4k}.
+    # Within that band the secondary resolves to R2=4.7k for all three.
+    lex = p.solve(strategy="brute",
+                  rank=Lexicographic(["primary", "secondary"], epsilon=200),
+                  n_results=3)
+    for r in lex:
+        assert r.values["R2"] == pytest.approx(4.7e3)
 
 
-@pytest.mark.xfail(raises=NotImplementedError, strict=True,
-                   reason="Pareto ranking deferred")
-def test_pareto_returns_only_nondominated():
+def test_lexicographic_unknown_target_raises():
+    p = Problem()
+    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    p.add_target("a", lambda R: R, target=4.7e3, metric="abs")
+    with pytest.raises(ValueError, match="unknown target"):
+        p.solve(strategy="brute", rank=Lexicographic(["a", "missing"]))
+
+
+# ---------- Pareto ranking ----------
+
+def test_pareto_returns_only_nondominated_candidates():
+    """No candidate in the returned set may strictly dominate another."""
     p = Problem()
     p.add(Resistor("R1", e_series=12, range=(1e3, 1e5)))
     p.add(Resistor("R2", e_series=12, range=(1e3, 1e5)))
     p.add_target("ratio", lambda R1, R2: R2 / R1, target=10.0)
     p.add_target("Zin",   lambda R1, R2: R1 + R2, target=10e3)
-    p.solve(strategy="brute", rank=Pareto())
+
+    results = p.solve(strategy="brute", rank=Pareto(), n_results=50)
+    assert results, "Pareto front should not be empty"
+
+    for i, ri in enumerate(results):
+        for j, rj in enumerate(results):
+            if i == j:
+                continue
+            no_worse_all = all(rj.breakdown[k] <= ri.breakdown[k]
+                               for k in ri.breakdown)
+            strictly_better_one = any(rj.breakdown[k] < ri.breakdown[k]
+                                      for k in ri.breakdown)
+            assert not (no_worse_all and strictly_better_one), \
+                f"{rj.values} dominates {ri.values}"
+
+
+def test_pareto_filters_out_most_of_full_set():
+    """The Pareto front of a 2-target problem is a curve in error space,
+       so it should be much smaller than the full 625-candidate grid."""
+    p = Problem()
+    p.add(Resistor("R1", e_series=12, range=(1e3, 1e5)))
+    p.add(Resistor("R2", e_series=12, range=(1e3, 1e5)))
+    p.add_target("ratio", lambda R1, R2: R2 / R1, target=10.0)
+    p.add_target("Zin",   lambda R1, R2: R1 + R2, target=10e3)
+
+    full = p.solve(strategy="brute", n_results=10000)
+    front = p.solve(strategy="brute", rank=Pareto(), n_results=10000)
+    assert 0 < len(front) < len(full) // 5
+
+
+def test_pareto_includes_each_targets_solo_optimum():
+    """The candidate that minimises one target alone is always on the
+       Pareto front — nothing dominates it on its perfect axis."""
+    p = Problem()
+    p.add(Resistor("R1", e_series=12, range=(1e3, 1e5)))
+    p.add(Resistor("R2", e_series=12, range=(1e3, 1e5)))
+    p.add_target("ratio", lambda R1, R2: R2 / R1, target=10.0)
+    p.add_target("Zin",   lambda R1, R2: R1 + R2, target=10e3)
+
+    front = p.solve(strategy="brute", rank=Pareto(), n_results=100)
+    # ratio=10 hit exactly by many pairs (1k,10k), (1.2k,12k), ...
+    assert any(r.breakdown["ratio"] == pytest.approx(0.0) for r in front)
+    # Zin=10k hit by e.g. (1k+8.2k+...) — let's just check some pair
+    # achieves zero or near-zero Zin error.
+    min_zin_err = min(r.breakdown["Zin"] for r in front)
+    assert min_zin_err < 100   # < 1% of 10k
