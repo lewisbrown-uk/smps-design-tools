@@ -4,7 +4,7 @@ import pytest
 
 from utils.eseries_opt import (
     Problem, Resistor, Capacitor, Inductor,
-    Lexicographic, Pareto, FactorOne,
+    Lexicographic, Pareto, FactorOne, BruteForce,
 )
 
 
@@ -236,6 +236,75 @@ def test_auto_dispatch_works_for_small_problems():
     p.add_target("fc", lambda R, C: 1 / (2 * math.pi * R * C), target=1e3)
     results = p.solve(n_results=1)   # strategy unspecified
     assert len(results) == 1
+
+
+# ---------- BruteForce vectorise flag ----------
+
+def test_brute_force_scalar_accepts_math_module_lambdas():
+    """Default vectorise=False mode handles lambdas using math.sqrt /
+       math.log / chained comparisons — anything Python evaluates per cell."""
+    p = Problem()
+    p.add(Inductor("L",  e_series=12, range=(1e-6, 1e-4)))
+    p.add(Capacitor("C", e_series=12, range=(1e-9, 1e-7)))
+    p.add_target("f0", lambda L, C: 1 / (2 * math.pi * math.sqrt(L * C)),
+                 target=1e6)
+
+    best = p.solve(strategy=BruteForce(vectorise=False), n_results=1)[0]
+    f0 = 1 / (2 * math.pi * math.sqrt(best.values["L"] * best.values["C"]))
+    assert abs(f0 - 1e6) / 1e6 < 0.05
+
+
+def test_brute_force_scalar_rejects_oversize_problem():
+    """Hard cap protects against accidental hours-long brute-force runs."""
+    p = Problem()
+    for n in ("R1", "R2", "R3", "R4", "R5"):
+        p.add(Resistor(n, e_series=96, range=(1e3, 1e5)))   # 193^5 ~ 268B
+    p.add_target("dummy",
+                 lambda R1, R2, R3, R4, R5: R1 + R2 + R3 + R4 + R5,
+                 target=5e4, metric="abs")
+
+    with pytest.raises(ValueError, match="too large"):
+        p.solve(strategy=BruteForce(vectorise=False), n_results=1)
+
+
+def test_brute_force_vectorised_matches_scalar():
+    """vectorise=True must produce the same top result as the scalar path
+       for arithmetic-only lambdas. Constrained to single decades on both
+       components so the optimum is unique — multi-decade RC has tied
+       solutions (e.g. 3.3k×39n ≡ 39k×3.3n) that the two iteration orders
+       break differently."""
+    def make():
+        p = Problem()
+        p.add(Resistor("R",  e_series=24, range=(1e3, 1e4)))
+        p.add(Capacitor("C", e_series=24, range=(1e-9, 1e-8)))
+        target = 1 / (2 * math.pi * 1e4 * 1e-8)   # uniquely hit by 10k+10n
+        p.add_target("fc", lambda R, C: 1 / (2 * math.pi * R * C),
+                     target=target)
+        return p
+
+    scalar = make().solve(strategy=BruteForce(vectorise=False), n_results=1)[0]
+    vec    = make().solve(strategy=BruteForce(vectorise=True),  n_results=1)[0]
+
+    assert vec.values["R"] == pytest.approx(scalar.values["R"])
+    assert vec.values["C"] == pytest.approx(scalar.values["C"])
+    assert vec.error == pytest.approx(scalar.error, rel=1e-9)
+
+
+def test_brute_force_vectorised_rejects_math_module_lambda():
+    """vectorise=True with math.sqrt should raise a clear error pointing
+       the user to np.sqrt or vectorise=False, not the raw numpy
+       'must be real number, not ndarray' message."""
+    p = Problem()
+    p.add(Inductor("L",  e_series=12, range=(1e-6, 1e-4)))
+    p.add(Capacitor("C", e_series=12, range=(1e-9, 1e-7)))
+    p.add_target("f0", lambda L, C: 1 / (2 * math.pi * math.sqrt(L * C)),
+                 target=1e6)
+
+    with pytest.raises(TypeError) as exc_info:
+        p.solve(strategy=BruteForce(vectorise=True), n_results=1)
+    msg = str(exc_info.value)
+    assert "numpy" in msg
+    assert "vectorise=False" in msg
 
 
 # ---------- Stubbed strategies / rankings ----------

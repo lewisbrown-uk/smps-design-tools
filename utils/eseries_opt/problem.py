@@ -1,7 +1,8 @@
-import math
 import itertools
 from dataclasses import dataclass
 from typing import Callable
+
+import numpy as np
 
 from .ranking import WeightedSum
 from .strategies import BruteForce, FactorOne, RelaxAndSnap, BranchAndBound
@@ -36,14 +37,17 @@ class Constraint:
 
 
 def _error(actual, target, metric):
+    """Error metric. Works on scalars and numpy arrays alike — np.abs / np.log
+    broadcast cleanly, so the same function serves the scalar and vectorised
+    BruteForce paths without divergence."""
     if metric == "abs":
-        return abs(actual - target)
+        return np.abs(actual - target)
     if metric == "rel":
         if target == 0:
             raise ValueError("metric='rel' is undefined when target=0; use 'abs'")
-        return abs((actual - target) / target)
+        return np.abs((actual - target) / target)
     if metric == "log":
-        return abs(math.log(actual / target))
+        return np.abs(np.log(actual / target))
     raise ValueError(f"Unknown metric: {metric}")
 
 

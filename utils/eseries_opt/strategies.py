@@ -1,5 +1,7 @@
 import itertools
 
+import numpy as np
+
 from .result import Result
 
 
@@ -7,13 +9,26 @@ _BRUTE_FORCE_HARD_CAP = 10_000_000
 
 
 class BruteForce:
-    """Scalar Cartesian product over E-series values. Default for small
-       problems (<=3 components). Refuses to run if the candidate space
-       exceeds _BRUTE_FORCE_HARD_CAP — switch strategy or shrink ranges."""
+    """Cartesian product over E-series values. Default for small problems
+    (<=3 components). Two evaluation modes:
+
+    - ``vectorise=False`` (default): scalar Python loop. Always works,
+      including with ``math.sqrt``, chained comparisons, branches, etc.
+    - ``vectorise=True``: numpy broadcasting over N-D grids. 100-1000x
+      faster on big problems, but every target/constraint expression must
+      use numpy-compatible ops (``np.sqrt`` not ``math.sqrt``;
+      ``(a <= z) & (z <= b)`` not ``a <= z <= b``). Currently restricted
+      to WeightedSum ranking — other rankers need per-candidate
+      materialisation, which defeats the speedup.
+
+    Refuses to run if the candidate space exceeds _BRUTE_FORCE_HARD_CAP
+    in either mode — switch strategy or shrink ranges past that point.
+    """
+
+    def __init__(self, vectorise=False):
+        self.vectorise = vectorise
 
     def solve(self, problem, n_results, ranker):
-        from .problem import _error    # local import avoids cycle
-
         names = [c.name for c in problem.components]
         value_lists = [c.values() for c in problem.components]
 
@@ -25,6 +40,22 @@ class BruteForce:
                 f"BruteForce candidate space too large ({total:,}). "
                 f"Reduce ranges/series or pick another strategy."
             )
+
+        if self.vectorise:
+            from .ranking import WeightedSum
+            if not isinstance(ranker, WeightedSum):
+                raise ValueError(
+                    f"vectorise=True only supports WeightedSum ranking "
+                    f"(got {type(ranker).__name__}). Other rankers require "
+                    f"per-candidate materialisation."
+                )
+            return self._solve_vectorised(problem, names, value_lists,
+                                          n_results, ranker)
+        return self._solve_scalar(problem, names, value_lists,
+                                  n_results, ranker)
+
+    def _solve_scalar(self, problem, names, value_lists, n_results, ranker):
+        from .problem import _error
 
         candidates = []
         for combo in itertools.product(*value_lists):
@@ -39,6 +70,60 @@ class BruteForce:
                 for t in problem.targets
             }
             candidates.append(Result(values=dict(kwargs), breakdown=breakdown))
+
+        return ranker.rank(candidates, problem.targets)[:n_results]
+
+    def _solve_vectorised(self, problem, names, value_lists, n_results, ranker):
+        from .problem import _error
+
+        grids = np.meshgrid(*value_lists, indexing="ij")
+        kwargs = {n: g for n, g in zip(names, grids)}
+        shape = grids[0].shape
+
+        feasible = np.ones(shape, dtype=bool)
+        for con in problem.constraints:
+            try:
+                vals = con.expr(**kwargs)
+                mask = con.predicate(vals)
+            except (TypeError, ValueError) as e:
+                raise TypeError(
+                    f"Constraint '{con.name}': vectorised evaluation failed "
+                    f"({e}). Use numpy-compatible ops (np.sqrt not "
+                    f"math.sqrt; (a <= z) & (z <= b) not a <= z <= b), "
+                    f"or pass vectorise=False."
+                ) from e
+            feasible &= np.asarray(mask, dtype=bool)
+
+        composite = np.zeros(shape, dtype=float)
+        breakdown_arrays = {}
+        for t in problem.targets:
+            try:
+                actual = t.expr(**kwargs)
+                err_arr = _error(actual, t.target, t.metric)
+            except (TypeError, ValueError) as e:
+                raise TypeError(
+                    f"Target '{t.name}': vectorised evaluation failed "
+                    f"({e}). Use numpy-compatible ops (np.sqrt not "
+                    f"math.sqrt), or pass vectorise=False."
+                ) from e
+            breakdown_arrays[t.name] = np.broadcast_to(err_arr, shape)
+            composite = composite + t.weight * err_arr
+
+        composite_masked = np.where(feasible, composite, np.inf)
+        flat = composite_masked.ravel()
+        n = min(n_results, int(np.isfinite(flat).sum()))
+        if n == 0:
+            return []
+        top_indices = np.argsort(flat)[:n]
+
+        candidates = []
+        for idx in top_indices:
+            multi_idx = np.unravel_index(int(idx), shape)
+            values = {n_: float(grids[i][multi_idx])
+                      for i, n_ in enumerate(names)}
+            breakdown = {k: float(arr[multi_idx])
+                         for k, arr in breakdown_arrays.items()}
+            candidates.append(Result(values=values, breakdown=breakdown))
 
         return ranker.rank(candidates, problem.targets)[:n_results]
 
