@@ -41,6 +41,11 @@ XU_osc np nn vcc vee v_osc uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq
 R_ap1 v_drv_atten n_ap_minus 1590
 R_ap2 v_ap  n_ap_minus 1590
 * JFET R_DS in series from V_drv_atten (or V_osc) to V+ (cap-shunted node).
+* The gate is driven directly by the inverter op-amp's output (v_ctl), so
+* gate-channel forward-conduction current during overshoots is sunk by
+* the inverter's output stage with no DC offset on V_GS. The bootstrap AC
+* signal is summed into the inverter's non-inverting input -- see the
+* inverter section below.
 J_var v_drv_atten v_ctl n_ap_plus J201
 C_ap n_ap_plus 0 1.000000e-07    IC=0
 XU_ap n_ap_plus n_ap_minus vcc vee v_ap uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
@@ -139,14 +144,26 @@ D_aw_hi    v_int_out  v_clamp_hi Dclamp
 D_aw_lo    v_clamp_lo v_int_out  Dclamp
 .model Dclamp D(IS=1n N=2.0 RS=100)
 
-* Inverter: V_ctl = -V_int_out via op-amp unity-gain inverting stage.
-* Replaces the previous B_ctl behavioural source. The JFET's intrinsic
-* gate-source diode forward-conducts at ~+0.6 V which acts as a soft
-* upper limit on V_ctl on its own; the V_int_out clamp above limits
-* it to +0.4 V well before that, so the JFET gate sees a clean signal.
-R_inv1 v_int_out n_inv_minus 100k
-R_inv2 n_inv_minus v_ctl     100k
-XU_inv 0 n_inv_minus vcc vee v_ctl uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+* Inverter + JFET-gate bootstrap: V_ctl is the op-amp output that drives
+* the JFET gate directly. At DC, n_inv_plus is held to 0 by R_btp, so
+* V_ctl = -V_int_out (existing inverter behaviour). At AC the bootstrap
+* path R_btd/C_btd and R_bts/C_bts inject (V_drain + V_source) into
+* n_inv_plus through R_btp to ground; the op-amp's non-inverting summer
+* arrangement gives V_ctl_AC = 2*V(n_inv_plus) = 2*R_btp/(2*R_b + R_btp) *
+* (V_d + V_s). With R_b = 100k, R_btp = 18k that's V_ctl_AC = 0.265*(V_d+V_s),
+* close to the optimal alpha ~ 0.275 for our topology where the C_ap
+* divider gives V_source ~ 0.38*V_drain at f0. Cancels the V_DS-dependent
+* term in 1/R_DS = 2*beta*(V_GS - V_to - V_DS/2), reducing JFET-induced
+* H2 at v_ap from ~6% to ~3%. The C_b caps block DC so the inverter still
+* cleanly tracks V_int_out.
+R_inv1 v_int_out  n_inv_minus 100k
+R_inv2 n_inv_minus v_ctl       100k
+R_btd  v_drv_atten n_btd_mid  100k
+C_btd  n_btd_mid   n_inv_plus  10u IC=0
+R_bts  n_ap_plus   n_bts_mid   100k
+C_bts  n_bts_mid   n_inv_plus  10u IC=0
+R_btp  n_inv_plus  0           18k
+XU_inv n_inv_plus  n_inv_minus vcc vee v_ctl uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 
 * === Soft-start network (V_PRESET = 0.55, T_RAMP = 0.1 s) ===
 * During the first T_RAMP seconds, a switch ties v_int_out to V_PRESET
