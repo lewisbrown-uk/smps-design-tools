@@ -47,7 +47,7 @@ R_ap2 v_ap  n_ap_minus 1590
 * signal is summed into the inverter's non-inverting input -- see the
 * inverter section below.
 J_var v_drv_atten v_ctl n_ap_plus J2N5457
-C_ap n_ap_plus 0 1.000000e-06    IC=0
+C_ap n_ap_plus 0 1.000000e-07    IC=0
 XU_ap n_ap_plus n_ap_minus vcc vee v_ap uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 .model J2N5457 NJF(Vto=-2.5000 Beta=1.0000e-03 Lambda=0)
 
