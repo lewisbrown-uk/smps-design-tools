@@ -3,7 +3,8 @@ import math
 import numpy as np
 
 from .report import YieldReport, MetricStats
-from .samplers import Sampler, RelativeGaussian, RelativeUniform
+from .samplers import (Sampler, RelativeGaussian, RelativeUniform,
+                       AbsoluteGaussian)
 from .devices import expand_active_devices
 
 
@@ -95,6 +96,64 @@ def _validate_distribution(distribution, nominal_values, passive_tolerances,
             )
 
 
+def _gaussian_sigma(sampler):
+    """Extract (mean, σ) from a Gaussian-family Sampler — used by the
+    correlated-group machinery to build a covariance matrix that has
+    the same marginals as the per-component sampler would have
+    produced independently. Returns None for non-Gaussian samplers."""
+    if isinstance(sampler, RelativeGaussian):
+        return (sampler.nominal_value,
+                sampler.nominal_value * sampler.tol / sampler.sigmas)
+    if isinstance(sampler, AbsoluteGaussian):
+        return (sampler.mean, sampler.sigma)
+    return None
+
+
+def _validate_correlations(correlations, samplers):
+    """Each correlation entry: (list of names, ρ in [-1, 1]). Every
+    name must have a Gaussian-family sampler — non-Gaussian shapes
+    don't have a clean joint distribution under simple correlation."""
+    seen = set()
+    for entry in correlations:
+        if (not isinstance(entry, (list, tuple))) or len(entry) != 2:
+            raise TypeError(
+                f"correlation entry must be (names_list, rho), got {entry!r}"
+            )
+        names, rho = entry
+        if not isinstance(names, (list, tuple)) or len(names) < 2:
+            raise ValueError(
+                f"correlation group must have ≥2 names, got {names!r}"
+            )
+        if not (-1 <= rho <= 1):
+            raise ValueError(
+                f"correlation ρ must be in [-1, 1], got {rho}"
+            )
+        if rho < 0 and len(names) > 2:
+            # ρ<0 with >2 components doesn't yield a valid PSD
+            # covariance matrix (off-diagonals can't all be negative
+            # of the same magnitude). Refuse rather than emit garbage.
+            raise ValueError(
+                f"negative ρ only supported for 2-component groups; "
+                f"got {len(names)} components with ρ={rho}"
+            )
+        for nm in names:
+            if nm not in samplers:
+                raise ValueError(
+                    f"correlation references unknown component {nm!r}"
+                )
+            if _gaussian_sigma(samplers[nm]) is None:
+                raise ValueError(
+                    f"correlation requires Gaussian-family sampler "
+                    f"for {nm!r}; got {type(samplers[nm]).__name__}"
+                )
+            if nm in seen:
+                raise ValueError(
+                    f"component {nm!r} appears in multiple correlation "
+                    f"groups — overlapping groups aren't supported"
+                )
+            seen.add(nm)
+
+
 def _evaluate(value, op, threshold, nominal_value):
     if op == "<":  return value <  threshold
     if op == "<=": return value <= threshold
@@ -119,6 +178,7 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
             n_mc=1000, seed=None,
             tolerance_sigma=3.0, distribution="gaussian",
             active_devices=None,
+            correlations=None,
             workers=1):
     """Monte-Carlo yield analysis on a circuit candidate.
 
@@ -166,6 +226,27 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
             adds per-parameter samplers keyed as ``{instance}_{param}``.
             ``"NE5532"`` adds ``Vos``, ``Ib``, ``Avol``, ``GBW`` etc.
             The metrics callable receives these as named arguments.
+        correlations: List of ``(names, rho)`` tuples declaring that
+            the named components are jointly Gaussian with pairwise
+            correlation ``rho``. Per-component variances are taken
+            from each component's existing Sampler (the marginals are
+            preserved). Headline use cases:
+
+            - **Reel-mate passives**: ``([R1, R2, R3], 0.95)``
+              means the three resistors come off the same reel and
+              their tolerances move together at ρ = 0.95. Differential
+              metrics (R1+R2, R1/R2) become much tighter than they'd
+              be under independent sampling.
+            - **Op-amp Avol/GBW anti-correlation**:
+              ``([U1_Avol, U1_GBW], -0.7)`` reflects the typical
+              anti-correlation of those parameters across a process
+              run.
+
+            Constraints: components in a correlation group must have
+            Gaussian-family samplers (RelativeGaussian or
+            AbsoluteGaussian); ρ in [-1, 1]; negative ρ only allowed
+            for 2-component groups (PSD requirement); a component can
+            appear in at most one correlation group.
         workers: Concurrent metric evaluations via
             ``ThreadPoolExecutor``. Default 1 (serial). For ngspice
             backends N threads → N concurrent processes, near-linear
@@ -272,12 +353,32 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
 
     nominal_metrics = metrics(**enriched_nominal)
 
-    # 7. Generate the n_mc × n_components sample matrix.
+    # 7. Generate the n_mc × n_components sample matrix. Independent
+    # samples per component first; then for each correlation group,
+    # OVERWRITE the columns with jointly-Gaussian samples that have
+    # the same marginals.
     rng = np.random.default_rng(seed)
     names = list(samplers)
     samples = np.empty((n_mc, len(names)))
     for j, name in enumerate(names):
         samples[:, j] = samplers[name].sample(rng, n_mc)
+
+    if correlations:
+        _validate_correlations(correlations, samplers)
+        for group_names, rho in correlations:
+            # Build covariance matrix with diagonal σ_i² and off-diagonal
+            # ρ·σ_i·σ_j. Marginals (means, variances) match what the
+            # independent sampler would have produced.
+            n_g = len(group_names)
+            means = np.empty(n_g)
+            sigmas = np.empty(n_g)
+            for k, nm in enumerate(group_names):
+                means[k], sigmas[k] = _gaussian_sigma(samplers[nm])
+            cov = np.outer(sigmas, sigmas) * rho
+            np.fill_diagonal(cov, sigmas ** 2)
+            joint = rng.multivariate_normal(means, cov, size=n_mc)
+            for k, nm in enumerate(group_names):
+                samples[:, names.index(nm)] = joint[:, k]
 
     metric_keys = list(nominal_metrics)
     metric_arrays = {k: np.empty(n_mc) for k in metric_keys}

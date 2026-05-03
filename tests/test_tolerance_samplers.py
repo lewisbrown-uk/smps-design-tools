@@ -352,6 +352,156 @@ def test_analyze_unknown_prefix_still_raises_without_explicit_sampler():
         )
 
 
+# ---------- Parameter correlations ----------
+
+def test_correlations_preserve_marginal_variance():
+    """Correlated samples must have the same per-component σ as
+    independent samples — only the joint distribution changes. Verify
+    by comparing σ on a correlated vs independent run."""
+    common = dict(
+        nominal_values={"R1": 1e3, "R2": 1e3},
+        passive_tolerances={"R": 0.05},
+        metrics=lambda R1, R2: {"R1": R1, "R2": R2},
+        spec={"R1": ("within", 1.0), "R2": ("within", 1.0)},
+        n_mc=10000, seed=100,
+    )
+    indep = analyze(**common)
+    corr  = analyze(correlations=[(["R1", "R2"], 0.95)], **common)
+    # Marginal σ should match within MC noise (~σ/√(2n) ≈ 0.7%)
+    for nm in ("R1", "R2"):
+        assert corr.metric_stats[nm].std == pytest.approx(
+            indep.metric_stats[nm].std, rel=0.05
+        )
+
+
+def test_correlations_change_joint_distribution():
+    """Correlated R1, R2 should be much more correlated in the
+    output than independent samples, while keeping the same marginals.
+    Test on the metric (R1+R2) — independent samples have
+    σ_sum² = 2σ², while ρ=0.95 correlated have σ_sum² ≈ 1.95·2σ²
+    ≈ 3.9× higher than independent (or ≈ 2× larger σ_sum)."""
+    import numpy as np
+    common = dict(
+        nominal_values={"R1": 1e3, "R2": 1e3},
+        passive_tolerances={"R": 0.05},
+        metrics=lambda R1, R2: {"sum": R1 + R2, "diff": R1 - R2},
+        spec={"sum": ("<", 1e9), "diff": ("<", 1e9)},
+        n_mc=10000, seed=101,
+    )
+    indep = analyze(**common)
+    corr  = analyze(correlations=[(["R1", "R2"], 0.95)], **common)
+
+    # σ(sum) should be much LARGER under positive ρ
+    sum_ratio = corr.metric_stats["sum"].std / indep.metric_stats["sum"].std
+    assert sum_ratio == pytest.approx(np.sqrt(1 + 0.95), rel=0.05)
+
+    # σ(diff) should be much SMALLER under positive ρ
+    diff_ratio = corr.metric_stats["diff"].std / indep.metric_stats["diff"].std
+    assert diff_ratio == pytest.approx(np.sqrt(1 - 0.95), rel=0.10)
+
+
+def test_correlations_negative_rho_for_two_components():
+    """ρ = -0.7 between two parameters: standard for op-amp Avol/GBW
+    anti-correlation. Verify the sample correlation matches."""
+    import numpy as np
+    captured_R1, captured_R2 = [], []
+    def metrics(R1, R2):
+        captured_R1.append(R1); captured_R2.append(R2)
+        return {"v": R1}
+    analyze(
+        nominal_values={"R1": 1e3, "R2": 1e3},
+        passive_tolerances={"R": 0.05},
+        metrics=metrics,
+        spec={"v": ("<", 1e9)},
+        n_mc=5000, seed=102,
+        correlations=[(["R1", "R2"], -0.7)],
+    )
+    # Strip the single nominal call (first one) to keep just the MC
+    R1, R2 = np.array(captured_R1[1:]), np.array(captured_R2[1:])
+    rho_observed = np.corrcoef(R1, R2)[0, 1]
+    assert rho_observed == pytest.approx(-0.7, abs=0.03)
+
+
+def test_correlations_negative_rho_with_three_components_raises():
+    with pytest.raises(ValueError, match="negative"):
+        analyze(
+            nominal_values={"R1": 1e3, "R2": 1e3, "R3": 1e3},
+            passive_tolerances={"R": 0.01},
+            metrics=lambda R1, R2, R3: {"v": R1},
+            spec={"v": ("<", 1e9)},
+            n_mc=10,
+            correlations=[(["R1", "R2", "R3"], -0.5)],
+        )
+
+
+def test_correlations_unknown_component_raises():
+    with pytest.raises(ValueError, match="Rxxxx"):
+        analyze(
+            nominal_values={"R1": 1e3, "R2": 1e3},
+            passive_tolerances={"R": 0.01},
+            metrics=lambda R1, R2: {"v": R1},
+            spec={"v": ("<", 1e9)},
+            n_mc=10,
+            correlations=[(["R1", "Rxxxx"], 0.5)],
+        )
+
+
+def test_correlations_overlapping_groups_raise():
+    with pytest.raises(ValueError, match="multiple correlation groups"):
+        analyze(
+            nominal_values={"R1": 1e3, "R2": 1e3, "R3": 1e3},
+            passive_tolerances={"R": 0.01},
+            metrics=lambda R1, R2, R3: {"v": R1},
+            spec={"v": ("<", 1e9)},
+            n_mc=10,
+            correlations=[(["R1", "R2"], 0.5), (["R2", "R3"], 0.5)],
+        )
+
+
+def test_correlations_non_gaussian_sampler_raises():
+    """Correlation requires Gaussian-family marginals. Uniform
+    samplers don't compose under simple correlation."""
+    with pytest.raises(ValueError, match="Gaussian"):
+        analyze(
+            nominal_values={"R1": 1e3, "R2": 1e3},
+            passive_tolerances={"R": 0.01},
+            distribution="uniform",
+            metrics=lambda R1, R2: {"v": R1},
+            spec={"v": ("<", 1e9)},
+            n_mc=10,
+            correlations=[(["R1", "R2"], 0.5)],
+        )
+
+
+def test_correlations_rho_out_of_range_raises():
+    for bad in (-1.5, 1.5, 2.0):
+        with pytest.raises(ValueError, match="ρ must be in"):
+            analyze(
+                nominal_values={"R1": 1e3, "R2": 1e3},
+                passive_tolerances={"R": 0.01},
+                metrics=lambda R1, R2: {"v": R1},
+                spec={"v": ("<", 1e9)},
+                n_mc=10,
+                correlations=[(["R1", "R2"], bad)],
+            )
+
+
+def test_correlations_default_none_unchanged_behaviour():
+    """correlations=None must produce the same sample-level results as
+    the pre-correlation API. Regression check on the new code path."""
+    common = dict(
+        nominal_values={"R": 1e3, "C": 1e-9},
+        passive_tolerances={"R": 0.01, "C": 0.05},
+        metrics=lambda R, C: {"fc": 1 / (3.14159 * 2 * R * C)},
+        spec={"fc": ("within", 0.05)},
+        n_mc=500, seed=55,
+    )
+    a = analyze(correlations=None, **common)
+    b = analyze(**common)
+    assert a.samples_pass == b.samples_pass
+    assert a.metric_stats["fc"].mean == b.metric_stats["fc"].mean
+
+
 def test_analyze_no_active_devices_yields_unchanged():
     """The active_devices=None path must produce the same yields as
     the pre-slice-3 API — regression check on the refactor."""
