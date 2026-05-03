@@ -7,6 +7,23 @@ examples/<name>.py` and it prints a `YieldReport`.
 Both examples need `ngspice` on `PATH` and use the bundled
 `ngspice_examples/uopamp.lib` macromodel.
 
+## `eseries_to_tolerance_demo.py`
+
+The two libraries together: `eseries_opt` finds the top-N E12
+candidates for a Sallen-Key Butterworth design (4 components, 2
+soft targets, 1 hard constraint), then `tolerance.analyze` runs a
+20k-sample MC at realistic 5%R / 10%C tolerances against a
+fc-within-2%, Q-within-3% spec for each candidate.
+
+The output table juxtaposes the algebraic ranking (lowest target
+error first) against the MC yield ranking. For this filter the two
+rankings agree on the top — SK is symmetric in (R1, R2, C1, C2)
+so no candidate sits on a sensitivity hot-spot — but the script
+includes commentary about the topologies where they wouldn't, and
+running this step is what tells you which case you're in.
+
+Pure closed-form (no ngspice), runs in seconds on a laptop.
+
 ## `wien_thd_demo.py`
 
 Wien bridge oscillator with diode amplitude clamp. Demonstrates how
