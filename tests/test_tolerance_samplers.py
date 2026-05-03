@@ -310,6 +310,48 @@ def test_analyze_active_devices_distribution_validation_includes_param_keys():
     )
 
 
+def test_analyze_explicit_sampler_skips_prefix_classifier():
+    """A name with an explicit Sampler in distribution doesn't have
+    to match a known passive prefix — useful for one-off active-device
+    parameters (e.g., a custom 'Vos_LM358' for an op-amp not in the
+    curated DEVICES library) and for derived parameters like 'ESR'.
+    Without this, every custom-named param needed a placeholder
+    passive_tolerances entry just to satisfy the prefix classifier."""
+    seen = []
+    def metrics(R, ESR, Vos_my_opamp):
+        seen.append((R, ESR, Vos_my_opamp))
+        return {"v": R}
+
+    # 'E' and 'V' aren't in passive_tolerances — would normally raise.
+    analyze(
+        nominal_values={"R": 1e3, "ESR": 1e-3, "Vos_my_opamp": 0.0},
+        passive_tolerances={"R": 0.01},
+        distribution={
+            "ESR":          Uniform(lo=0.5e-3, hi=5e-3),
+            "Vos_my_opamp": AbsoluteGaussian(mean=0, sigma=2e-3),
+        },
+        metrics=metrics,
+        spec={"v": ("<", 1e9)},
+        n_mc=10, seed=20,
+    )
+    # 1 nominal + 10 MC = 11 calls
+    assert len(seen) == 11
+
+
+def test_analyze_unknown_prefix_still_raises_without_explicit_sampler():
+    """The escape hatch only opens when an explicit Sampler is supplied.
+    Without one, an unrecognised prefix should still fail loudly — the
+    misconfiguration safety from the original classifier is intact."""
+    with pytest.raises(ValueError, match="ESR"):
+        analyze(
+            nominal_values={"R": 1e3, "ESR": 1e-3},
+            passive_tolerances={"R": 0.01},
+            metrics=lambda R, ESR: {"v": R},
+            spec={"v": ("<", 1e9)},
+            n_mc=5,
+        )
+
+
 def test_analyze_no_active_devices_yields_unchanged():
     """The active_devices=None path must produce the same yields as
     the pre-slice-3 API — regression check on the refactor."""

@@ -234,14 +234,21 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
     samplers = {}
     component_types = {}
     for name in nominal_values:
-        prefix = _classify(name, passive_tolerances)
-        component_types[name] = prefix
         # Per-component override in distribution dict can be a Sampler
         # instance (full custom shape) or a string ("gaussian"/"uniform").
-        if isinstance(distribution, dict) and name in distribution \
-                and isinstance(distribution[name], Sampler):
+        # When the user provides an explicit Sampler, the name doesn't
+        # need to match a passive prefix — it can be anything (e.g., a
+        # one-off active-device param like "Vos_U1" outside the curated
+        # device library, or a derived parameter like "ESR" for a cap's
+        # series resistance). Skip the prefix classifier in that case.
+        explicit = (isinstance(distribution, dict) and name in distribution
+                    and isinstance(distribution[name], Sampler))
+        if explicit:
             samplers[name] = distribution[name]
+            component_types[name] = None
         else:
+            prefix = _classify(name, passive_tolerances)
+            component_types[name] = prefix
             dist_name = _resolve_distribution_name(name, prefix,
                                                     distribution)
             tol = passive_tolerances[prefix]
