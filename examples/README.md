@@ -25,6 +25,29 @@ THD across component variation. The Wien specifically shows that
 op-amp / BJT spreads are essentially decoupled from THD by the
 diode clamp — the binding tolerance is on the gain-network resistors.
 
+## `middlebrook_pm_demo.py`
+
+Same marginal LDO topology as `marginal_ldo_demo.py`, but measures
+**phase margin via Middlebrook V-injection** instead of time-domain
+ringing. Inserts a 0-V-DC, 1-V-AC voltage source in series at one
+point in the loop, computes loop gain T(s) = V(after)/V(before)
+across frequency, finds unity-gain crossover, reads phase at
+crossover.
+
+Useful as a frequency-domain stability metric when MC sample count
+is large enough that the per-sample time-domain `.tran` cost is
+prohibitive — AC analysis runs in milliseconds where transient
+takes hundreds of milliseconds.
+
+The absolute PM number coming out is suspiciously low for this
+topology (single digits where textbook would predict 30-60°), most
+likely from non-dominant poles in the BJT junction caps and op-amp
+macromodel. **Use the metric for relative ranking across an MC
+sweep, not as an absolute design target.** Validation: at 400
+samples, Middlebrook PM correlates ρ ≈ -0.71 with the ringing-RMS
+metric from `marginal_ldo_demo.py` — same physics, two different
+measurement windows on it.
+
 ## `marginal_ldo_demo.py`
 
 Op-amp + NPN series regulator chosen to be marginal: low-ESR ceramic
