@@ -31,6 +31,7 @@ from .samplers import (
     Uniform, LogUniform, Constant,
 )
 from .devices import DEVICES, expand_active_devices
+from .spice_helpers import lockin_thd_block
 
 __all__ = [
     "analyze",
@@ -39,4 +40,5 @@ __all__ = [
     "Sampler", "RelativeGaussian", "RelativeUniform",
     "AbsoluteGaussian", "Uniform", "LogUniform", "Constant",
     "DEVICES", "expand_active_devices",
+    "lockin_thd_block",
 ]

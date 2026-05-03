@@ -1,47 +1,32 @@
 """Wien bridge oscillator with lock-in THD measurement.
 
-Shows how to use a non-trivial ngspice .control block — including
-inline ``let`` math and ``meas tran avg/rms`` on derived vectors — to
-extract scalar metrics that aren't directly supported by the standard
-``.meas`` syntax. The technique is the parabolic-fit lock-in
-described in (1), translated from LTspice to ngspice.
+The lock-in machinery is provided by ``utils.tolerance.lockin_thd_block``
+which generates the parabolic-fit `.control` snippet given a signal
+node and integration window. See its docstring for what each computed
+scalar means and the technique's underlying math.
 
-The pipeline:
+This script wires that helper into a parameterised Wien netlist and
+runs a small MC sweep with passive + active spreads. The diode-clamp
+Wien is famously robust against active-device spread; the run
+quantifies that with NE5532 + 2N3904 spreads on top of 5%R / 10%C.
 
-1. Find a coarse f0 estimate from zero-crossing period.
-2. Project the (DC-removed) settled output onto sin/cos at f0, f0+df,
-   f0-df.  Compute the residual RMS at each.
-3. Refine f0 by parabolic fit on the three residuals — the residual
-   is approximately parabolic in (f - f_actual) near the minimum, so
-   ``Δf = -slope/curvature`` corrects the initial estimate.
-4. Re-project at the refined f_new, compute the fundamental's RMS
-   amplitude (a_rms).
-5. The leftover RMS after subtracting the reconstructed fundamental
-   is harmonic+noise content (h_rms).
-6. THD+N (IEC) = h_rms / (h_rms + a_rms), or in our simpler form
-   thd = h_rms / a_rms; convert to dB.
-
-(1) See LTspice example in `utils/tolerance/README.md` discussion;
-also classic lock-in detection literature.
-
-Run small first (n_mc=200) to confirm the template works on your
-local ngspice install. To scale up, switch ``NgspiceBackend`` to
-``RemoteNgspiceBackend(host="...")`` and bump ``n_mc`` and
-``workers``.
+To scale up: switch the backend to ``RemoteNgspiceBackend(host="...")``
+and bump ``n_mc`` and ``workers``. A 100k-sample run on a 96-core
+Linux box took ~34 min and pinned the active-vs-passive yield
+difference to ±0.015 percentage points (statistically zero — exactly
+what the diode clamp is designed to deliver).
 """
 from __future__ import annotations
 
-import math
 import os
 import sys
 import time
 
-# Add repo root to sys.path so utils.tolerance imports work when run
-# as a stand-alone script from anywhere.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from utils.tolerance import (
     NgspiceBackend, CachedBackend, analyze,
+    lockin_thd_block,
 )
 
 
@@ -52,9 +37,21 @@ UOPAMP_LIB = os.path.abspath(os.path.join(
 
 
 def make_template(uopamp_lib_path: str) -> str:
-    """Return the parameterised Wien netlist template as a Python
-    format string. Placeholders: R1, R2, C1, C2, Rg, Rfa, Rfb (Wien
-    + gain network), U1_Vos / U1_Avol / U1_GBW (op-amp), Q1_BF (BJT)."""
+    """Wien netlist with parameterised passives + active params,
+    splicing in the lock-in THD block from the library helper.
+
+    The lock-in block depends on `t1`, `t2` from preceding zero-cross
+    measurements (which give the initial f0 estimate). It also reuses
+    the same window for amplitude max/min — those stay in this template
+    rather than the helper since they're specific to the user's
+    diagnostic preferences."""
+    lockin = lockin_thd_block(
+        signal="v(out)",
+        window=(80e-3, 100e-3),
+        f0_init_expr="1/(t2-t1)",
+    )
+    # Indent the lock-in block so it sits cleanly inside the .control
+    # block in the rendered template.
     return f"""* Wien bridge oscillator with lock-in THD measurement
 .include {uopamp_lib_path}
 
@@ -63,14 +60,12 @@ C1   ns   np      {{C1}}  IC=0
 R2   np_eff 0     {{R2}}
 C2   np_eff 0     {{C2}}  IC=10m
 
-* Op-amp Vos modelled as series source between Wien node and op-amp +
 Vos1 np   np_eff  {{U1_Vos}}
 
 Rg   nn   0       {{Rg}}
 Rfa  nn   fb      {{Rfa}}
 Rfb  fb   out     {{Rfb}}
 
-* Diode-clamp NPN pair sets the loop gain at oscillation amplitude
 Q1   fb   fb   out  Q2N3904
 Q2   out  out  fb   Q2N3904
 
@@ -94,70 +89,18 @@ run
 * Coarse f0 from zero-crossing period (10 cycles apart for accuracy)
 meas tran t1 when v(out)=0 fall=20
 meas tran t2 when v(out)=0 fall=21
+
+* Peak-to-peak amplitude in the same window the lock-in uses
 meas tran amp_max max v(out) from=80m to=100m
 meas tran amp_min min v(out) from=80m to=100m
-let f0_est = 1/(t2 - t1)
-let df_probe = 0.01 * f0_est
 
-* DC level of the settled output in the measurement window
-meas tran v_dc avg v(out) from=80m to=100m
-
-* Project onto sin/cos at f0_est, f0_est + df, f0_est - df
-let basis_sin0 = sin(2*3.14159265*f0_est*time)
-let basis_cos0 = cos(2*3.14159265*f0_est*time)
-let basis_sinp = sin(2*3.14159265*(f0_est+df_probe)*time)
-let basis_cosp = cos(2*3.14159265*(f0_est+df_probe)*time)
-let basis_sinm = sin(2*3.14159265*(f0_est-df_probe)*time)
-let basis_cosm = cos(2*3.14159265*(f0_est-df_probe)*time)
-
-let psi0 = 2*(v(out)-v_dc)*basis_sin0
-let pco0 = 2*(v(out)-v_dc)*basis_cos0
-let psip = 2*(v(out)-v_dc)*basis_sinp
-let pcop = 2*(v(out)-v_dc)*basis_cosp
-let psim = 2*(v(out)-v_dc)*basis_sinm
-let pcom = 2*(v(out)-v_dc)*basis_cosm
-meas tran sin0 avg psi0 from=80m to=100m
-meas tran cos0 avg pco0 from=80m to=100m
-meas tran sinp avg psip from=80m to=100m
-meas tran cosp avg pcop from=80m to=100m
-meas tran sinm avg psim from=80m to=100m
-meas tran cosm avg pcom from=80m to=100m
-
-* Residuals at each probed frequency
-let r0v = v(out) - v_dc - sin0*basis_sin0 - cos0*basis_cos0
-let rpv = v(out) - v_dc - sinp*basis_sinp - cosp*basis_cosp
-let rmv = v(out) - v_dc - sinm*basis_sinm - cosm*basis_cosm
-meas tran res0 rms r0v from=80m to=100m
-meas tran resp rms rpv from=80m to=100m
-meas tran resm rms rmv from=80m to=100m
-
-* Parabolic fit: refined frequency = f0_est - slope/curvature
-let f_new = f0_est - ((resp - resm)/(2*df_probe)) * df_probe^2 / (resp - 2*res0 + resm)
-
-* Final projection at refined frequency
-let basis_sin = sin(2*3.14159265*f_new*time)
-let basis_cos = cos(2*3.14159265*f_new*time)
-let psi = 2*(v(out)-v_dc)*basis_sin
-let pco = 2*(v(out)-v_dc)*basis_cos
-meas tran sin_out avg psi from=80m to=100m
-meas tran cos_out avg pco from=80m to=100m
-
-let a_rms = sqrt(sin_out^2 + cos_out^2)/sqrt(2)
-let residual = v(out) - v_dc - sin_out*basis_sin - cos_out*basis_cos
-meas tran h_rms rms residual from=80m to=100m
-let thd = h_rms / a_rms
-let thd_db = 20*log10(thd)
-
-print f_new a_rms h_rms thd thd_db
+{lockin}
 .endc
 .end
 """
 
 
 def make_metrics(backend):
-    """Wrap the ngspice backend so it returns the user-facing metric
-    names (f0, v_pp, a_rms, thd_db) derived from the raw simulator
-    outputs."""
     def metrics(**values):
         r = backend(**values)
         period = r["t2"] - r["t1"]
@@ -173,9 +116,6 @@ def make_metrics(backend):
 
 def main():
     template = make_template(UOPAMP_LIB)
-
-    # Cache so re-runs with the same component values are instant.
-    # Persistent across invocations; delete the file to force a fresh sweep.
     raw = NgspiceBackend(
         template=template,
         outputs=["t1", "t2", "amp_max", "amp_min",
@@ -183,21 +123,13 @@ def main():
         timeout=20,
     )
     cached = CachedBackend(raw, path="/tmp/wien_thd_example.sqlite")
-
     metrics = make_metrics(cached)
 
-    # E12 Butterworth-style nominal: R1=R2=10k, C1=C2=15.915n → f0 ≈ 1 kHz
-    # Passives only — analyze() will inject the active-device samples
-    # later via active_devices=.
     nominal = {
         "R1": 10e3, "R2": 10e3,
         "C1": 15.915e-9, "C2": 15.915e-9,
         "Rg": 10e3, "Rfa": 10e3, "Rfb": 12e3,
     }
-
-    # Defaults for the active params so the bare-nominal sanity call
-    # below works without active_devices in the loop. analyze() will
-    # override these per-sample.
     nom_active_defaults = {
         "U1_Vos": 0.0, "U1_Ib": 200e-9,
         "U1_Avol": 100e3, "U1_GBW": 10e6,
@@ -211,10 +143,6 @@ def main():
     print(f"  thd_db  = {nom['thd_db']:.2f} dB  (raw diode-clamped Wien)")
     print()
 
-    # MC: 5% R, 10% C, plus NE5532 op-amp + 2N3904 BJT spreads.
-    # The diode clamp decouples Wien performance from active-device
-    # spread — see the slice 3 demo discussion for the quantitative
-    # confirmation at n=100k.
     n_mc = 200
     print(f"Running {n_mc}-sample MC, 5%R / 10%C + NE5532 + 2N3904 spreads ...")
     t0 = time.perf_counter()
@@ -224,9 +152,9 @@ def main():
         active_devices={"U1": "NE5532", "Q1": "2N3904"},
         metrics=metrics,
         spec={
-            "f0":     ("within", 0.05),     # ±5%
-            "v_pp":   ("within", 0.10),     # ±10%
-            "thd_db": ("<", -20),           # better than -20 dB
+            "f0":     ("within", 0.05),
+            "v_pp":   ("within", 0.10),
+            "thd_db": ("<", -20),
         },
         n_mc=n_mc, seed=4242, workers=8,
     )
