@@ -38,13 +38,16 @@ def power_specs(use_booster: bool):
                            else "(v(v_osc) - v(n_ap_plus)) * @J_var[id]", 350),
     ]
     if use_booster:
-        # Buffer 1 BJT pair (BC337/327, T0-92, 625 mW abs / ~300 mW derated)
+        # Buffer 1 BJT pair (BC337/327, T0-92, 625 mW abs / ~300 mW derated).
+        # NB: the BJT collectors connect to vcc_buf / vee_buf (the dedicated
+        # buffer rail), not vcc / vee. Computing V_CE from v(vcc) instead of
+        # v(vcc_buf) inflates dissipation by (V_CC - V_buf) * I_C.
         specs += [
-            ("Q_o_npn_BC337", "(v(vcc) - v(v_osc_drive)) * @Q_o_npn[ic]", 300),
-            ("Q_o_pnp_BC327", "(v(v_osc_drive) - v(vee)) * (-@Q_o_pnp[ic])", 300),
+            ("Q_o_npn_BC337", "(v(vcc_buf) - v(v_osc_drive)) * @Q_o_npn[ic]", 300),
+            ("Q_o_pnp_BC327", "(v(v_osc_drive) - v(vee_buf)) * (-@Q_o_pnp[ic])", 300),
             # Buffer 2 BJT pair
-            ("Q_a_npn_BC337", "(v(vcc) - v(v_ap_drive)) * @Q_a_npn[ic]", 300),
-            ("Q_a_pnp_BC327", "(v(v_ap_drive) - v(vee)) * (-@Q_a_pnp[ic])", 300),
+            ("Q_a_npn_BC337", "(v(vcc_buf) - v(v_ap_drive)) * @Q_a_npn[ic]", 300),
+            ("Q_a_pnp_BC327", "(v(v_ap_drive) - v(vee_buf)) * (-@Q_a_pnp[ic])", 300),
         ]
     return specs
 
@@ -57,6 +60,7 @@ def run_for_power(tube_key: str):
     if spec.get("booster"): mc["booster"] = True
     if spec.get("c_ap") is not None: mc["c_ap"] = spec["c_ap"]
     if spec.get("buf_fb1") is not None: mc["buf_fb1"] = spec["buf_fb1"]
+    if spec.get("v_buf") is not None: mc["v_buf"] = spec["v_buf"]
 
     work = m.WORK
     work.mkdir(exist_ok=True)

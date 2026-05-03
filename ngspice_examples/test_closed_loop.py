@@ -36,7 +36,7 @@ TAU_TH = 0.100
 #   R_target = R_sen * R_top_ref / R_bot_ref, with a deliberate 1% offset.
 def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                r_int_scale=0.3, booster=False,
-               wien_alpha=None, c_ap=None, buf_fb1=None):
+               wien_alpha=None, c_ap=None, buf_fb1=None, v_buf=None):
     # Bridge target R = R_op * R_bot_ref / R_sen, set to give R_filament = R_op
     # at the operating temperature T_op. (An earlier version had a 1% offset
     # for "cold-start kick", but that's unnecessary -- the filament starts at
@@ -51,7 +51,7 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                 r_amb=R_amb, sigma_eps_A=sigma_eps_A, c_th=c_th,
                 r_top_ref=R_top_ref, r_bot_ref=R_bot_ref, r_sense=R_sen,
                 r_int_scale=r_int_scale, booster=booster,
-                wien_alpha=wien_alpha, c_ap=c_ap, buf_fb1=buf_fb1)
+                wien_alpha=wien_alpha, c_ap=c_ap, buf_fb1=buf_fb1, v_buf=v_buf)
 
 # r_int_scale per tube: option-A's 0.3 was tuned for the IV-3 bridge gain.
 # Bridge sensitivity ~ V_drive*R_sen/(R_op+R_sen)^2 changes per tube, so
@@ -68,9 +68,17 @@ TUBES = {
     #   buf_fb1 = 9.1k -> k_buf = 10.1 (1.41x net gain, for ILC1-1/7)
     # Smaller tubes don't need the extra drive and would limit-cycle if given
     # too much. ILC1-1/7's 5 V_RMS filament drive demands the higher k_buf.
-    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3),
-    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3),
+    # v_buf sets the BJT-collector rail per tube. The driving constraint is
+    # V_top_pk = V_drv_atten_pk * k_buf (Wien output through divider * buffer
+    # gain), NOT V_op_pk. With V_drv_atten_pk = 0.5 V (set by the 56k:9.1k
+    # attenuator divider on a 3.5 V_pk Wien output), V_top_pk = 0.5 * k_buf:
+    #   k_buf = 7.2 -> V_top_pk = 3.6 V, V_buf = 4.5 V (1 V margin to V_CE_sat)
+    #   k_buf = 10.1 -> V_top_pk = 5.05 V, V_buf = 6 V
+    # Running V_buf much higher just dissipates the difference in the BJT
+    # output stage as class-AB inefficiency.
+    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3, v_buf=4.5),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, v_buf=6.0),
+    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3, v_buf=4.5),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
 # two non-inverting unity-gain op-amp + class-AB BC337/BC327 BJT pair buffers
@@ -200,6 +208,8 @@ def make_netlist(data_path: Path,
     vos_chopper = mc.get("vos_chopper", 5e-6)
     jfet_vp = mc.get("jfet_vp", -2.5)
     jfet_beta = mc.get("jfet_beta", 1.0e-3)
+    # Per-tube buffer rail, defaults to VCC for backward compatibility.
+    v_buf = mc.get("v_buf", VCC)
     def _opamp(key, default=None):
         v = mc.get(key, default if default is not None else vos_v)
         return (f"uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 "
@@ -253,23 +263,23 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp_buf0}
 XU_buf_osc   v_drv_atten n_buf_osc_fb vcc vee n_buf_osc_out {opamp_bufo}
 R_buf1_fb1   v_osc_drive n_buf_osc_fb {buf_fb1:.6g}
 R_buf1_fb2   n_buf_osc_fb 0           1k
-R_obb_top vcc q_o_bn 680
+R_obb_top vcc_buf q_o_bn 680
 D_obb_top q_o_bn n_buf_osc_out Dbias
 D_obb_bot n_buf_osc_out q_o_bp Dbias
-R_obb_bot q_o_bp vee 680
-Q_o_npn  vcc q_o_bn v_osc_drive QBC337
-Q_o_pnp  vee q_o_bp v_osc_drive QBC327
+R_obb_bot q_o_bp vee_buf 680
+Q_o_npn  vcc_buf q_o_bn v_osc_drive QBC337
+Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
 
 * Buffer 2: V_ap -> V_ap_drive (gain k_buf, class-AB BC337/BC327)
 XU_buf_ap    v_ap        n_buf_ap_fb  vcc vee n_buf_ap_out {opamp_bufa}
 R_buf2_fb1   v_ap_drive  n_buf_ap_fb  {buf_fb1:.6g}
 R_buf2_fb2   n_buf_ap_fb 0            1k
-R_abb_top vcc q_a_bn 680
+R_abb_top vcc_buf q_a_bn 680
 D_abb_top q_a_bn n_buf_ap_out Dbias
 D_abb_bot n_buf_ap_out q_a_bp Dbias
-R_abb_bot q_a_bp vee 680
-Q_a_npn  vcc q_a_bn v_ap_drive QBC337
-Q_a_pnp  vee q_a_bp v_ap_drive QBC327
+R_abb_bot q_a_bp vee_buf 680
+Q_a_npn  vcc_buf q_a_bn v_ap_drive QBC337
+Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327
 .model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
 .model QBC337 NPN(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
 + CJC=11p CJE=20p VAF=100)
@@ -296,6 +306,13 @@ Q_a_pnp  vee q_a_bp v_ap_drive QBC327
 
 Vcc  vcc 0  {VCC}
 Vee  vee 0 {VEE}
+* Separate buffer rail for the class-AB BJT collectors. Sized per tube
+* to V_op_pk + ~1.5V headroom so the BJTs run with V_CE close to V_BE
+* during conduction -- avoids burning P_filament*((VCC/V_op_pk) - 1)
+* Watts in the BJT pair, which is the fundamental class-B inefficiency
+* when V_CC >> V_pk. Falls back to VCC/VEE if not specified.
+Vcc_buf vcc_buf 0  {v_buf:.4g}
+Vee_buf vee_buf 0 -{v_buf:.4g}
 
 * === Wien bridge oscillator (alpha=0.5) ===
 R1   v_osc  ns   {r1_wien:.6g}
@@ -1137,6 +1154,8 @@ def main():
                 mc["buf_fb1"] = spec["buf_fb1"]
             if spec.get("c_ap") is not None:
                 mc["c_ap"] = spec["c_ap"]
+            if spec.get("v_buf") is not None:
+                mc["v_buf"] = spec["v_buf"]
             r = run_one(f"tube_{name}", v_preset=v_p, t_ramp=t_r,
                         r_int_scale=spec["r_int_scale"], mc=mc)
             m = metrics(r, target_T=spec["T_op"])
