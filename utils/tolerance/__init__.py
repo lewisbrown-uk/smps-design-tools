@@ -25,6 +25,18 @@ from .report import YieldReport, MetricStats
 from .ngspice import NgspiceBackend
 from .remote import RemoteNgspiceBackend
 from .cache import CachedBackend
+from .samplers import (
+    Sampler,
+    RelativeGaussian, RelativeUniform, AbsoluteGaussian,
+    Uniform, LogUniform, Constant,
+)
+from .devices import DEVICES, expand_active_devices
 
-__all__ = ["analyze", "YieldReport", "MetricStats",
-           "NgspiceBackend", "RemoteNgspiceBackend", "CachedBackend"]
+__all__ = [
+    "analyze",
+    "YieldReport", "MetricStats",
+    "NgspiceBackend", "RemoteNgspiceBackend", "CachedBackend",
+    "Sampler", "RelativeGaussian", "RelativeUniform",
+    "AbsoluteGaussian", "Uniform", "LogUniform", "Constant",
+    "DEVICES", "expand_active_devices",
+]

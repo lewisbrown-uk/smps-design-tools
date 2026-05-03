@@ -3,6 +3,8 @@ import math
 import numpy as np
 
 from .report import YieldReport, MetricStats
+from .samplers import Sampler, RelativeGaussian, RelativeUniform
+from .devices import expand_active_devices
 
 
 _VALID_OPS = {"<", "<=", ">", ">=", "within", "within_db"}
@@ -10,10 +12,10 @@ _VALID_DISTS = {"gaussian", "uniform"}
 
 
 def _classify(name, tolerances):
-    """Map a component name to its tolerance-dict key by first character
-    (SPICE convention: R/C/L/...). Unknown prefixes raise — silently
-    treating an unrecognised component as zero-tolerance would mask a
-    real misconfiguration."""
+    """Map a passive-component name to its tolerance-dict key by first
+    character (SPICE convention: R/C/L/...). Unknown prefixes raise —
+    silently treating an unrecognised component as zero-tolerance
+    would mask a real misconfiguration."""
     prefix = name[0]
     if prefix not in tolerances:
         known = sorted(tolerances)
@@ -24,53 +26,44 @@ def _classify(name, tolerances):
     return prefix
 
 
-def _resolve_distribution(name, prefix, distribution):
-    """Look up which distribution applies to a single component:
-    per-component-name first (most specific), then per-prefix, then the
-    string default. ``distribution`` may be a string (applies to all)
-    or a dict keyed by component name and/or prefix."""
+def _resolve_distribution_name(name, prefix, distribution):
+    """Look up which string-named distribution applies to a single
+    passive component: per-component-name first (most specific), then
+    per-prefix, then the global default."""
     if isinstance(distribution, str):
         return distribution
     if isinstance(distribution, dict):
         if name in distribution:
-            return distribution[name]
+            entry = distribution[name]
+            return entry if isinstance(entry, str) else None
         if prefix in distribution:
-            return distribution[prefix]
+            entry = distribution[prefix]
+            return entry if isinstance(entry, str) else None
         return "gaussian"
     raise TypeError(
         f"distribution must be a str or dict, got {type(distribution).__name__}"
     )
 
 
-def _sample_one(rng, nominal, tol, dist, tolerance_sigma, n_mc):
-    """Sample n_mc perturbed values for a single component.
-
-    For ``"gaussian"``: ``Normal(nominal, nominal · tol/tolerance_sigma)``
-    so the manufacturer's ±tol limit corresponds to ±``tolerance_sigma``
-    standard deviations. Default ``tolerance_sigma=3`` means 99.7% of
-    samples land within ±tol; lower values widen the distribution
-    (more pessimistic), higher values tighten it.
-
-    For ``"uniform"``: ``Uniform(nominal·(1-tol), nominal·(1+tol))``.
-    No samples fall outside ±tol — a hard-cutoff worst-case model. The
-    ``tolerance_sigma`` argument has no effect on uniform sampling.
-    """
-    if dist == "gaussian":
-        sigma = tol / tolerance_sigma
-        return nominal * (1.0 + rng.normal(0.0, sigma, n_mc))
-    if dist == "uniform":
-        return nominal * (1.0 + rng.uniform(-tol, tol, n_mc))
+def _build_sampler(nominal, tol, dist_name, sigmas):
+    """Construct a passive Sampler from the string-based API knobs."""
+    if dist_name == "gaussian":
+        return RelativeGaussian(nominal_value=nominal, tol=tol, sigmas=sigmas)
+    if dist_name == "uniform":
+        return RelativeUniform(nominal_value=nominal, tol=tol)
     raise ValueError(
-        f"Unknown distribution: {dist!r}. Valid: {sorted(_VALID_DISTS)}"
+        f"Unknown distribution: {dist_name!r}. Valid: {sorted(_VALID_DISTS)}"
     )
 
 
-def _validate_distribution(distribution, nominal_values, passive_tolerances):
+def _validate_distribution(distribution, nominal_values, passive_tolerances,
+                            active_sampler_keys):
     """Per-component / per-prefix dict overrides are easy to mistype —
     a typo silently falls back to gaussian under a permissive lookup,
     masking the misconfiguration. Validate up-front: every key must be
-    a known component name OR a known prefix, and every value must be
-    a valid distribution name."""
+    a known component name, a known active-device-derived sampler key,
+    or a known prefix; every value must be a valid distribution name
+    string OR a Sampler instance."""
     if isinstance(distribution, str):
         if distribution not in _VALID_DISTS:
             raise ValueError(
@@ -83,18 +76,22 @@ def _validate_distribution(distribution, nominal_values, passive_tolerances):
             f"distribution must be a str or dict, "
             f"got {type(distribution).__name__}"
         )
-    known_names = set(nominal_values)
+    known_names = set(nominal_values) | set(active_sampler_keys)
     known_prefixes = set(passive_tolerances)
     for key, val in distribution.items():
         if key not in known_names and key not in known_prefixes:
             raise ValueError(
                 f"distribution key {key!r} matches no component name "
-                f"in nominal_values nor prefix in passive_tolerances"
+                f"in nominal_values, no active-device parameter, and "
+                f"no prefix in passive_tolerances"
             )
+        if isinstance(val, Sampler):
+            continue
         if val not in _VALID_DISTS:
             raise ValueError(
                 f"distribution[{key!r}] = {val!r} is not a valid "
-                f"distribution; valid: {sorted(_VALID_DISTS)}"
+                f"distribution; valid string values: "
+                f"{sorted(_VALID_DISTS)}, or pass a Sampler instance"
             )
 
 
@@ -121,19 +118,23 @@ def _evaluate(value, op, threshold, nominal_value):
 def analyze(*, nominal_values, passive_tolerances, metrics, spec,
             n_mc=1000, seed=None,
             tolerance_sigma=3.0, distribution="gaussian",
+            active_devices=None,
             workers=1):
     """Monte-Carlo yield analysis on a circuit candidate.
 
     Args:
-        nominal_values: ``{name: value}`` for every component in the
+        nominal_values: ``{name: value}`` for every passive in the
             circuit (typically a ``Result.values`` from ``eseries_opt``).
-        passive_tolerances: ``{prefix: rel_tol}`` keyed by component-name
-            first character. ``{"R": 0.01, "C": 0.05}`` means 1% on every
-            R and 5% on every C. Components are classified by first
-            letter (SPICE convention); unknown prefixes raise.
-        metrics: ``(**values) -> {name: value}``. Computes the metrics
-            of interest (fc, Q, gain, phase margin, ...) from one
-            perturbed sample.
+            Active-device parameters are added automatically when
+            ``active_devices=`` is supplied; their nominal values come
+            from each Sampler's ``nominal()``.
+        passive_tolerances: ``{prefix: rel_tol}`` keyed by component-
+            name first character. ``{"R": 0.01, "C": 0.05}`` means 1%
+            on every R and 5% on every C. Components in
+            ``nominal_values`` are classified by first letter (SPICE
+            convention); unknown prefixes raise.
+        metrics: ``(**values) -> {name: value}``. Receives the union
+            of passive samples and active-device parameter samples.
         spec: ``{metric_name: (op, threshold)}``. Operators:
 
             - ``"<"``, ``"<="``, ``">"``, ``">="`` — absolute thresholds
@@ -143,29 +144,33 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
         n_mc: Number of Monte-Carlo samples.
         seed: RNG seed for reproducibility.
         tolerance_sigma: For Gaussian distributions, how many σ the
-            stated tolerance corresponds to. Default 3.0 (~99.7% within
-            ±tol) matches the standard yield-engineering convention.
-            Set to 1.0 for the pessimistic "tol = ±1σ" reading; raise
-            above 3.0 for tighter-than-spec parts. No effect on uniform
-            distributions.
-        distribution: ``"gaussian"`` (default) or ``"uniform"`` applied
-            to every component, OR a dict to override by component name
-            or by prefix. Lookup order: component-name → prefix →
-            ``"gaussian"``. Examples:
+            stated tolerance corresponds to. Default 3.0 (~99.7%
+            within ±tol) matches the standard yield-engineering
+            convention. Set lower to widen, higher to tighten.
+        distribution: ``"gaussian"`` (default) or ``"uniform"``
+            applied to every passive, OR a dict to override by
+            component name or by prefix. Dict values may also be
+            ``Sampler`` instances (from ``utils.tolerance.samplers``)
+            for shapes the string API can't express. Examples:
 
-            - ``"uniform"`` — every component sampled uniformly
+            - ``"uniform"`` — every passive sampled uniformly
             - ``{"C": "uniform"}`` — uniform Cs, gaussian everything else
-            - ``{"C1": "uniform"}`` — uniform on just one capacitor
+            - ``{"R1": LogUniform(lo=900, hi=1100)}`` — explicit
+              sampler for one component
+            - ``{"U1_Vos": AbsoluteGaussian(0, 1e-3)}`` — override an
+              active-device parameter that ``active_devices`` would
+              otherwise resolve via the device library
 
-        workers: Number of concurrent metric evaluations via
-            ``ThreadPoolExecutor``. Default 1 (serial). Threads (not
-            processes) so the metrics callable doesn't have to be
-            picklable; ngspice's ``subprocess.run`` releases the GIL
-            during the simulator wait, so N threads → N concurrent
-            ngspice processes with near-linear speedup. For pure-Python
-            closed-form metrics ``workers > 1`` has no effect (GIL).
-            Sample order is preserved so results are deterministic for
-            a given seed regardless of ``workers``.
+        active_devices: ``{instance: part_number}`` — looks up each
+            ``part_number`` in ``utils.tolerance.devices.DEVICES`` and
+            adds per-parameter samplers keyed as ``{instance}_{param}``.
+            ``"NE5532"`` adds ``Vos``, ``Ib``, ``Avol``, ``GBW`` etc.
+            The metrics callable receives these as named arguments.
+        workers: Concurrent metric evaluations via
+            ``ThreadPoolExecutor``. Default 1 (serial). For ngspice
+            backends N threads → N concurrent processes, near-linear
+            speedup. For pure-Python metrics ``workers > 1`` has no
+            effect (GIL).
 
     Returns:
         YieldReport with overall pass count, per-spec pass count, and
@@ -173,18 +178,17 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
 
     Distribution notes:
 
-    - **Gaussian** (default): ``Normal(nominal, nominal · tol/tolerance_sigma)``,
-      not truncated. Rare samples beyond ±tol do occur, matching reality
-      (a 1% resistor has a ~0.3% chance of sitting outside the ±1% band
-      under the default ``tolerance_sigma=3``).
-    - **Uniform**: ``Uniform(nominal·(1-tol), nominal·(1+tol))``. Hard
-      cutoff at ±tol; flat density inside. More pessimistic than the
-      default Gaussian at the 99% interval (uniform's 99% is at ±0.99·tol
-      vs Gaussian-3σ's ±0.86·tol), less pessimistic at the 99.99% tail.
-    - Components are sampled **independently** — no part-to-part
-      correlation modelling. Single-reel correlation can be a meaningful
-      effect when many copies of one part appear on a board; not handled
-      here yet.
+    - **RelativeGaussian** (default for passives): not truncated.
+      Rare samples beyond ±tol do occur, matching reality (a 1%
+      resistor has a ~0.3% chance of sitting outside the ±1% band
+      under ``tolerance_sigma=3``).
+    - **Active-device** parameters use the curated sampler shapes from
+      ``utils/tolerance/devices.py`` — see that module's docstring
+      for the conventions (max-as-3σ for AbsoluteGaussian, log-uniform
+      on bounds for Avol/β).
+    - Components are sampled **independently** — no part-to-part or
+      param-to-param correlation modelling. Avol/GBW anti-correlation
+      and reel-mate correlation are real effects not captured here.
     """
     if not nominal_values:
         raise ValueError("nominal_values is empty")
@@ -197,12 +201,25 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
     if workers < 1:
         raise ValueError(f"workers must be >= 1, got {workers}")
 
-    component_types = {n: _classify(n, passive_tolerances)
-                       for n in nominal_values}
-    _validate_distribution(distribution, nominal_values, passive_tolerances)
+    # 1. Expand active_devices into per-parameter samplers, keyed by
+    # f"{instance}_{param}".
+    active_samplers = (expand_active_devices(active_devices)
+                       if active_devices else {})
 
-    # Validate spec operators up-front so a bad op fails before we
-    # spend N samples computing metrics.
+    # 2. Check no name collisions between passives and active params.
+    overlap = set(nominal_values) & set(active_samplers)
+    if overlap:
+        raise ValueError(
+            f"name collision between nominal_values and "
+            f"active_devices-generated parameters: {sorted(overlap)}"
+        )
+
+    # 3. Validate the distribution dict against the union of names.
+    _validate_distribution(distribution, nominal_values,
+                           passive_tolerances, active_samplers)
+
+    # 4. Spec operators: validate up-front so a bad op fails before
+    # we spend N samples computing metrics.
     for spec_name, (op, _thr) in spec.items():
         if op not in _VALID_OPS:
             raise ValueError(
@@ -210,18 +227,50 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
                 f"Valid: {sorted(_VALID_OPS)}"
             )
 
-    nominal_metrics = metrics(**nominal_values)
+    # 5. Build the per-component sampler map. Order matters for
+    # determinism: passives in their declared order, then active
+    # params in declared order. A given (seed, sampler-set) → same
+    # samples, regardless of insertion order in the underlying dict.
+    samplers = {}
+    component_types = {}
+    for name in nominal_values:
+        prefix = _classify(name, passive_tolerances)
+        component_types[name] = prefix
+        # Per-component override in distribution dict can be a Sampler
+        # instance (full custom shape) or a string ("gaussian"/"uniform").
+        if isinstance(distribution, dict) and name in distribution \
+                and isinstance(distribution[name], Sampler):
+            samplers[name] = distribution[name]
+        else:
+            dist_name = _resolve_distribution_name(name, prefix,
+                                                    distribution)
+            tol = passive_tolerances[prefix]
+            samplers[name] = _build_sampler(
+                nominal_values[name], tol, dist_name, tolerance_sigma
+            )
+    for name, sampler in active_samplers.items():
+        # Per-component override beats device-library default
+        if isinstance(distribution, dict) and name in distribution \
+                and isinstance(distribution[name], Sampler):
+            samplers[name] = distribution[name]
+        else:
+            samplers[name] = sampler
 
+    # 6. Build the enriched nominal-values dict for the metrics()
+    # reference call. Active params use Sampler.nominal().
+    enriched_nominal = dict(nominal_values)
+    for name, sampler in active_samplers.items():
+        if name not in enriched_nominal:
+            enriched_nominal[name] = sampler.nominal()
+
+    nominal_metrics = metrics(**enriched_nominal)
+
+    # 7. Generate the n_mc × n_components sample matrix.
     rng = np.random.default_rng(seed)
-    names = list(nominal_values)
+    names = list(samplers)
     samples = np.empty((n_mc, len(names)))
     for j, name in enumerate(names):
-        prefix = component_types[name]
-        tol = passive_tolerances[prefix]
-        dist = _resolve_distribution(name, prefix, distribution)
-        samples[:, j] = _sample_one(
-            rng, nominal_values[name], tol, dist, tolerance_sigma, n_mc
-        )
+        samples[:, j] = samplers[name].sample(rng, n_mc)
 
     metric_keys = list(nominal_metrics)
     metric_arrays = {k: np.empty(n_mc) for k in metric_keys}
@@ -235,9 +284,9 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
         sample_results = (metrics(**s) for s in sample_dicts)
     else:
         # ThreadPoolExecutor.map preserves submission order, so the
-        # accumulation loop sees samples in the same order as workers=1
-        # — yields are bit-identical for a given seed regardless of
-        # parallelism.
+        # accumulation loop sees samples in the same order as
+        # workers=1 — yields are bit-identical for a given seed
+        # regardless of parallelism.
         from concurrent.futures import ThreadPoolExecutor
         ex = ThreadPoolExecutor(max_workers=workers)
         try:
