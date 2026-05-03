@@ -444,21 +444,6 @@ C_bts  n_bts_mid   n_inv_plus  10u IC=0
 R_btp  n_inv_plus  0           18k
 XU_inv n_inv_plus  n_inv_minus vcc vee v_ctl {opamp}
 
-* === Soft-start network (V_PRESET = {v_preset}, T_RAMP = {t_ramp} s) ===
-* During the first T_RAMP seconds, a switch ties v_int_out to V_PRESET via
-* a low-Z path, holding the integrator at its preset state while the rest
-* of the loop comes online. After T_RAMP the switch opens and the
-* anti-windup-bounded loop takes over from the preset state. Mirrors a
-* real-circuit power-on reset hold (analog mux + RC + Zener). T_RAMP=0
-* disables (loop starts from zero).
-* VT=0.5 / VH=0.05 with the V_ss PWL ramping over 1 ms gives a graceful
-* impedance transition (RON 0.01->ROFF 1G smoothed across V_ss = 0.45..0.55)
-* so the integrator + sharp diode anti-windup don't collide at the switch
-* edge -- a hard handoff causes ngspice timestep collapse there.
-.model swSS SW(VT=0.5 VH=0.05 RON=0.01 ROFF=1G)
-V_preset_src v_preset_node 0 {v_preset:.4f}
-V_ss vss 0 PWL(0 1 {max(t_ramp - 0.0005, 0):.6e} 1 {t_ramp + 0.0005:.6e} 0 1 0)
-S_ss v_int_out v_preset_node vss 0 swSS
 {booster_lines}{boost_line}
 * === 2N3904 ===
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
@@ -466,7 +451,7 @@ S_ss v_int_out v_preset_node vss 0 swSS
 + CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p MJE=.2593 VJE=.75
 + TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
 
-.options reltol=1e-6 abstol=1p chgtol=1f
+.options reltol=1e-4 abstol=1p chgtol=1f
 .tran 10u {T_END} UIC
 
 .control
