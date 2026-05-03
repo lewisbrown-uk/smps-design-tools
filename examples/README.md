@@ -9,20 +9,25 @@ Both examples need `ngspice` on `PATH` and use the bundled
 
 ## `eseries_to_tolerance_demo.py`
 
-The two libraries together: `eseries_opt` finds the top-N E12
-candidates for a Sallen-Key Butterworth design (4 components, 2
-soft targets, 1 hard constraint), then `tolerance.analyze` runs a
-20k-sample MC at realistic 5%R / 10%C tolerances against a
-fc-within-2%, Q-within-3% spec for each candidate.
+The two libraries together, two ways:
 
-The output table juxtaposes the algebraic ranking (lowest target
-error first) against the MC yield ranking. For this filter the two
-rankings agree on the top — SK is symmetric in (R1, R2, C1, C2)
-so no candidate sits on a sensitivity hot-spot — but the script
-includes commentary about the topologies where they wouldn't, and
-running this step is what tells you which case you're in.
+- **Flow 1 (post-hoc)**: `eseries_opt` ranks by algebraic target
+  error; `tolerance.analyze` runs MC on the top-N. Cheap but can
+  miss the most-robust candidate if it's not in the algebraic top-N.
+- **Flow 2 (direct)**: `tolerance.Robust` ranker scores every
+  feasible candidate by MC yield, the search returns the top-N most
+  robust by construction. More expensive (one MC sweep per
+  candidate) but always principled.
 
-Pure closed-form (no ngspice), runs in seconds on a laptop.
+For the Sallen-Key Butterworth design used here the two flows pick
+the same winner (SK has uniform relative-sensitivity across the
+design space, so all candidates have ~equivalent yield). The Robust
+ranker pays for itself when active-device spreads, correlations, or
+asymmetric topologies break the uniform-sensitivity assumption — the
+script's discussion section spells out the situations.
+
+Pure closed-form (no ngspice). Flow 1 takes <1s, Flow 2 takes
+~1 minute (full enumeration × MC).
 
 ## `wien_thd_demo.py`
 

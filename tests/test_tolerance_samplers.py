@@ -502,6 +502,79 @@ def test_correlations_default_none_unchanged_behaviour():
     assert a.metric_stats["fc"].mean == b.metric_stats["fc"].mean
 
 
+# ---------- Robust ranker (eseries_opt integration) ----------
+
+def test_robust_ranker_attaches_yield_to_results():
+    """Robust ranker runs MC on each candidate and tags the Result
+    with a yield_pct attribute. Sort order is descending by yield."""
+    from utils.eseries_opt import Problem, Resistor, Capacitor
+    from utils.tolerance import Robust
+
+    p = Problem()
+    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    p.add(Capacitor("C", e_series=12, range=(1e-9, 1e-7)))
+    p.add_target("fc", lambda R, C: 1 / (2 * math.pi * R * C),
+                 target=1591.55)
+
+    ranker = Robust(
+        passive_tolerances={"R": 0.01, "C": 0.05},
+        spec={"fc": ("within", 0.05)},
+        n_mc=200, seed=1,
+    )
+    results = p.solve(strategy="brute", n_results=5, rank=ranker)
+    for c in results:
+        assert hasattr(c, "yield_pct")
+        assert hasattr(c, "yield_report")
+        assert 0 <= c.yield_pct <= 100
+    # Sorted descending by yield
+    yields = [c.yield_pct for c in results]
+    assert yields == sorted(yields, reverse=True)
+
+
+def test_robust_ranker_unknown_spec_target_raises():
+    """A spec key that doesn't match any Problem target is a typo —
+    fail loudly rather than silently scoring against a missing metric."""
+    from utils.eseries_opt import Problem, Resistor
+    from utils.tolerance import Robust
+
+    p = Problem()
+    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    p.add_target("v", lambda R: R, target=4.7e3, metric="abs")
+    ranker = Robust(
+        passive_tolerances={"R": 0.01},
+        spec={"made_up_metric": ("<", 1)},
+        n_mc=10, seed=0,
+    )
+    with pytest.raises(ValueError, match="made_up_metric"):
+        p.solve(strategy="brute", n_results=3, rank=ranker)
+
+
+def test_robust_ranker_paired_seed_gives_stable_ranking():
+    """Same seed across all candidates means each candidate sees the
+    same component-perturbation pattern. A re-run with the same
+    Problem + Robust config must produce the same ranking."""
+    from utils.eseries_opt import Problem, Resistor, Capacitor
+    from utils.tolerance import Robust
+
+    def make_problem():
+        p = Problem()
+        p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+        p.add(Capacitor("C", e_series=12, range=(1e-9, 1e-7)))
+        p.add_target("fc", lambda R, C: 1 / (2 * math.pi * R * C),
+                     target=1591.55)
+        return p
+
+    rk_args = dict(passive_tolerances={"R": 0.01, "C": 0.05},
+                   spec={"fc": ("within", 0.05)},
+                   n_mc=500, seed=99)
+    r1 = make_problem().solve(strategy="brute", n_results=5,
+                              rank=Robust(**rk_args))
+    r2 = make_problem().solve(strategy="brute", n_results=5,
+                              rank=Robust(**rk_args))
+    assert [c.values for c in r1] == [c.values for c in r2]
+    assert [c.yield_pct for c in r1] == [c.yield_pct for c in r2]
+
+
 def test_analyze_no_active_devices_yields_unchanged():
     """The active_devices=None path must produce the same yields as
     the pre-slice-3 API — regression check on the refactor."""
