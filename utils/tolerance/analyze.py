@@ -316,20 +316,34 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
 
     metric_stats = {}
     for k, arr in metric_arrays.items():
-        pcts = np.percentile(arr, [1, 5, 50, 95, 99])
-        mean = float(arr.mean())
-        std  = float(arr.std())
+        # NaN samples are real (failed simulator extractions, undefined
+        # metrics) but they shouldn't poison every aggregate. Use
+        # NaN-aware aggregations; if every sample is NaN, fall back to
+        # NaN stats with a clear "no finite samples" signal.
+        finite = arr[np.isfinite(arr)]
+        if finite.size == 0:
+            metric_stats[k] = MetricStats(
+                min=float("nan"), max=float("nan"),
+                mean=float("nan"), std=float("nan"),
+                p1=float("nan"), p5=float("nan"), p50=float("nan"),
+                p95=float("nan"), p99=float("nan"),
+                skew=float("nan"), excess_kurtosis=float("nan"),
+            )
+            continue
+        pcts = np.percentile(finite, [1, 5, 50, 95, 99])
+        mean = float(finite.mean())
+        std  = float(finite.std())
         if std > 0:
             # Standardised central moments — Fisher-Pearson skew, and
             # excess kurtosis (kurtosis - 3, so a Gaussian → 0).
-            z = (arr - mean) / std
+            z = (finite - mean) / std
             skew = float(np.mean(z ** 3))
             excess_kurt = float(np.mean(z ** 4) - 3.0)
         else:
             skew = 0.0
             excess_kurt = 0.0
         metric_stats[k] = MetricStats(
-            min=float(arr.min()),  max=float(arr.max()),
+            min=float(finite.min()), max=float(finite.max()),
             mean=mean, std=std,
             p1=float(pcts[0]),  p5=float(pcts[1]),  p50=float(pcts[2]),
             p95=float(pcts[3]), p99=float(pcts[4]),

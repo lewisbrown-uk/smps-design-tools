@@ -118,19 +118,36 @@ class YieldReport:
             nrows, ncols, figsize=(5 * ncols, 3.6 * nrows), squeeze=False
         )
 
+        import numpy as np
+
         for i, name in enumerate(keys):
             ax = axes[i // ncols][i % ncols]
             arr = self.metric_samples[name]
             stats = self.metric_stats.get(name)
             nom = self.nominal_metrics.get(name)
 
-            data_lo, data_hi = float(arr.min()), float(arr.max())
+            # Strip NaNs for axis-limit and histogram computation.
+            # NaN samples are real (failed simulations, undefined
+            # measurements) but matplotlib's hist + set_xlim both
+            # break on them. Annotate the count if any are present.
+            finite = arr[np.isfinite(arr)]
+            n_nan = arr.size - finite.size
+
+            if finite.size == 0:
+                ax.text(0.5, 0.5, "all samples NaN",
+                        ha="center", va="center", transform=ax.transAxes,
+                        fontsize=10, color="#888")
+                ax.set_title(f"{name} (no finite samples)")
+                ax.set_xticks([]); ax.set_yticks([])
+                continue
+
+            data_lo, data_hi = float(finite.min()), float(finite.max())
             data_range = data_hi - data_lo
             pad = data_range * 0.05 if data_range > 0 else \
                   (abs(data_lo) * 0.01 + 1e-12)
             xlim_lo, xlim_hi = data_lo - pad, data_hi + pad
 
-            ax.hist(arr, bins=bins, color="#4c72b0",
+            ax.hist(finite, bins=bins, color="#4c72b0",
                     edgecolor="white", linewidth=0.3)
 
             if name in self.spec:
@@ -148,12 +165,16 @@ class YieldReport:
                                color=fail_color, alpha=fail_alpha)
                 pass_count = self.per_spec_pass.get(name, 0)
                 pct = 100.0 * pass_count / self.samples_total
-                ax.set_title(
-                    f"{name}: {op} {thr}  →  "
-                    f"{pass_count}/{self.samples_total} ({pct:.1f}%)"
-                )
+                title = (f"{name}: {op} {thr}  →  "
+                         f"{pass_count}/{self.samples_total} ({pct:.1f}%)")
+                if n_nan > 0:
+                    title += f"  [NaN: {n_nan}]"
+                ax.set_title(title)
             else:
-                ax.set_title(f"{name} (no spec)")
+                title = f"{name} (no spec)"
+                if n_nan > 0:
+                    title += f"  [NaN: {n_nan}]"
+                ax.set_title(title)
 
             if nom is not None:
                 ax.axvline(nom, color="black", linestyle="--",

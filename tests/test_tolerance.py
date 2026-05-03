@@ -379,6 +379,84 @@ def test_plot_filters_to_named_metrics():
         plt.close(fig)
 
 
+def test_plot_handles_partial_nan_samples_without_raising():
+    """Real backends (ngspice with .meas tran .. when v(out)=0 fall=10
+    on a non-oscillating sample) can produce NaN per-sample. plot()
+    must strip them and annotate the count rather than blowing up
+    on np.min(NaN) → set_xlim(NaN). This was a real bug found by the
+    100k Wien-with-active-spreads run."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # Use a deterministic metric that returns NaN for ~5% of samples
+    rng_metric = np.random.default_rng(99)
+    def flaky(R):
+        # NaN for samples whose R is below the 5th percentile
+        return {"v": float("nan") if rng_metric.random() < 0.05 else R}
+
+    r = analyze(
+        nominal_values={"R": 1e3},
+        passive_tolerances={"R": 0.05},
+        metrics=flaky,
+        spec={"v": ("within", 0.10)},
+        n_mc=200, seed=88,
+    )
+    fig = r.plot()
+    try:
+        # NaN count should be visible in the panel title
+        titles = [ax.get_title() for ax in fig.axes if ax.axison]
+        assert any("NaN" in t for t in titles)
+    finally:
+        plt.close(fig)
+
+
+def test_metric_stats_compute_on_finite_only():
+    """If a sample's metric is NaN, MetricStats should be computed on
+    the finite subset rather than itself going NaN. Without this every
+    aggregate becomes NaN as soon as one sample fails."""
+    def flaky(R):
+        # NaN on every other sample
+        flaky.n += 1
+        return {"v": float("nan") if flaky.n % 2 == 0 else R}
+    flaky.n = 0
+
+    r = analyze(
+        nominal_values={"R": 1e3},
+        passive_tolerances={"R": 0.05},
+        metrics=flaky,
+        spec={"v": ("within", 0.10)},
+        n_mc=100, seed=42,
+    )
+    s = r.metric_stats["v"]
+    # mean should be the mean of the finite half, not NaN
+    assert math.isfinite(s.mean)
+    assert s.mean == pytest.approx(1e3, rel=0.05)
+    assert math.isfinite(s.std)
+
+
+def test_metric_stats_all_nan_yields_nan_stats_no_exception():
+    """Edge case: if every sample's metric is NaN (catastrophic
+    template error, dead simulator), the stats are NaN and plot()
+    falls back to a 'no finite samples' message rather than raising."""
+    import matplotlib.pyplot as plt
+
+    r = analyze(
+        nominal_values={"R": 1e3},
+        passive_tolerances={"R": 0.05},
+        metrics=lambda R: {"v": float("nan")},
+        spec={"v": ("within", 0.10)},
+        n_mc=20, seed=1,
+    )
+    s = r.metric_stats["v"]
+    assert math.isnan(s.mean) and math.isnan(s.std)
+    fig = r.plot()
+    try:
+        titles = [ax.get_title() for ax in fig.axes if ax.axison]
+        assert any("no finite" in t for t in titles)
+    finally:
+        plt.close(fig)
+
+
 def test_plot_handles_every_spec_operator_without_raising():
     """All six operators have a defined fail-region; plotting must not
     raise on any of them."""
