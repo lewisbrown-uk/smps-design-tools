@@ -25,6 +25,37 @@ _MEAS_RE = re.compile(
 )
 
 
+def _parse_meas_output(stdout):
+    """Extract every ``name = value`` from ngspice batch-mode stdout
+    into a dict. ``= failed`` and unparseable numbers map to NaN.
+    Used by both ``NgspiceBackend`` (local) and ``RemoteNgspiceBackend``
+    (ssh) — the format is the same regardless of where ngspice ran."""
+    parsed = {}
+    for m in _MEAS_RE.finditer(stdout):
+        name, val = m.group(1), m.group(2)
+        if val == "failed":
+            parsed[name] = float("nan")
+        else:
+            try:
+                parsed[name] = float(val)
+            except ValueError:
+                parsed[name] = float("nan")
+    return parsed
+
+
+def _signature(template, outputs):
+    """Hash of (template + outputs) — short stable identifier shared by
+    local and remote backends so they index the same cache namespace
+    when run against the same circuit."""
+    if isinstance(template, str):
+        template_part = template
+    else:
+        template_part = repr(template)
+    digest_input = (template_part + "\x00"
+                    + ",".join(outputs)).encode()
+    return hashlib.sha256(digest_input).hexdigest()[:16]
+
+
 class NgspiceBackend:
     """Callable that runs ngspice on a parameterised netlist and returns
     the ``.meas`` results as a dict.
@@ -113,14 +144,11 @@ class NgspiceBackend:
         the previous template's cached values won't be returned for
         the new circuit. Callable templates fall back to their ``repr``,
         which is enough to distinguish *different* function objects
-        but won't catch in-place edits to a function's body."""
-        if isinstance(self.template, str):
-            template_part = self.template
-        else:
-            template_part = repr(self.template)
-        digest_input = (template_part + "\x00"
-                        + ",".join(self.outputs)).encode()
-        return hashlib.sha256(digest_input).hexdigest()[:16]
+        but won't catch in-place edits to a function's body. The
+        signature deliberately ignores host (local vs remote) — running
+        the same netlist on a different machine should hit the same
+        cached values."""
+        return _signature(self.template, self.outputs)
 
     def _render(self, values):
         if callable(self.template):
@@ -149,16 +177,7 @@ class NgspiceBackend:
             except subprocess.TimeoutExpired:
                 return {name: float("nan") for name in self.outputs}
 
-            parsed = {}
-            for m in _MEAS_RE.finditer(result.stdout):
-                name, val = m.group(1), m.group(2)
-                if val == "failed":
-                    parsed[name] = float("nan")
-                else:
-                    try:
-                        parsed[name] = float(val)
-                    except ValueError:
-                        parsed[name] = float("nan")
+            parsed = _parse_meas_output(result.stdout)
 
             if result.returncode != 0 and not parsed:
                 raise RuntimeError(

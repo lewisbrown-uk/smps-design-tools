@@ -268,11 +268,23 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
     metric_stats = {}
     for k, arr in metric_arrays.items():
         pcts = np.percentile(arr, [1, 5, 50, 95, 99])
+        mean = float(arr.mean())
+        std  = float(arr.std())
+        if std > 0:
+            # Standardised central moments — Fisher-Pearson skew, and
+            # excess kurtosis (kurtosis - 3, so a Gaussian → 0).
+            z = (arr - mean) / std
+            skew = float(np.mean(z ** 3))
+            excess_kurt = float(np.mean(z ** 4) - 3.0)
+        else:
+            skew = 0.0
+            excess_kurt = 0.0
         metric_stats[k] = MetricStats(
             min=float(arr.min()),  max=float(arr.max()),
-            mean=float(arr.mean()), std=float(arr.std()),
+            mean=mean, std=std,
             p1=float(pcts[0]),  p5=float(pcts[1]),  p50=float(pcts[2]),
             p95=float(pcts[3]), p99=float(pcts[4]),
+            skew=skew, excess_kurtosis=excess_kurt,
         )
 
     return YieldReport(

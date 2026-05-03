@@ -229,6 +229,39 @@ def test_metric_stats_percentiles_ordered():
     assert s.mean == pytest.approx(r.nominal_metrics["fc"], rel=0.01)
 
 
+def test_metric_stats_skew_and_kurtosis_for_gaussian_input():
+    """An identity metric on a Gaussian-perturbed component should
+    produce near-zero skew and excess kurtosis. n=10k MC noise on
+    skew is √(6/n) ≈ 0.024; on excess kurtosis √(24/n) ≈ 0.05."""
+    r = analyze(
+        nominal_values={"R": 1e3},
+        passive_tolerances={"R": 0.01},
+        metrics=lambda R: {"R": R},
+        spec={"R": ("within", 1.0)},
+        n_mc=10000, seed=50,
+    )
+    s = r.metric_stats["R"]
+    assert abs(s.skew) < 0.10
+    assert abs(s.excess_kurtosis) < 0.20
+
+
+def test_metric_stats_skew_positive_for_right_skewed_input():
+    """A monotonic transform that widens the right tail produces
+    positive skew. exp(R/scale) for R~Gaussian is log-normal — its
+    skew is (e^σ² + 2)·√(e^σ² - 1) ≈ 3σ for small σ; with σ_R/R=10%
+    on R~N(1000,100), expect skew ≈ 0.3."""
+    r = analyze(
+        nominal_values={"R": 1e3},
+        passive_tolerances={"R": 0.30},  # σ_R = tol/3 = 10%
+        metrics=lambda R: {"y": math.exp(R / 1e3)},
+        spec={"y": ("<", 1e9)},
+        n_mc=10000, seed=51,
+    )
+    s = r.metric_stats["y"]
+    assert s.skew > 0.2          # right-tailed, well above MC noise
+    assert s.excess_kurtosis > 0  # log-normal has positive excess kurt
+
+
 def test_metric_stats_std_matches_analytical_for_rc():
     """σ_fc/fc ≈ √(σ_R² + σ_C²) where σ_R = 1/3%, σ_C = 5/3%.
     Expected relative σ ≈ 1.7%. Allow ±15% MC noise on n=5000."""

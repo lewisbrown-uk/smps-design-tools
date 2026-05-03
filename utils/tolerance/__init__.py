@@ -23,7 +23,8 @@ arc of slices this is the first of.
 from .analyze import analyze
 from .report import YieldReport, MetricStats
 from .ngspice import NgspiceBackend
+from .remote import RemoteNgspiceBackend
 from .cache import CachedBackend
 
 __all__ = ["analyze", "YieldReport", "MetricStats",
-           "NgspiceBackend", "CachedBackend"]
+           "NgspiceBackend", "RemoteNgspiceBackend", "CachedBackend"]

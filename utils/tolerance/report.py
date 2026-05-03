@@ -28,7 +28,19 @@ class MetricStats:
     """Distribution of a single metric across all MC samples. Percentiles
     are the conventional summary points: p1/p99 are the long-tail edges
     (1-in-100 events), p5/p95 are the headline-yield edges (commonly
-    quoted as the "95% interval"), p50 is the median."""
+    quoted as the "95% interval"), p50 is the median.
+
+    ``skew`` is the Fisher-Pearson sample skewness — zero for symmetric
+    distributions, positive when the right tail is heavier (e.g. amplitude
+    metrics that can run away but not below zero), negative for the
+    mirror case. ``excess_kurtosis`` is kurtosis minus 3 — zero for a
+    Gaussian, positive when the distribution has heavier tails or a
+    sharper peak than a Gaussian, negative for flatter / lighter-tailed
+    distributions. Bimodal distributions (e.g. an oscillator with a
+    'didn't start' spike alongside the main lobe) typically show large
+    positive excess kurtosis from the spike concentrating mass in one
+    bin, and skew whose sign depends on which lobe is larger and where
+    the spike sits relative to the mean."""
     min: float
     max: float
     mean: float
@@ -38,6 +50,8 @@ class MetricStats:
     p50: float
     p95: float
     p99: float
+    skew: float
+    excess_kurtosis: float
 
 
 @dataclass
