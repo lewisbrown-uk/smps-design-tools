@@ -66,10 +66,20 @@ def run_for_power(tube_key: str):
                              r_int_scale=spec["r_int_scale"], mc=mc)
 
     specs = power_specs(use_booster)
-    # Build .control block: define power vectors, wrdata, run
+    # Build .save and .control blocks: device-internal parameters (@Q1[ic]
+    # etc.) are NOT saved as time-domain vectors by default -- without .save
+    # they only retain their last-timestep scalar value, and any `let`
+    # expression using them collapses to a snapshot.
+    save_tokens = set()
+    for _name, expr, _ in specs:
+        for m_ in re.findall(r"@\w+\[\w+\]", expr):
+            save_tokens.add(m_)
+        for m_ in re.findall(r"v\(\w+\)", expr):
+            save_tokens.add(m_)
     let_lines = "\n".join(f"let p_{name} = {expr}" for name, expr, _rating in specs)
     wrdata_args = " ".join(f"p_{name}" for name, _, _ in specs)
-    new_control = f""".control
+    new_control = f""".save {' '.join(sorted(save_tokens))}
+.control
 run
 {let_lines}
 wrdata {dat.as_posix()} {wrdata_args}
