@@ -354,10 +354,8 @@ B_R     r_fil 0     V = R_amb * (V(T_node)/T_amb)^fil_exp
 * Filament arm: V_osc -> filament(thermal) -> node_A -> R_sense -> V_ap
 X_filament {v_osc_drive} node_A T_node r_fil filament
 R_sen node_A {v_ap_drive} {r_sense_v:.6g}
-* Reference arm: V_osc -> R_top_ref -> node_B -> R_sense_ref -> V_ap
-* R_top_ref nominal 99 ohm (1% off the 100-ohm filament target) so the bridge
-* has a non-zero error signal at cold-start. With MC on, this is multiplied
-* by k_r_top_ref tolerance.
+* Reference arm: V_osc -> R_top_ref -> node_B -> R_bot_ref -> V_ap.
+* Bridge balance R_top_ref / R_bot_ref = R_op / R_sen targets R_op exactly.
 R_top_ref {v_osc_drive} node_B {r_top_ref:.6g}
 R_bot_ref node_B {v_ap_drive}  {r_bot_ref:.6g}
 
@@ -423,7 +421,7 @@ V_clamp_hi v_clamp_hi 0  1.8
 V_clamp_lo v_clamp_lo 0  0.3
 D_aw_hi    v_int_out  v_clamp_hi Dclamp
 D_aw_lo    v_clamp_lo v_int_out  Dclamp
-.model Dclamp D(IS=1n N=2.0 RS=100)
+.model Dclamp D(Is=2.52n Rs=0.568 N=1.752 Cjo=4p M=0.4 tt=20n)
 
 * Inverter + JFET-gate bootstrap: V_ctl is the op-amp output that drives
 * the JFET gate directly. At DC, n_inv_plus is held to 0 by R_btp, so
@@ -447,15 +445,19 @@ R_btp  n_inv_plus  0           18k
 XU_inv n_inv_plus  n_inv_minus vcc vee v_ctl {opamp}
 
 * === Soft-start network (V_PRESET = {v_preset}, T_RAMP = {t_ramp} s) ===
-* During the first T_RAMP seconds, a switch ties v_int_out to V_PRESET
-* via a low-Z path, forcing the integrator output into the neighbourhood
-* of its expected steady state. After T_RAMP the switch opens and the
-* loop takes over. T_RAMP=0 disables (loop starts from zero).
-* VT=0.5 / VH=0 makes the switch trip cleanly at V_ss=0.5 (i.e., closed when
-* V_ss = 1 during the ramp, opens when V_ss = 0 after).
-.model swSS SW(VT=0.5 VH=0 RON=0.01 ROFF=1G)
+* During the first T_RAMP seconds, a switch ties v_int_out to V_PRESET via
+* a low-Z path, holding the integrator at its preset state while the rest
+* of the loop comes online. After T_RAMP the switch opens and the
+* anti-windup-bounded loop takes over from the preset state. Mirrors a
+* real-circuit power-on reset hold (analog mux + RC + Zener). T_RAMP=0
+* disables (loop starts from zero).
+* VT=0.5 / VH=0.05 with the V_ss PWL ramping over 1 ms gives a graceful
+* impedance transition (RON 0.01->ROFF 1G smoothed across V_ss = 0.45..0.55)
+* so the integrator + sharp diode anti-windup don't collide at the switch
+* edge -- a hard handoff causes ngspice timestep collapse there.
+.model swSS SW(VT=0.5 VH=0.05 RON=0.01 ROFF=1G)
 V_preset_src v_preset_node 0 {v_preset:.4f}
-V_ss vss 0 PWL(0 1 {max(t_ramp - 1e-6, 0):.6e} 1 {t_ramp:.6e} 0 1 0)
+V_ss vss 0 PWL(0 1 {max(t_ramp - 0.0005, 0):.6e} 1 {t_ramp + 0.0005:.6e} 0 1 0)
 S_ss v_int_out v_preset_node vss 0 swSS
 {booster_lines}{boost_line}
 * === 2N3904 ===
