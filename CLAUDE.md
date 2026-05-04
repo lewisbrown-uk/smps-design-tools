@@ -40,3 +40,28 @@ affects the netlist topology or component values:
 
 Same principle for any other generated outputs (`*.csv`, `*.png`, reports)
 that document a specific simulation run.
+
+## Analyse the underlying data, not plots
+
+When investigating circuit behaviour, base every claim on numerical
+analysis of the raw waveform data — not on visual inspection of a
+plot. PNGs are for the user; quantitative work needs the numbers.
+
+This rule exists because eyeballing plots repeatedly causes me to:
+- Miss short-duration excursions that span only a few pixels
+- Overlook small-amplitude features against a large vertical range
+- Misread phase or amplitude differences that look small but are
+  significant in the operating context (e.g., a 100 mV dip on a 7 V
+  swing looks like nothing on a plot but is enough to reverse-bias
+  a BJT)
+
+For any waveform claim, the workflow is:
+1. Capture the relevant signals into a numpy array (via wrdata or
+   ngspice raw file)
+2. Compute the actual statistics or extract the actual values at
+   the points of interest
+3. Report numbers, not appearances. If a plot is also produced, it
+   is an aid for the user, not a substitute for the analysis.
+
+The same applies to "the waveform looks clean" — that means nothing
+without measuring THD or comparing peak/RMS to a fitted sine.
