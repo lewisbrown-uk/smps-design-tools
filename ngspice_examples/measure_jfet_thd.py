@@ -38,6 +38,7 @@ def run_for_thd(tube_key: str, extra_signals: list[str], booster: bool):
     if spec.get("booster"): mc["booster"] = True
     if spec.get("c_ap") is not None: mc["c_ap"] = spec["c_ap"]
     if spec.get("buf_fb1") is not None: mc["buf_fb1"] = spec["buf_fb1"]
+    if spec.get("buf_fb_ap") is not None: mc["buf_fb_ap"] = spec["buf_fb_ap"]
 
     work = m.WORK
     work.mkdir(exist_ok=True)

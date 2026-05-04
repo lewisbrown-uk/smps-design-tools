@@ -250,6 +250,8 @@ def main():
     if spec.get("booster"): mc["booster"] = True
     if spec.get("c_ap") is not None: mc["c_ap"] = spec["c_ap"]
     if spec.get("buf_fb1") is not None: mc["buf_fb1"] = spec["buf_fb1"]
+    if spec.get("buf_fb_ap") is not None: mc["buf_fb_ap"] = spec["buf_fb_ap"]
+    if spec.get("v_buf") is not None: mc["v_buf"] = spec["v_buf"]
     if spec.get("wien_alpha") is not None: mc["wien_alpha"] = spec["wien_alpha"]
     netlist = m.make_netlist(HERE / f"_unused.data",
                              v_preset=0.55, t_ramp=0.1,

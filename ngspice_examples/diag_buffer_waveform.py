@@ -28,6 +28,7 @@ def run_capture(tube_key: str):
     mc["booster"] = True
     if spec.get("c_ap") is not None: mc["c_ap"] = spec["c_ap"]
     if spec.get("buf_fb1") is not None: mc["buf_fb1"] = spec["buf_fb1"]
+    if spec.get("buf_fb_ap") is not None: mc["buf_fb_ap"] = spec["buf_fb_ap"]
 
     work = m.WORK; work.mkdir(exist_ok=True)
     cir = work / f"buf_wave_{tube_key}.cir"

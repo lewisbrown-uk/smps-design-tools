@@ -36,7 +36,7 @@ TAU_TH = 0.100
 #   R_target = R_sen * R_top_ref / R_bot_ref, with a deliberate 1% offset.
 def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                r_int_scale=0.3, booster=False,
-               wien_alpha=None, c_ap=None, buf_fb1=None, v_buf=None):
+               wien_alpha=None, c_ap=None, buf_fb1=None, buf_fb_ap=None, v_buf=None):
     # Bridge target R = R_op * R_bot_ref / R_sen, set to give R_filament = R_op
     # at the operating temperature T_op. (An earlier version had a 1% offset
     # for "cold-start kick", but that's unnecessary -- the filament starts at
@@ -51,7 +51,8 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                 r_amb=R_amb, sigma_eps_A=sigma_eps_A, c_th=c_th,
                 r_top_ref=R_top_ref, r_bot_ref=R_bot_ref, r_sense=R_sen,
                 r_int_scale=r_int_scale, booster=booster,
-                wien_alpha=wien_alpha, c_ap=c_ap, buf_fb1=buf_fb1, v_buf=v_buf)
+                wien_alpha=wien_alpha, c_ap=c_ap,
+                buf_fb1=buf_fb1, buf_fb_ap=buf_fb_ap, v_buf=v_buf)
 
 # r_int_scale per tube: option-A's 0.3 was tuned for the IV-3 bridge gain.
 # Bridge sensitivity ~ V_drive*R_sen/(R_op+R_sen)^2 changes per tube, so
@@ -68,17 +69,19 @@ TUBES = {
     #   buf_fb1 = 9.1k -> k_buf = 10.1 (1.41x net gain, for ILC1-1/7)
     # Smaller tubes don't need the extra drive and would limit-cycle if given
     # too much. ILC1-1/7's 5 V_RMS filament drive demands the higher k_buf.
-    # v_buf sets the BJT-collector rail per tube. The driving constraint is
-    # V_top_pk = V_drv_atten_pk * k_buf (Wien output through divider * buffer
-    # gain), NOT V_op_pk. With V_drv_atten_pk = 0.5 V (set by the 56k:9.1k
-    # attenuator divider on a 3.5 V_pk Wien output), V_top_pk = 0.5 * k_buf:
-    #   k_buf = 7.2 -> V_top_pk = 3.6 V, V_buf = 4.5 V (1 V margin to V_CE_sat)
-    #   k_buf = 10.1 -> V_top_pk = 5.05 V, V_buf = 6 V
-    # Running V_buf much higher just dissipates the difference in the BJT
-    # output stage as class-AB inefficiency.
-    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3, v_buf=4.5),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, v_buf=6.0),
-    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3, v_buf=4.5),
+    # k_buf values: with the inverting-Buffer-2 topology and JFET in the
+    # linear region (|1+H| ~ 1.5-1.7 at op), V_top_pk = V_drive_diff_pk/|1+H|.
+    # k_buf = V_top_pk / V_drv_atten_pk (V_drv_atten_pk ~ 0.5 V from the
+    # passive divider).
+    #   IV-6:     V_drive_diff_pk = 1.75 V -> V_top_pk = 1.0 V -> k_buf = 2.2
+    #   ILC1-1/8: V_drive_diff_pk = 2.13 V -> V_top_pk = 1.3 V -> k_buf = 2.7
+    #   ILC1-1/7: V_drive_diff_pk = 8.5 V  -> V_top_pk = 5.0 V -> k_buf = 10
+    # Buffer 1 non-inverting (gain = 1 + buf_fb1/1k); buf_fb1 = (k_buf-1)*1k.
+    # Buffer 2 inverting (gain = -buf_fb_ap/1k); buf_fb_ap = k_buf*1k.
+    # v_buf set just above V_top_pk for ~50-60% class-AB efficiency.
+    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=3.0e3, v_buf=2.0),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=11.0e3, buf_fb_ap=12.0e3, v_buf=6.5),
+    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=3.5e3, v_buf=2.3),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
 # two non-inverting unity-gain op-amp + class-AB BC337/BC327 BJT pair buffers
@@ -238,6 +241,10 @@ def make_netlist(data_path: Path,
     use_booster = mc.get("booster", False)
     v_osc_drive = "v_osc_drive" if use_booster else "v_osc"
     v_ap_drive  = "v_ap_drive"  if use_booster else "v_ap"
+    # Comparator V+/V- swap depends on Buffer 2 polarity:
+    #   booster on  -> Buffer 2 inverting -> swap so demod sees -sign(V_osc)
+    #   booster off -> Buffer 2 doesn't exist -> keep natural sign(V_osc)
+    cmp_inputs = "0 v_osc" if use_booster else "v_osc 0"
     # When booster is on, the all-pass JFET drain (and R_ap1) tap into
     # v_drv_atten (low-Z attenuated signal). Otherwise they tap into v_osc.
     v_osc_jfet  = "v_drv_atten" if use_booster else "v_osc"
@@ -246,7 +253,8 @@ def make_netlist(data_path: Path,
     # which matches k_atten = 7.15 for unity overall signal gain (small tubes).
     # ILC1-1/7 overrides to R_buf_fb1 = 9.1k -> k_buf = 10.1, giving 1.41x net
     # signal gain to deliver the 8.5 V_pk drive its 5 V_RMS filament needs.
-    buf_fb1 = mc.get("buf_fb1", 6.2e3)
+    buf_fb1   = mc.get("buf_fb1",   6.2e3)
+    buf_fb_ap = mc.get("buf_fb_ap", 6.2e3)
     booster_lines = ""
     if use_booster:
         booster_lines = f"""
@@ -270,10 +278,18 @@ R_obb_bot q_o_bp vee_buf 680
 Q_o_npn  vcc_buf q_o_bn v_osc_drive QBC337
 Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
 
-* Buffer 2: V_ap -> V_ap_drive (gain k_buf, class-AB BC337/BC327)
-XU_buf_ap    v_ap        n_buf_ap_fb  vcc vee n_buf_ap_out {opamp_bufa}
-R_buf2_fb1   v_ap_drive  n_buf_ap_fb  {buf_fb1:.6g}
-R_buf2_fb2   n_buf_ap_fb 0            1k
+* Buffer 2: V_ap -> V_ap_drive, INVERTING amp (gain -k_buf_ap).
+* Inverting topology so V_top and V_bot are nearly anti-phase, giving
+* V_diff = V_top - V_bot = V_drv_atten*k_buf*(1 + H) where H is the
+* all-pass response. |1+H| = 2/sqrt(1+(wRC)^2) is large at low wRC
+* (JFET in linear region, V_GS far from V_to) -- the OPPOSITE regime
+* from the old V_diff = V_drv_atten*k_buf*(1-H) topology, which needed
+* high wRC (JFET near pinch-off) for efficient operation. New topology
+* reaches good class-AB efficiency without entering the JFET-rectification
+* regime.
+XU_buf_ap    0           n_buf_ap_minus  vcc vee n_buf_ap_out {opamp_bufa}
+R_buf2_in    v_ap        n_buf_ap_minus  1k
+R_buf2_fb    v_ap_drive  n_buf_ap_minus  {buf_fb_ap:.6g}
 R_abb_top vcc_buf q_a_bn 680
 D_abb_top q_a_bn n_buf_ap_out Dbias
 D_abb_bot n_buf_ap_out q_a_bp Dbias
@@ -385,12 +401,13 @@ XU_diff n_diff_plus n_diff_minus vcc vee n_diff {opamp_diff}
 
 * === Comparator (behavioural sign of V_osc) ===
 * Comparator: open-loop op-amp (one channel of the second TLV9154 quad).
-* V+ = v_osc, V- = 0; output saturates to ~+/-(Vcc - Vrail) on each rail
-* whenever |V_osc| exceeds the input-referred Vos. Slew-rate / GBW determine
-* the rise/fall time of the comparator output (fast at 4.5 MHz GBW vs
-* the 1 kHz V_osc); Vos creates a small zero-crossing offset that the
-* synchronous demodulator inherits as a phase shift in its reference.
-XU_cmp v_osc 0 vcc vee n_cmp {opamp_cmp}
+* V+/V- swapped from the natural "sign of V_osc" connection ONLY when the
+* booster is on -- the booster's inverting Buffer 2 flips the loop's
+* polarity, so we have to flip the demodulator reference to compensate.
+* Without the booster (IV-3), Buffer 2 doesn't exist and Buffer-1's
+* non-inverting output preserves the old polarity, so the comparator
+* must stay unswapped.
+XU_cmp {cmp_inputs} vcc vee n_cmp {opamp_cmp}
 
 * === Polarity-switching demodulator ===
 .model swMod SW(VT=0 VH=0.1 RON=10 ROFF=1G)
@@ -1152,6 +1169,8 @@ def main():
                 mc["wien_alpha"] = spec["wien_alpha"]
             if spec.get("buf_fb1") is not None:
                 mc["buf_fb1"] = spec["buf_fb1"]
+            if spec.get("buf_fb_ap") is not None:
+                mc["buf_fb_ap"] = spec["buf_fb_ap"]
             if spec.get("c_ap") is not None:
                 mc["c_ap"] = spec["c_ap"]
             if spec.get("v_buf") is not None:

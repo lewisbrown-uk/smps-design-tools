@@ -94,11 +94,12 @@ XU_diff n_diff_plus n_diff_minus vcc vee n_diff uopamp_lvl2 Avol=10meg GBW=4.5me
 
 * === Comparator (behavioural sign of V_osc) ===
 * Comparator: open-loop op-amp (one channel of the second TLV9154 quad).
-* V+ = v_osc, V- = 0; output saturates to ~+/-(Vcc - Vrail) on each rail
-* whenever |V_osc| exceeds the input-referred Vos. Slew-rate / GBW determine
-* the rise/fall time of the comparator output (fast at 4.5 MHz GBW vs
-* the 1 kHz V_osc); Vos creates a small zero-crossing offset that the
-* synchronous demodulator inherits as a phase shift in its reference.
+* V+/V- swapped from the natural "sign of V_osc" connection ONLY when the
+* booster is on -- the booster's inverting Buffer 2 flips the loop's
+* polarity, so we have to flip the demodulator reference to compensate.
+* Without the booster (IV-3), Buffer 2 doesn't exist and Buffer-1's
+* non-inverting output preserves the old polarity, so the comparator
+* must stay unswapped.
 XU_cmp v_osc 0 vcc vee n_cmp uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 
 * === Polarity-switching demodulator ===

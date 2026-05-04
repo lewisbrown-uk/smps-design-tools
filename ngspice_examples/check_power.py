@@ -60,6 +60,7 @@ def run_for_power(tube_key: str):
     if spec.get("booster"): mc["booster"] = True
     if spec.get("c_ap") is not None: mc["c_ap"] = spec["c_ap"]
     if spec.get("buf_fb1") is not None: mc["buf_fb1"] = spec["buf_fb1"]
+    if spec.get("buf_fb_ap") is not None: mc["buf_fb_ap"] = spec["buf_fb_ap"]
     if spec.get("v_buf") is not None: mc["v_buf"] = spec["v_buf"]
 
     work = m.WORK
@@ -70,21 +71,39 @@ def run_for_power(tube_key: str):
                              r_int_scale=spec["r_int_scale"], mc=mc)
 
     specs = power_specs(use_booster)
-    # Build .save and .control blocks: device-internal parameters (@Q1[ic]
-    # etc.) are NOT saved as time-domain vectors by default -- without .save
-    # they only retain their last-timestep scalar value, and any `let`
-    # expression using them collapses to a snapshot.
+    # Build .save and .control blocks. Two subtleties:
+    # (1) device-internal parameters (@Q1[ic] etc.) are NOT saved as time-
+    #     domain vectors by default -- need explicit .save.
+    # (2) Even WITH .save, an @-param used inline in a vector arithmetic
+    #     `let` (e.g. `let p = v(x) * @Q1[ic]`) collapses to its last-
+    #     timestep scalar value. Workaround: bind each @-param to its own
+    #     let first (`let ic_q1 = @Q1[ic]`) and reference that let in the
+    #     power expression.
     save_tokens = set()
+    at_token_to_let = {}   # @Q1[ic] -> ic_q1
     for _name, expr, _ in specs:
-        for m_ in re.findall(r"@\w+\[\w+\]", expr):
-            save_tokens.add(m_)
-        for m_ in re.findall(r"v\(\w+\)", expr):
-            save_tokens.add(m_)
-    let_lines = "\n".join(f"let p_{name} = {expr}" for name, expr, _rating in specs)
+        for tok in re.findall(r"@\w+\[\w+\]", expr):
+            save_tokens.add(tok)
+            # Build a safe let-name from the @-token (strip @, [], make underscore)
+            let_name = "x_" + tok.replace("@", "").replace("[", "_").replace("]", "")
+            at_token_to_let[tok] = let_name
+        for tok in re.findall(r"v\(\w+\)", expr):
+            save_tokens.add(tok)
+    bind_lines = "\n".join(f"let {let_name} = {tok}"
+                           for tok, let_name in sorted(at_token_to_let.items()))
+    let_lines_list = []
+    for name, expr, _rating in specs:
+        # Substitute each @-token with its bound let-name
+        e = expr
+        for tok, let_name in at_token_to_let.items():
+            e = e.replace(tok, let_name)
+        let_lines_list.append(f"let p_{name} = {e}")
+    let_lines = "\n".join(let_lines_list)
     wrdata_args = " ".join(f"p_{name}" for name, _, _ in specs)
     new_control = f""".save {' '.join(sorted(save_tokens))}
 .control
 run
+{bind_lines}
 {let_lines}
 wrdata {dat.as_posix()} {wrdata_args}
 .endcontrol"""
