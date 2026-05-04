@@ -502,6 +502,127 @@ def test_correlations_default_none_unchanged_behaviour():
     assert a.metric_stats["fc"].mean == b.metric_stats["fc"].mean
 
 
+# ---------- Temperature dependence ----------
+
+def test_temperature_passes_T_to_metrics():
+    """When temperature is set, metrics callable must receive T as
+    kwarg. Without temperature, metrics signature is unchanged."""
+    seen = []
+    def metrics_with_T(R, T):
+        seen.append(("with_T", R, T))
+        return {"v": R}
+    def metrics_no_T(R):
+        seen.append(("no_T", R))
+        return {"v": R}
+
+    # No temperature → metrics doesn't get T
+    analyze(nominal_values={"R": 1e3},
+            passive_tolerances={"R": 0.01},
+            metrics=metrics_no_T,
+            spec={"v": ("<", 1e9)},
+            n_mc=3, seed=10)
+    assert all(s[0] == "no_T" for s in seen)
+
+    # With temperature → metrics gets T
+    seen.clear()
+    analyze(nominal_values={"R": 1e3},
+            passive_tolerances={"R": 0.01},
+            metrics=metrics_with_T,
+            spec={"v": ("<", 1e9)},
+            n_mc=3, seed=11,
+            temperature=Uniform(lo=-40, hi=85),
+            temperature_coefficients={"R": 50e-6})
+    assert all(s[0] == "with_T" for s in seen)
+    # T values should be in the [-40, 85] range
+    for _, _, T in seen:
+        assert -40 <= T <= 85
+
+
+def test_temperature_scales_components_by_tempco():
+    """A pure-tempco resistor sweep over the operating range should
+    produce a deterministic output proportional to (1 + tempco·ΔT).
+    Use Constant samplers for tolerance to isolate the tempco effect."""
+    captured = []
+    def metrics(R, T):
+        captured.append((R, T))
+        return {"R": R}
+
+    analyze(
+        nominal_values={"R": 1000.0},
+        passive_tolerances={"R": 0.0},   # zero tolerance
+        distribution={"R": Constant(value=1000.0)},
+        metrics=metrics,
+        spec={"R": ("<", 1e9)},
+        n_mc=2000, seed=42,
+        temperature=Uniform(lo=-40, hi=85),
+        temperature_coefficients={"R": 100e-6},  # 100 ppm/°C
+        temperature_nominal=25,
+    )
+    # First call is the nominal (T=25, R=1000 exactly)
+    nominal_R, nominal_T = captured[0]
+    assert nominal_R == pytest.approx(1000.0)
+    assert nominal_T == 25
+    # MC calls: R(T) = 1000 · (1 + 100e-6·(T-25))
+    for R, T in captured[1:]:
+        expected = 1000.0 * (1.0 + 100e-6 * (T - 25))
+        assert R == pytest.approx(expected, rel=1e-9)
+
+
+def test_temperature_per_component_tempco_overrides_prefix():
+    """Per-name tempcos override the prefix default — allows mixing
+    e.g. one precision low-tempco part with standard parts."""
+    captured = {}
+    def metrics(R1, R2, T):
+        captured.setdefault(round(T, 4), []).append((R1, R2))
+        return {"v": R1}
+
+    analyze(
+        nominal_values={"R1": 1000.0, "R2": 1000.0},
+        passive_tolerances={"R": 0.0},
+        distribution={"R1": Constant(value=1000.0),
+                       "R2": Constant(value=1000.0)},
+        metrics=metrics,
+        spec={"v": ("<", 1e9)},
+        n_mc=200, seed=7,
+        temperature=Uniform(lo=0, hi=100),
+        temperature_coefficients={"R": 1000e-6, "R2": 5e-6},  # R2 tighter
+        temperature_nominal=25,
+    )
+    # At any sample T, R1 should drift 200× more than R2
+    sample_T = max(t for t in captured if abs(t - 25) > 30)  # well off-nominal
+    R1, R2 = captured[sample_T][0]
+    drift_R1 = (R1 - 1000) / 1000
+    drift_R2 = (R2 - 1000) / 1000
+    # Ratio should be 1000/5 = 200 (approximate due to rounding above)
+    assert abs(drift_R1 / drift_R2) == pytest.approx(200, rel=0.01)
+
+
+def test_temperature_disabled_by_default_no_T_kwarg():
+    """Backward compatibility: existing metrics without T parameter
+    must continue to work when temperature is not specified."""
+    def metrics_old(R, C):    # no T parameter
+        return {"fc": 1 / (2 * math.pi * R * C)}
+    # Should not raise
+    r = analyze(nominal_values={"R": 1e3, "C": 1e-9},
+                passive_tolerances={"R": 0.01, "C": 0.05},
+                metrics=metrics_old,
+                spec={"fc": ("within", 0.05)},
+                n_mc=200, seed=0)
+    assert r.samples_total == 200
+
+
+def test_temperature_non_sampler_raises():
+    with pytest.raises(TypeError, match="Sampler"):
+        analyze(
+            nominal_values={"R": 1e3},
+            passive_tolerances={"R": 0.01},
+            metrics=lambda R, T: {"v": R},
+            spec={"v": ("<", 1e9)},
+            n_mc=3,
+            temperature=(-40, 85),  # tuple, not Sampler
+        )
+
+
 # ---------- Robust ranker (eseries_opt integration) ----------
 
 def test_robust_ranker_attaches_yield_to_results():

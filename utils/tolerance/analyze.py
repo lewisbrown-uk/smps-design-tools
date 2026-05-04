@@ -187,6 +187,9 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
             tolerance_sigma=3.0, distribution="gaussian",
             active_devices=None,
             correlations=None,
+            temperature=None,
+            temperature_coefficients=None,
+            temperature_nominal=25.0,
             workers=1):
     """Monte-Carlo yield analysis on a circuit candidate.
 
@@ -255,6 +258,23 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
             AbsoluteGaussian); ρ in [-1, 1]; negative ρ only allowed
             for 2-component groups (PSD requirement); a component can
             appear in at most one correlation group.
+        temperature: Optional ``Sampler`` for ambient °C. Common
+            choice: ``Uniform(lo=-40, hi=85)`` (industrial range).
+            Sampled once per MC iteration and applied to all
+            components via ``temperature_coefficients``. Also passed
+            to ``metrics`` as the kwarg ``T`` so the user can inject
+            it into ngspice ``.temp`` for active-device temperature
+            dependence. When ``None`` (default), tempcos have no
+            effect and ``metrics`` doesn't receive ``T``.
+        temperature_coefficients: ``{name_or_prefix: tempco}`` in
+            fractional change per °C (e.g. ``50e-6`` for 50 ppm/°C
+            metal-film R, ``1500e-6`` for X7R ceramic C). Lookup
+            order: full name (per-component override), then SPICE
+            prefix. After standard tolerance perturbation, each
+            component's value is multiplied by
+            ``1 + tempco · (T - temperature_nominal)``.
+        temperature_nominal: Reference °C where tempco = 0 (default
+            25). Only meaningful when ``temperature`` is set.
         workers: Concurrent metric evaluations via
             ``ThreadPoolExecutor``. Default 1 (serial). For ngspice
             backends N threads → N concurrent processes, near-linear
@@ -359,7 +379,22 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
         if name not in enriched_nominal:
             enriched_nominal[name] = sampler.nominal()
 
-    nominal_metrics = metrics(**enriched_nominal)
+    # Validate temperature inputs early
+    if temperature is not None and not isinstance(temperature, Sampler):
+        raise TypeError(
+            f"temperature must be a Sampler instance or None, "
+            f"got {type(temperature).__name__}"
+        )
+
+    # Nominal call: at temperature_nominal (where tempco contribution
+    # is zero by definition). If temperature is enabled, pass T as a
+    # kwarg so the metrics signature is consistent across nominal and
+    # MC calls.
+    if temperature is not None:
+        nominal_metrics = metrics(**enriched_nominal,
+                                  T=temperature_nominal)
+    else:
+        nominal_metrics = metrics(**enriched_nominal)
 
     # 7. Generate the n_mc × n_components sample matrix. Independent
     # samples per component first; then for each correlation group,
@@ -388,13 +423,35 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
             for k, nm in enumerate(group_names):
                 samples[:, names.index(nm)] = joint[:, k]
 
+    # Apply temperature scaling: sample T per MC, multiply each
+    # component's already-perturbed value by (1 + tempco·(T - T_ref)).
+    # Tempcos are looked up by full name first, then by SPICE prefix.
+    if temperature is not None:
+        T_samples = temperature.sample(rng, n_mc)
+        tcs = temperature_coefficients or {}
+        for j, name in enumerate(names):
+            tc = tcs.get(name)
+            if tc is None:
+                tc = tcs.get(name[0])
+            if tc:
+                samples[:, j] *= 1.0 + tc * (T_samples - temperature_nominal)
+    else:
+        T_samples = None
+
     metric_keys = list(nominal_metrics)
     metric_arrays = {k: np.empty(n_mc) for k in metric_keys}
 
-    sample_dicts = [
-        {names[j]: samples[i, j] for j in range(len(names))}
-        for i in range(n_mc)
-    ]
+    if temperature is not None:
+        sample_dicts = [
+            {**{names[j]: samples[i, j] for j in range(len(names))},
+             "T": float(T_samples[i])}
+            for i in range(n_mc)
+        ]
+    else:
+        sample_dicts = [
+            {names[j]: samples[i, j] for j in range(len(names))}
+            for i in range(n_mc)
+        ]
 
     if workers == 1:
         sample_results = (metrics(**s) for s in sample_dicts)

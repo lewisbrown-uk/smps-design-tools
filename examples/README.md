@@ -7,6 +7,25 @@ examples/<name>.py` and it prints a `YieldReport`.
 Both examples need `ngspice` on `PATH` and use the bundled
 `ngspice_examples/uopamp.lib` macromodel.
 
+## `temperature_demo.py`
+
+Precision divider over the -40 to +85°C industrial range. Sweeps
+through four configurations:
+
+1. Passive tolerance only (no temperature) — ~120 ppm σ ratio.
+2. Mismatched tempcos (R1 50 ppm/°C metal-film, R2 200 ppm/°C
+   thick-film) — σ blows up 11× to 1358 ppm, yield collapses
+   from 100% to 22% on a ±0.1% spec.
+3. Matched tempcos (both 50 ppm/°C) — σ back to passive-only level.
+4. Matched tempcos + reel-mate correlation (ρ = 0.999) — σ falls
+   to 4 ppm.
+
+Demonstrates that temperature mismatch can dominate component
+tolerance by an order of magnitude in precision designs, and
+that matched-pair networks (or matched-tempco component selection)
+are the real lever. Composes the four library variation knobs
+(temperature, per-component tolerance, correlations, samplers).
+
 ## `asymmetric_tolerance_demo.py`
 
 Constructed example showing where the Robust ranker picks
