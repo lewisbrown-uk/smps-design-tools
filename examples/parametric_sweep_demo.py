@@ -41,6 +41,11 @@ import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
 from utils.tolerance import (
     NgspiceBackend, CachedBackend,
     parametric_sweep, parametric_dither,
@@ -150,6 +155,7 @@ def line_regulation_sweep():
         sp = r.metric_stats["P_Q1"]
         print(f"  {vin:>4.1f}  {s.mean:>10.4f}  "
               f"{s.p1:>9.4f}  {s.p99:>9.4f}  {sp.p99*1000:>7.1f} mW")
+    return sweep
 
 
 def load_regulation_dither():
@@ -176,6 +182,7 @@ def load_regulation_dither():
           f"worst={max(abs(s.p1), abs(s.p99))*1000:.2f} mΩ")
     print(f"  Yield (Vout in ±1%, |∂Vout/∂Iload|<50mΩ): "
           f"{rep.yield_pct:.1f}%")
+    return rep
 
 
 def thermal_runaway_recheck():
@@ -197,6 +204,7 @@ def thermal_runaway_recheck():
     print(f"  P_Q1_dT  mean={s.mean*1e6:>+7.2f} µW/K  "
           f"p1={s.p1*1e6:>+7.2f}  p99={s.p99*1e6:>+7.2f}")
     print(f"  Yield (P_Q1_dT < 1 mW/K):  {rep.yield_pct:.1f}%")
+    return rep
 
 
 def _with_pinned(kw, **pinned):
@@ -214,10 +222,137 @@ def _with_pinned(kw, **pinned):
     return out
 
 
+def chart_line_regulation(sweep):
+    """3-panel chart of yield, Vout regulation band, and P_Q1 band vs Vin."""
+    Vins = np.array([v for v, _ in sweep.corners])
+    yields = np.array([r.yield_pct for _, r in sweep.corners])
+    vout_p1 = np.array([r.metric_stats["Vout"].p1 for _, r in sweep.corners])
+    vout_p99 = np.array([r.metric_stats["Vout"].p99 for _, r in sweep.corners])
+    vout_mean = np.array([r.metric_stats["Vout"].mean for _, r in sweep.corners])
+    pq_mean = np.array([r.metric_stats["P_Q1"].mean for _, r in sweep.corners])
+    pq_p99 = np.array([r.metric_stats["P_Q1"].p99 for _, r in sweep.corners])
+
+    fig, axes = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
+    ax_y, ax_v, ax_p = axes
+    ax_y.plot(Vins, yields, "o-", color="C2", lw=2, markersize=6)
+    ax_y.axhline(100, color="0.7", linestyle=":", lw=0.7)
+    ax_y.set_ylabel("Yield (%)")
+    ax_y.set_title("Marginal LDO line regulation: Vin sweep at Iload=50 mA")
+    ax_y.set_ylim(-3, 103)
+    ax_y.grid(True, alpha=0.3)
+
+    ax_v.plot(Vins, vout_mean, "o-", color="C0", lw=2, markersize=4,
+              label="Vout mean")
+    ax_v.fill_between(Vins, vout_p1, vout_p99, color="C0", alpha=0.20,
+                       label="p1–p99 band")
+    ax_v.axhline(5.0, color="black", linestyle="--", lw=0.7,
+                 label="nominal 5.000 V")
+    for v in (5.0 * 1.01, 5.0 * 0.99):
+        ax_v.axhline(v, color="C3", linestyle=":", lw=0.8, alpha=0.7)
+    ax_v.set_ylabel("Vout [V]")
+    ax_v.legend(fontsize=9, loc="lower right")
+    ax_v.grid(True, alpha=0.3)
+
+    ax_p.plot(Vins, pq_mean * 1000, "o-", color="C1", lw=2, markersize=4,
+              label="P_Q1 mean")
+    ax_p.fill_between(Vins, np.zeros_like(pq_p99), pq_p99 * 1000,
+                       color="C1", alpha=0.20, label="0–p99 band")
+    ax_p.axhline(500, color="C3", linestyle=":", lw=0.8,
+                  label="spec 500 mW")
+    ax_p.set_xlabel("Vin [V]")
+    ax_p.set_ylabel("P_Q1 [mW]")
+    ax_p.legend(fontsize=9, loc="upper left")
+    ax_p.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig("/tmp/parametric_line_reg.png", dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    print("  saved /tmp/parametric_line_reg.png")
+
+
+def chart_load_regulation(rep):
+    """Histogram of ∂Vout/∂Iload across the MC population, with the
+    negative-slope (instability) tail and spec line called out."""
+    slopes = np.array(rep.metric_samples["Vout_dIload"])
+    slopes_mV_per_mA = slopes * 1000   # V/A → mV/mA = Ω
+    spec = 0.050 * 1000                # |∂Vout/∂Iload| < 50 mΩ → 50 mV/mA
+    n_neg = int(np.sum(slopes < 0))
+    n_total = slopes.size
+
+    fig, ax = plt.subplots(1, 1, figsize=(11, 5))
+    # Clip outliers for the histogram so the main lobe is visible —
+    # but keep the "fail" annotations honest.
+    clip_lo, clip_hi = np.percentile(slopes_mV_per_mA, [1, 99])
+    pad = (clip_hi - clip_lo) * 0.1
+    visible = slopes_mV_per_mA[(slopes_mV_per_mA > clip_lo - pad)
+                                & (slopes_mV_per_mA < clip_hi + pad)]
+    bins = np.linspace(visible.min(), visible.max(), 60)
+    pos = visible[visible >= 0]
+    neg = visible[visible < 0]
+    ax.hist(pos, bins=bins, color="C0", alpha=0.7, label=f"pos ({len(pos)})")
+    if len(neg) > 0:
+        ax.hist(neg, bins=bins, color="C3", alpha=0.8,
+                label=f"neg → unstable ({n_neg} of {n_total})")
+    ax.axvline(0, color="black", lw=0.8, linestyle="--",
+                label="0 (output Z = 0)")
+    ax.axvline(spec, color="C3", lw=0.8, linestyle=":",
+                label=f"spec ±{int(spec)} mΩ")
+    ax.axvline(-spec, color="C3", lw=0.8, linestyle=":")
+    ax.set_xlabel("∂Vout/∂Iload [mV/mA = Ω]")
+    ax.set_ylabel("samples")
+    ax.set_title(f"Marginal LDO load regulation slope, n={n_total}  "
+                  f"(yield {rep.yield_pct:.1f}%, "
+                  f"{n_neg} samples have negative output Z → unstable)")
+    ax.legend(fontsize=9, loc="upper right")
+    ax.grid(True, alpha=0.3)
+    # Annotate the central trend
+    s = rep.metric_stats["Vout_dIload"]
+    ax.axvline(s.mean * 1000, color="C2", lw=1.5, alpha=0.7,
+                label=f"mean {s.mean*1000:.1f} mΩ")
+    fig.tight_layout()
+    fig.savefig("/tmp/parametric_load_reg.png", dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  saved /tmp/parametric_load_reg.png  "
+           f"(showing 1-99 percentile range; full p1={s.p1*1000:.1f}, "
+           f"p99={s.p99*1000:.1f} mΩ)")
+
+
+def chart_thermal(rep):
+    """Histogram of ∂P_Q1/∂T across the MC population. Should be tightly
+    distributed near zero — confirming no thermal runaway risk."""
+    slopes = np.array(rep.metric_samples["P_Q1_dT"])
+    slopes_uW_per_K = slopes * 1e6
+
+    fig, ax = plt.subplots(1, 1, figsize=(11, 5))
+    bins = np.linspace(slopes_uW_per_K.min(), slopes_uW_per_K.max(), 40)
+    ax.hist(slopes_uW_per_K, bins=bins, color="C0", alpha=0.7)
+    ax.axvline(0, color="black", lw=0.8, linestyle="--")
+    spec_uW = 1000              # < 1 mW/K
+    ax.axvline(spec_uW, color="C3", lw=0.8, linestyle=":",
+                label=f"spec < {spec_uW} µW/K")
+    s = rep.metric_stats["P_Q1_dT"]
+    ax.axvline(s.mean * 1e6, color="C2", lw=1.5, alpha=0.7,
+                label=f"mean {s.mean*1e6:.1f} µW/K")
+    n = slopes.size
+    ax.set_xlabel("∂P_Q1/∂T [µW/K]")
+    ax.set_ylabel("samples")
+    ax.set_title(f"Marginal LDO thermal sensitivity, n={n}  "
+                  f"(p99 = {s.p99*1e6:.0f} µW/K, runaway threshold "
+                  f"~1 mW/K = 1000 µW/K)")
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig("/tmp/parametric_thermal.png", dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    print("  saved /tmp/parametric_thermal.png")
+
+
 def main():
-    line_regulation_sweep()
-    load_regulation_dither()
-    thermal_runaway_recheck()
+    sweep = line_regulation_sweep()
+    chart_line_regulation(sweep)
+    rep_load = load_regulation_dither()
+    chart_load_regulation(rep_load)
+    rep_t = thermal_runaway_recheck()
+    chart_thermal(rep_t)
 
 
 if __name__ == "__main__":
