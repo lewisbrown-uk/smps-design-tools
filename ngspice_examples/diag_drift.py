@@ -29,15 +29,19 @@ def main():
     dat = work / f"drift_{tube}.data"
     netlist = m.make_netlist(dat, v_preset=0.0, t_ramp=0.0,
                              r_int_scale=spec["r_int_scale"], mc=mc)
-    new_control = f""".save V(v_drv_atten) V(v_osc) V(n_ap_plus) V(v_int_out) V(v_ap)
+    new_control = f""".save V(v_drv_atten) V(v_osc) V(n_ap_plus) V(n_ap_minus) V(v_int_out) V(v_ap) V(v_osc_drive) V(v_ap_drive) @J_var[id]
 .control
 run
 let v_da    = v(v_drv_atten)
 let v_o     = v(v_osc)
 let v_napp  = v(n_ap_plus)
+let v_napm  = v(n_ap_minus)
 let v_int   = v(v_int_out)
 let v_ap_w  = v(v_ap)
-wrdata {dat.as_posix()} v_da v_o v_napp v_int v_ap_w
+let v_od    = v(v_osc_drive)
+let v_ad    = v(v_ap_drive)
+let i_jfet  = @J_var[id]
+wrdata {dat.as_posix()} v_da v_o v_napp v_napm v_int v_ap_w v_od v_ad i_jfet
 .endcontrol"""
     netlist = re.sub(r"\.control.*?\.endcontrol", new_control, netlist, flags=re.DOTALL)
     cir.write_text(netlist)
@@ -50,36 +54,33 @@ wrdata {dat.as_posix()} v_da v_o v_napp v_int v_ap_w
     v_da    = d[:, 1]
     v_o     = d[:, 3]
     v_napp  = d[:, 5]
-    v_int   = d[:, 7]
-    v_ap    = d[:, 9]
+    v_napm  = d[:, 7]
+    v_int   = d[:, 9]
+    v_ap    = d[:, 11]
+    v_od    = d[:, 13]
+    v_ad    = d[:, 15]
+    i_jfet  = d[:, 17]
     print(f"Total samples: {len(t)}, t_end = {t[-1]:.3f}s")
-    # Time-weighted (trapezoidal) mean -- correct for ngspice variable timestep.
-    # Plain np.mean weights samples equally, but ngspice clusters samples at
-    # high-dV/dt regions, biasing the result for non-sinusoidal waveforms.
     def twm(x, tt):
         if len(tt) < 2: return np.nan
         return np.trapezoid(x, tt) / (tt[-1] - tt[0])
-    # Compute running mean over 500 ms windows
-    print("\nWindow [s]      v_drv_atten      v_osc          n_ap_plus       v_int_out       v_ap")
-    print("-" * 100)
-    for w_start in np.arange(0.5, 5.0, 0.5):
-        w_end = w_start + 0.5
-        mask = (t >= w_start) & (t < w_end)
-        if mask.sum() < 100: continue
-        tm = t[mask]
-        print(f"  [{w_start:.2f}-{w_end:.2f}]   {twm(v_da[mask], tm)*1e3:+8.2f}mV       "
-              f"{twm(v_o[mask], tm)*1e3:+8.2f}mV    "
-              f"{twm(v_napp[mask], tm)*1e3:+8.2f}mV     "
-              f"{twm(v_int[mask], tm)*1e3:+8.2f}mV    "
-              f"{twm(v_ap[mask], tm)*1e3:+8.2f}mV")
-    # Final 5 ms detail
-    mask = t > t[-1] - 0.005
+    # Steady-state window: last 50 ms
+    mask = t > t[-1] - 0.050
     tm = t[mask]
-    print(f"\n  Final 5 ms:   {twm(v_da[mask], tm)*1e3:+8.2f}mV       "
-          f"{twm(v_o[mask], tm)*1e3:+8.2f}mV    "
-          f"{twm(v_napp[mask], tm)*1e3:+8.2f}mV     "
-          f"{twm(v_int[mask], tm)*1e3:+8.2f}mV    "
-          f"{twm(v_ap[mask], tm)*1e3:+8.2f}mV")
+    print(f"\n=== Steady-state DC means (last 50 ms, time-weighted) ===")
+    print(f"  v_drv_atten  = {twm(v_da[mask], tm)*1e3:+8.3f} mV  (Buffer 0 output)")
+    print(f"  v_osc_drive  = {twm(v_od[mask], tm)*1e3:+8.3f} mV  (Buffer 1 output, drives bridge top)")
+    print(f"  v_osc        = {twm(v_o[mask],  tm)*1e3:+8.3f} mV  (Wien output)")
+    print(f"  n_ap_minus   = {twm(v_napm[mask],tm)*1e3:+8.3f} mV  (all-pass minus input, summing junction)")
+    print(f"  n_ap_plus    = {twm(v_napp[mask],tm)*1e3:+8.3f} mV  (all-pass plus input, JFET source)")
+    print(f"  v_ap         = {twm(v_ap[mask], tm)*1e3:+8.3f} mV  (all-pass output)")
+    print(f"  v_ap_drive   = {twm(v_ad[mask], tm)*1e3:+8.3f} mV  (Buffer 2 output, drives bridge bottom)")
+    print(f"  v_int_out    = {twm(v_int[mask],tm)*1e3:+8.3f} mV  (PID/integrator output, JFET gate cmd)")
+    print(f"  I_JFET (id)  = {twm(i_jfet[mask],tm)*1e6:+8.3f} uA  (DC component through JFET channel)")
+    print(f"\n  Bridge differential DC: v_osc_drive - v_ap_drive = "
+          f"{(twm(v_od[mask],tm) - twm(v_ad[mask],tm))*1e3:+8.3f} mV")
+    print(f"  Buffer 2 inverting-gain check: v_ap_drive predicted = -k_buf*v_ap = "
+          f"{-12 * twm(v_ap[mask],tm)*1e3:+8.3f} mV  (vs measured {twm(v_ad[mask],tm)*1e3:+8.3f} mV)")
     try: dat.unlink()
     except OSError: pass
 
