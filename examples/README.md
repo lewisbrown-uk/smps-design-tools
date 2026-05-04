@@ -36,6 +36,41 @@ instant; the three ngspice sweeps take ~3 min + ~65s + ~26s on a
 laptop. Re-runs are cheap because each ngspice sweep persists its
 results to a sqlite cache (`/tmp/temp_*.sqlite`).
 
+## `scatter_temperature.py`
+
+Scatter plots reading the cached results from
+`temperature_circuits.py` (must run that first). For each of Wien /
+LDO ringing / LDO PM, builds a 3-panel figure:
+
+- **Top**: binding metric vs T across every MC sample, jittered and
+  coloured by spec pass/fail. Shows the headline T effect — bias
+  shift, fan-out, or both.
+- **Bottom (×2)**: binding metric vs the two strongest room-T
+  predictors (Pearson ρ ranked at the room-T corner), faceted by
+  cold / mid / hot T-corners. The cloud-shift pattern reveals
+  whether T bites by translating the population (mean shift) or by
+  rotating the sensitivity slope (predictor sensitivity changes
+  with T).
+
+Findings:
+
+- **Wien v_pp**: 2N3904 V_BE drops ~2 mV/°C → diode-clamp threshold
+  drifts → v_pp shifts linearly with T across the whole population.
+  Per-sample C1/C2 sensitivity is the same at every T — the
+  T-effect is a bias, not a sensitivity amplification. Strongest
+  room-T predictors: C1 (ρ ≈ +0.58), C2 (ρ ≈ −0.55).
+- **LDO ringing**: cold corner has higher ring_rms mean and a
+  larger fraction of samples > 15 mV spec. Strongest predictors:
+  Q1_BF (ρ ≈ −0.55) and Resr (ρ ≈ −0.54), matching the
+  marginal_ldo_demo.py 100k-sample finding.
+- **LDO PM**: ESR is overwhelmingly the dominant predictor (ρ ≈
+  +0.93) — ESR is what creates the zero that compensates the
+  output pole, so PM rises monotonically with ESR. Cold corner
+  shifts the cloud down by ~0.5° but the slope vs ESR is constant.
+
+Saves charts at `/tmp/temp_scatter_<name>.png`. Pure post-processing
+on the cached data — runs in seconds with no ngspice calls.
+
 ## `temperature_demo.py`
 
 Precision divider over the -40 to +85°C industrial range using
