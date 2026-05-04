@@ -152,7 +152,8 @@ def scatter_wien():
         print("wien cache empty — run temperature_circuits.chart_wien first")
         return
     inp_keys = ["R1","R2","C1","C2","Rg","Rfa","Rfb",
-                "U1_Vos","U1_Ib","U1_Avol","U1_GBW","Q1_BF","T"]
+                "U1_Vos","U1_Ib","U1_Avol","U1_GBW",
+                "Q1_BF","Q2_BF","T"]
     out_keys = ["t1","t2","amp_max","amp_min","f_new","thd_db","a_rms"]
     inp, out = to_arrays(rows, inp_keys, out_keys)
     v_pp = out["amp_max"] - out["amp_min"]
@@ -172,7 +173,7 @@ def scatter_wien():
     print(f"Wien: nominal v_pp ≈ {nominal:.3f} V, "
           f"{100*pass_mask.mean():.1f}% pass spec ±10%")
     predictors = ["R1","R2","C1","C2","Rfa","Rfb","Rg",
-                  "U1_Vos","U1_Avol","U1_GBW","Q1_BF"]
+                  "U1_Vos","U1_Avol","U1_GBW","Q1_BF","Q2_BF"]
     rhos = _correlations(inp, v_pp, room_mask, predictors)
     top = sorted(rhos.items(), key=lambda x: -abs(x[1]))[:2]
     print("  v_pp ~ predictor  (Pearson ρ at room-T):")

@@ -66,8 +66,8 @@ Rg   nn   0       {{Rg}}
 Rfa  nn   fb      {{Rfa}}
 Rfb  fb   out     {{Rfb}}
 
-Q1   fb   fb   out  Q2N3904
-Q2   out  out  fb   Q2N3904
+Q1   fb   fb   out  Q2N3904_A
+Q2   out  out  fb   Q2N3904_B
 
 Vcc  vcc 0  15
 Vee  vee 0 -15
@@ -76,7 +76,14 @@ XU1  np nn vcc vee out uopamp_lvl2
 +    Avol={{U1_Avol}} GBW={{U1_GBW}} Rin=100k Rout=30 Iq=8m
 +    Ilimit=1 Vrail=1.4 Vmax=40
 
-.model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF={{Q1_BF}}
+* Q1 and Q2 are physically distinct parts → independent BF samples
+* via separate model cards. For batch matching pass
+* correlations=[(["Q1_BF", "Q2_BF"], 0.5)] to analyze().
+.model Q2N3904_A NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF={{Q1_BF}}
++ NE=1.259 ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0
++ IKR=0 RC=1 CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p
++ MJE=.2593 VJE=.75 TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
+.model Q2N3904_B NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF={{Q2_BF}}
 + NE=1.259 ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0
 + IKR=0 RC=1 CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p
 + MJE=.2593 VJE=.75 TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
@@ -133,7 +140,7 @@ def main():
     nom_active_defaults = {
         "U1_Vos": 0.0, "U1_Ib": 200e-9,
         "U1_Avol": 100e3, "U1_GBW": 10e6,
-        "Q1_BF": 250,
+        "Q1_BF": 250, "Q2_BF": 250,
     }
     nom = metrics(**nominal, **nom_active_defaults)
     print("Nominal Wien (no tolerance):")
@@ -149,7 +156,8 @@ def main():
     report = analyze(
         nominal_values=nominal,
         passive_tolerances={"R": 0.05, "C": 0.10},
-        active_devices={"U1": "NE5532", "Q1": "2N3904"},
+        active_devices={"U1": "NE5532",
+                          "Q1": "2N3904", "Q2": "2N3904"},
         metrics=metrics,
         spec={
             "f0":     ("within", 0.05),

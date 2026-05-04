@@ -314,8 +314,14 @@ print fc pm
 
 def _wien_template():
     """Wien netlist with .temp injection and lock-in THD measurement.
-    Same topology as wien_thd_demo.py, with one change: ``.temp {T}``
-    so ngspice models for Q1 (2N3904) reflect ambient T."""
+
+    Q1 and Q2 are the diode-clamp pair — physically distinct parts,
+    so they get independent BF samples via separate model cards
+    (Q2N3904_A / Q2N3904_B). ngspice .temp still applies the same
+    bandgap-derived V_BE drift to both, which is correct: that part
+    of the temperature behaviour really is set by silicon physics,
+    not per-part variation. For batch matching add
+    ``correlations=[(["Q1_BF", "Q2_BF"], 0.5)]`` to the analyze call."""
     lockin = lockin_thd_block(
         signal="v(out)",
         window=(80e-3, 100e-3),
@@ -336,8 +342,8 @@ Rg   nn   0       {{Rg}}
 Rfa  nn   fb      {{Rfa}}
 Rfb  fb   out     {{Rfb}}
 
-Q1   fb   fb   out  Q2N3904
-Q2   out  out  fb   Q2N3904
+Q1   fb   fb   out  Q2N3904_A
+Q2   out  out  fb   Q2N3904_B
 
 Vcc  vcc 0  15
 Vee  vee 0 -15
@@ -346,7 +352,11 @@ XU1  np nn vcc vee out uopamp_lvl2
 +    Avol={{U1_Avol}} GBW={{U1_GBW}} Rin=100k Rout=30 Iq=8m
 +    Ilimit=1 Vrail=1.4 Vmax=40
 
-.model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF={{Q1_BF}}
+.model Q2N3904_A NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF={{Q1_BF}}
++ NE=1.259 ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0
++ IKR=0 RC=1 CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p
++ MJE=.2593 VJE=.75 TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
+.model Q2N3904_B NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF={{Q2_BF}}
 + NE=1.259 ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0
 + IKR=0 RC=1 CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p
 + MJE=.2593 VJE=.75 TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
@@ -411,7 +421,8 @@ def chart_wien():
             "Rg": 10e3, "Rfa": 10e3, "Rfb": 12e3,
         },
         passive_tolerances={"R": 0.05, "C": 0.10},
-        active_devices={"U1": "NE5532", "Q1": "2N3904"},
+        active_devices={"U1": "NE5532",
+                          "Q1": "2N3904", "Q2": "2N3904"},
         metrics=metrics,
         spec={
             "f0":     ("within", 0.05),
