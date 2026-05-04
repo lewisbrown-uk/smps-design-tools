@@ -80,7 +80,7 @@ TUBES = {
     # Buffer 2 inverting (gain = -buf_fb_ap/1k); buf_fb_ap = k_buf*1k.
     # v_buf set just above V_top_pk for ~50-60% class-AB efficiency.
     "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=3.0e3, v_buf=2.7),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=11.0e3, buf_fb_ap=12.0e3, v_buf=7.5),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=11.0e3, buf_fb_ap=12.0e3, v_buf=5.2),
     "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=3.5e3, v_buf=3.0),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
@@ -267,14 +267,22 @@ R_atten_bot  v_atten_input  0             9.1k
 XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp_buf0}
 
 * Buffer 1: V_drv_atten -> V_osc_drive (gain k_buf, class-AB BC337/BC327)
+* Bootstrap caps from output to the midpoint of the upper/lower bias resistors
+* lift the bias rail with the signal so the NPN/PNP base can drive past
+* vcc_buf / vee_buf at peak swing. This lets v_buf shrink toward V_pk + ~1 V
+* for class-AB efficiency near pi/4 instead of the textbook (pi/4)*Vpk/Vbuf.
 * Feedback divider R_buf1_fb1:R_buf1_fb2 sets per-tube k_buf
 XU_buf_osc   v_drv_atten n_buf_osc_fb vcc_buf vee_buf n_buf_osc_out {opamp_bufo}
 R_buf1_fb1   v_osc_drive n_buf_osc_fb {buf_fb1:.6g}
 R_buf1_fb2   n_buf_osc_fb 0           1k
-R_obb_top vcc_buf q_o_bn 680
-D_obb_top q_o_bn n_buf_osc_out Dbias
-D_obb_bot n_buf_osc_out q_o_bp Dbias
-R_obb_bot q_o_bp vee_buf 680
+R_obb_top_a  vcc_buf      mid_obb_top  340
+R_obb_top_b  mid_obb_top  q_o_bn       340
+C_obb_top    mid_obb_top  v_osc_drive  22u IC=0
+D_obb_top    q_o_bn       n_buf_osc_out Dbias
+D_obb_bot    n_buf_osc_out q_o_bp      Dbias
+R_obb_bot_b  q_o_bp       mid_obb_bot  340
+R_obb_bot_a  mid_obb_bot  vee_buf      340
+C_obb_bot    mid_obb_bot  v_osc_drive  22u IC=0
 Q_o_npn  vcc_buf q_o_bn v_osc_drive QBC337
 Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
 
@@ -286,14 +294,18 @@ Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
 * from the old V_diff = V_drv_atten*k_buf*(1-H) topology, which needed
 * high wRC (JFET near pinch-off) for efficient operation. New topology
 * reaches good class-AB efficiency without entering the JFET-rectification
-* regime.
+* regime. Bootstrap caps mirror Buffer 1.
 XU_buf_ap    0           n_buf_ap_minus  vcc_buf vee_buf n_buf_ap_out {opamp_bufa}
 R_buf2_in    v_ap        n_buf_ap_minus  1k
 R_buf2_fb    v_ap_drive  n_buf_ap_minus  {buf_fb_ap:.6g}
-R_abb_top vcc_buf q_a_bn 680
-D_abb_top q_a_bn n_buf_ap_out Dbias
-D_abb_bot n_buf_ap_out q_a_bp Dbias
-R_abb_bot q_a_bp vee_buf 680
+R_abb_top_a  vcc_buf      mid_abb_top  340
+R_abb_top_b  mid_abb_top  q_a_bn       340
+C_abb_top    mid_abb_top  v_ap_drive   22u IC=0
+D_abb_top    q_a_bn       n_buf_ap_out Dbias
+D_abb_bot    n_buf_ap_out q_a_bp       Dbias
+R_abb_bot_b  q_a_bp       mid_abb_bot  340
+R_abb_bot_a  mid_abb_bot  vee_buf      340
+C_abb_bot    mid_abb_bot  v_ap_drive   22u IC=0
 Q_a_npn  vcc_buf q_a_bn v_ap_drive QBC337
 Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327
 .model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
