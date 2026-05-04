@@ -27,11 +27,13 @@ import test_closed_loop as m
 T_END    = 6.000     # extend the standard 5 s by 1 s for the step
 T_STEP   = 3.000     # inject the step well after the soft-start has settled
 T_DUR    = 0.200     # 200 ms perturbation
-P_STEP   = 0.050     # +50 mW into T_node (will push T up several K)
+STEP_PCT = 0.10      # step magnitude as a fraction of each tube's P_op
+                     # so loop dynamics are compared like-for-like across tubes
 
 
 def run_step(tube_key: str):
     spec = m.TUBES[tube_key]
+    p_step = STEP_PCT * spec["P_op"]
     mc = {k: spec[k] for k in ("r_amb", "sigma_eps_A", "c_th",
                                "r_top_ref", "r_bot_ref", "r_sense")}
     if spec.get("booster"): mc["booster"] = True
@@ -52,22 +54,28 @@ def run_step(tube_key: str):
     # current injected into T_node (1 A at this thermal node = 1 W
     # because the filament subcircuit uses I directly as power).
     step_lines = (
-        f"\n* Step disturbance: +{P_STEP*1e3:.1f} mW injected into T_node\n"
+        f"\n* Step disturbance: +{p_step*1e3:.2f} mW ({STEP_PCT*100:.0f}% of P_op={spec['P_op']*1e3:.1f} mW)\n"
         f"V_step_en vstepen 0 PWL("
         f"0 0 {T_STEP-1e-6:.6e} 0 {T_STEP:.6e} 1 "
         f"{T_STEP+T_DUR-1e-6:.6e} 1 {T_STEP+T_DUR:.6e} 0 {T_END:.3f} 0)\n"
-        f"B_step 0 T_node I = {P_STEP:.6e} * (V(vstepen) > 0.5)\n"
+        f"B_step 0 T_node I = {p_step:.6e} * (V(vstepen) > 0.5)\n"
     )
     netlist = netlist.replace("\n.end\n", step_lines + "\n.end\n")
-    # Replace .control wrdata to capture the signals we need
+    # Replace .control wrdata to capture the signals we need.
+    # In non-booster mode, v_osc_drive == v_osc and v_ap_drive == v_ap; pick
+    # the right pair so a single-arm tube also works.
+    use_booster = bool(spec.get("booster"))
+    v_top_name = "v_osc_drive" if use_booster else "v_osc"
+    v_bot_name = "v_ap_drive"  if use_booster else "v_ap"
+    v_drv_atten_let = "let v_da  = v(v_drv_atten)" if use_booster else "let v_da  = v(v_osc)"
     new_control = f""".control
 run
-let v_o   = v(v_osc_drive)
-let v_a   = v(v_ap_drive)
+let v_o   = v({v_top_name})
+let v_a   = v({v_bot_name})
 let v_i   = v(v_int_out)
 let t_n   = v(T_node)
 let r_f   = v(r_fil)
-let v_da  = v(v_drv_atten)
+{v_drv_atten_let}
 wrdata {dat.as_posix()} v_o v_a v_i t_n r_f v_da
 .endcontrol"""
     netlist = re.sub(r"\.control.*?\.endcontrol", new_control,
@@ -88,6 +96,8 @@ wrdata {dat.as_posix()} v_o v_a v_i t_n r_f v_da
 
 
 def analyse(tube_key, r):
+    spec = m.TUBES[tube_key]
+    p_step = STEP_PCT * spec["P_op"]
     t = r["t"]
     T = r["T"]
     # Pre-step settled value: time-weighted mean over [T_STEP-0.1, T_STEP]
@@ -117,7 +127,8 @@ def analyse(tube_key, r):
     settle_after_step = t_settle - (T_STEP + T_DUR) if not np.isnan(t_settle) else float("nan")
     print(f"\n=== {m.TUBES[tube_key]['name']} step response ===")
     print(f"  Pre-step T (settled):  {T_pre:.2f} K")
-    print(f"  Step:  +{P_STEP*1e3:.1f} mW for {T_DUR*1e3:.0f} ms at t={T_STEP:.2f}s")
+    print(f"  Step:  +{p_step*1e3:.2f} mW ({STEP_PCT*100:.0f}% of P_op={spec['P_op']*1e3:.1f} mW) "
+          f"for {T_DUR*1e3:.0f} ms at t={T_STEP:.2f}s")
     print(f"  Peak T after step:     {T_max:.2f} K at t={T_max_t:.3f}s  "
           f"(overshoot {T_max - T_pre:+.2f} K above pre-step)")
     print(f"  Min T after step:      {T_min:.2f} K at t={T_min_t:.3f}s  "
@@ -128,6 +139,8 @@ def analyse(tube_key, r):
 
 
 def plot(tube_key, r, T_pre):
+    spec = m.TUBES[tube_key]
+    p_step = STEP_PCT * spec["P_op"]
     t = r["t"] * 1e3   # ms
     fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
     axes[0].plot(t, r["T"], color="C3", lw=0.7)
@@ -135,7 +148,7 @@ def plot(tube_key, r, T_pre):
     axes[0].axhline(T_pre + 5, color="0.7", ls=":", lw=0.5)
     axes[0].axhline(T_pre - 5, color="0.7", ls=":", lw=0.5)
     axes[0].axvspan(T_STEP*1e3, (T_STEP+T_DUR)*1e3, alpha=0.15, color="C0",
-                    label=f"+{P_STEP*1e3:.0f} mW pulse")
+                    label=f"+{p_step*1e3:.1f} mW ({STEP_PCT*100:.0f}% of P_op)")
     axes[0].set_ylabel("T [K]")
     axes[0].set_title(f"{m.TUBES[tube_key]['name']}: closed-loop step response")
     axes[0].legend(loc="upper right", fontsize=9); axes[0].grid(True, alpha=0.4)
