@@ -9,22 +9,21 @@ Both examples need `ngspice` on `PATH` and use the bundled
 
 ## `temperature_demo.py`
 
-Precision divider over the -40 to +85°C industrial range. Sweeps
-through four configurations:
+Precision divider over the -40 to +85°C industrial range using
+the **corners** mode (MC at each corner T separately) and a finer
+**sweep** to find the worst T.
 
-1. Passive tolerance only (no temperature) — ~120 ppm σ ratio.
-2. Mismatched tempcos (R1 50 ppm/°C metal-film, R2 200 ppm/°C
-   thick-film) — σ blows up 11× to 1358 ppm, yield collapses
-   from 100% to 22% on a ±0.1% spec.
-3. Matched tempcos (both 50 ppm/°C) — σ back to passive-only level.
-4. Matched tempcos + reel-mate correlation (ρ = 0.999) — σ falls
-   to 4 ppm.
+Three component configurations: mismatched tempcos (50 vs 200
+ppm/°C), matched tempcos (both 50), and matched + reel-mate
+correlation. Mismatched tempcos give 99.98% yield at +25°C but
+**0% at both -40°C and +85°C** — the binary "doesn't work at
+corners" the random-T mode would have hidden.
 
-Demonstrates that temperature mismatch can dominate component
-tolerance by an order of magnitude in precision designs, and
-that matched-pair networks (or matched-tempco component selection)
-are the real lever. Composes the four library variation knobs
-(temperature, per-component tolerance, correlations, samplers).
+The sweep panel shows the yield-vs-T curve: σ_ratio stays
+constant at ~120 ppm across T (tempco drift shifts the mean, not
+the spread); yield falls because the mean walks past the spec
+edges. Demonstrates `analyze_corners`, `temperature_sweep`, and
+why those are the right tools versus random-T sampling.
 
 ## `asymmetric_tolerance_demo.py`
 

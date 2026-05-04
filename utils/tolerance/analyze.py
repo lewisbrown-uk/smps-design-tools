@@ -258,14 +258,24 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
             AbsoluteGaussian); ρ in [-1, 1]; negative ρ only allowed
             for 2-component groups (PSD requirement); a component can
             appear in at most one correlation group.
-        temperature: Optional ``Sampler`` for ambient °C. Common
-            choice: ``Uniform(lo=-40, hi=85)`` (industrial range).
-            Sampled once per MC iteration and applied to all
-            components via ``temperature_coefficients``. Also passed
-            to ``metrics`` as the kwarg ``T`` so the user can inject
-            it into ngspice ``.temp`` for active-device temperature
+        temperature: Optional ``Sampler`` for ambient °C. Sampled
+            once per MC iteration and applied to all components via
+            ``temperature_coefficients``. Also passed to ``metrics``
+            as the kwarg ``T`` so the user can inject it into
+            ngspice ``.temp`` for active-device temperature
             dependence. When ``None`` (default), tempcos have no
             effect and ``metrics`` doesn't receive ``T``.
+
+            **Coverage caveat**: random-T sampling smears n_mc
+            samples across the temperature range, so per-T-band
+            confidence intervals are loose unless ``n_mc`` is large.
+            For "does it work at every corner?" use
+            ``analyze_corners(temperature_corners=[...])`` instead;
+            for "yield-vs-T curve" use ``temperature_sweep``. The
+            random-T mode is only the right tool when temperature
+            during operation really is a random variable to be
+            integrated over (e.g. unconditioned ambient with a wide
+            distribution).
         temperature_coefficients: ``{name_or_prefix: tempco}`` in
             fractional change per °C (e.g. ``50e-6`` for 50 ppm/°C
             metal-film R, ``1500e-6`` for X7R ceramic C). Lookup

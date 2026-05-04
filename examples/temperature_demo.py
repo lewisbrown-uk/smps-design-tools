@@ -1,35 +1,25 @@
-"""Temperature dependence: precision divider over the operating range.
+"""Temperature analysis: corners + sweep on a precision divider.
 
-The divider Vout/Vin = R2/(R1+R2) is meant to be invariant under
-proportional component drift — common-mode shifts (e.g. equal
-tempcos on both Rs) cancel in the ratio. This script quantifies how
-much temperature mismatch in component types breaks that invariance.
+Three modes for handling temperature:
 
-The library samples ambient T from a user-supplied distribution
-once per MC iteration and applies per-component tempcos (looked up
-by full name first, then by SPICE prefix) on top of the standard
-tolerance perturbation. The metrics callable receives the
-temperature-adjusted values plus ``T`` as a kwarg, so ngspice
-templates can also inject ``.temp`` for active-device temperature
-behaviour.
+- ``analyze_corners(temperature_corners=[T1, T2, ...])`` — runs an
+  MC at each given T (Constant sampler internally). Standard
+  industry practice: pick at least min/nominal/max of the operating
+  range. Per-corner yield CI is determined by ``n_mc`` alone (no
+  smearing across a T band), so 1000 samples at each corner gives
+  ±1.5% CI at p=0.5.
+- ``temperature_sweep(temperature_points=...)`` — same machinery
+  with many T points (e.g. every 5°C across the range). Used to
+  find non-monotonic yield-vs-T behaviour.
+- ``analyze(..., temperature=Sampler(...))`` — random-T mode where
+  each MC sample draws a different T. Right tool only when T during
+  operation is itself a random variable to be integrated over;
+  per-T-band CI is loose unless n_mc is large.
 
-Four configurations on a 0.1% R divider over -40 to +85°C:
-
-1. **No temperature** — passive tolerance only, ~120 ppm σ ratio.
-2. **Mismatched tempcos** (R1 = 50 ppm/°C metal-film,
-   R2 = 200 ppm/°C thick-film) — σ blows up 11× to ~1300 ppm,
-   yield collapses to 22% on a ±0.1% spec. Temperature drift
-   dominates, not tolerance.
-3. **Matched tempcos** (both 50 ppm/°C, e.g., same metal-film
-   process) — σ drops back to passive-tolerance level. Common-mode
-   tempco cancels in the ratio.
-4. **Matched + reel-mate correlation** (ρ=0.999) — σ falls to
-   ~4 ppm. Two cancellation mechanisms compounding: tempco common
-   mode + reel-mate.
-
-Pure closed-form, runs in seconds. Demonstrates the four library
-features (temperature, per-component tolerance, correlations,
-RelativeGaussian samplers) composing cleanly.
+The example: a precision divider over -40..+85°C. Three component
+configurations (mismatched tempcos, matched tempcos, matched +
+reel-mate correlation), four T corners, plus a finer sweep to plot
+yield(T).
 """
 from __future__ import annotations
 
@@ -38,60 +28,89 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from utils.tolerance import analyze, Uniform
+from utils.tolerance import (
+    analyze_corners, temperature_sweep,
+)
 
 
 def metrics(R1, R2, T=25):
-    """Divider ratio. T defaults to 25 so metrics works whether or
-    not temperature is enabled in analyze()."""
+    """Divider ratio. T defaults to 25 so the metrics signature works
+    whether or not analyze() was given a temperature."""
     return {"ratio": R2 / (R1 + R2)}
 
 
+def run_corners(label, temperature_coefficients, correlations=None):
+    """Standard industry corner check: -40 / 25 / 85°C, MC at each."""
+    return analyze_corners(
+        temperature_corners=[-40, 25, 85],
+        nominal_values={"R1": 10e3, "R2": 10e3},
+        passive_tolerances={"R": 0.001},
+        metrics=metrics,
+        spec={"ratio": ("within", 0.001)},
+        n_mc=5000, seed=42,
+        temperature_coefficients=temperature_coefficients,
+        correlations=correlations,
+    )
+
+
 def main():
-    print("Precision divider: ratio = R2/(R1+R2) targeting 0.5")
-    print(f"  Operating range: -40 to +85°C (industrial)")
-    print(f"  Spec: ratio within 0.1% of nominal\n")
-    print(f"  {'configuration':>52s}  {'σ_ratio':>9s}  {'yield':>7s}")
-    print("  " + "-" * 76)
+    print("Precision divider: ratio = R2/(R1+R2),  spec ratio within 0.1%")
+    print()
+    print("=" * 78)
+    print("Corner analysis (MC at -40 / +25 / +85°C, n_mc=5000 per corner)")
+    print("=" * 78)
+    print(f"  {'config':>52s}  {'-40°C':>7s}  {'25°C':>7s}  {'85°C':>7s}  {'worst':>7s}")
+    print("  " + "-" * 92)
 
     configs = [
-        ("no temperature dependence (passives only)",
-            None, None, None),
-        ("over T, R1=50ppm/°C metal-film, R2=200ppm/°C thick-film",
-            Uniform(lo=-40, hi=85), {"R1": 50e-6, "R2": 200e-6}, None),
-        ("over T, both 50ppm/°C (matched metal-film pair)",
-            Uniform(lo=-40, hi=85), {"R": 50e-6}, None),
-        ("matched tempcos + reel-mate correlation ρ=0.999",
-            Uniform(lo=-40, hi=85), {"R": 50e-6},
-            [(["R1", "R2"], 0.999)]),
+        ("R1=50ppm, R2=200ppm (mismatched tempcos)",
+            {"R1": 50e-6, "R2": 200e-6}, None),
+        ("both 50ppm (matched metal-film)",
+            {"R": 50e-6}, None),
+        ("matched 50ppm + reel-mate ρ=0.999",
+            {"R": 50e-6}, [(["R1", "R2"], 0.999)]),
     ]
 
-    for label, temp, tcs, corr in configs:
-        report = analyze(
-            nominal_values={"R1": 10e3, "R2": 10e3},
-            passive_tolerances={"R": 0.001},   # 0.1% precision parts
-            metrics=metrics,
-            spec={"ratio": ("within", 0.001)},
-            n_mc=10000, seed=42,
-            temperature=temp,
-            temperature_coefficients=tcs,
-            correlations=corr,
-        )
-        s = report.metric_stats["ratio"]
-        print(f"  {label:>52s}  {s.std*1e6:>8.1f}ppm  "
-              f"{report.yield_pct:>6.2f}%")
+    for label, tcs, corr in configs:
+        report = run_corners(label, tcs, corr)
+        per_T = {T: r.yield_pct for T, r in report.corners}
+        print(f"  {label:>52s}  "
+              f"{per_T[-40]:>6.2f}%  {per_T[25]:>6.2f}%  {per_T[85]:>6.2f}%  "
+              f"{report.worst_yield:>6.2f}%")
+    print()
 
+    # Finer sweep on the mismatched-tempcos config to see the yield
+    # vs T curve and locate the worst T.
+    print("=" * 78)
+    print("Temperature sweep (mismatched tempcos, every 5°C from -40 to +85°C)")
+    print("=" * 78)
+    sweep = temperature_sweep(
+        temperature_points=range(-40, 86, 5),
+        nominal_values={"R1": 10e3, "R2": 10e3},
+        passive_tolerances={"R": 0.001},
+        metrics=metrics,
+        spec={"ratio": ("within", 0.001)},
+        n_mc=5000, seed=42,
+        temperature_coefficients={"R1": 50e-6, "R2": 200e-6},
+    )
+    print(f"  {'T (°C)':>8}  {'yield':>7}  {'σ ratio':>9}")
+    for T, r in sweep.corners:
+        s = r.metric_stats["ratio"]
+        print(f"  {T:>+8.0f}  {r.yield_pct:>6.2f}%  {s.std*1e6:>7.1f}ppm")
     print()
-    print("Headline: temperature mismatch between component types is the")
-    print("dominant variance contributor in precision dividers — order of")
-    print("magnitude larger than 0.1% R tolerance. Matching tempcos by")
-    print("using a single component type (or a matched-pair part) brings")
-    print("σ back to the tolerance-only level. Reel-mate correlation on")
-    print("top of matching gives another 30× of margin.")
+    print(f"Worst yield in sweep: {sweep.worst_yield:.2f}% at T = "
+          f"{sweep.worst_corner:+.0f}°C")
     print()
-    print("Real-world example: in a precision LM4040 voltage reference")
-    print("buffer, the feedback divider should use a matched resistor")
-    print("network (e.g., Vishay TNPU pair) — not two separate parts.")
+    print("The σ_ratio stays constant (~120 ppm) across the sweep — tempco")
+    print("drift shifts the mean of the distribution, not its spread. Yield")
+    print("falls because the mean walks past the spec edges. By ±15°C from")
+    print("the tempco reference (25°C) the mean is at the spec boundary;")
+    print("by ±25°C yield is essentially zero.")
+    print()
+    print("Compare to the earlier random-T mode which reported 22% yield —")
+    print("that was just the fraction of samples that happened to land near")
+    print("room temp, completely missing the binary 'doesn't work at corners'")
+    print("reality. Use corners (or a sweep) for any real design check.")
 
 
 if __name__ == "__main__":

@@ -611,6 +611,82 @@ def test_temperature_disabled_by_default_no_T_kwarg():
     assert r.samples_total == 200
 
 
+def test_analyze_corners_returns_per_corner_yield():
+    """analyze_corners runs an MC at each given T (Constant sampler
+    internally) and returns one YieldReport per corner plus
+    aggregate worst-corner numbers."""
+    from utils.tolerance import analyze_corners
+    def metrics(R, T=25):
+        # fc-like metric that drifts with T via tempco applied by analyze
+        return {"R": R}
+
+    report = analyze_corners(
+        temperature_corners=[-40, 25, 85],
+        nominal_values={"R": 1000.0},
+        passive_tolerances={"R": 0.01},
+        metrics=metrics,
+        spec={"R": ("within", 0.01)},
+        n_mc=2000, seed=0,
+        temperature_coefficients={"R": 100e-6},   # 100 ppm/°C
+    )
+    assert len(report.corners) == 3
+    Ts = [T for T, _ in report.corners]
+    assert Ts == [-40, 25, 85]
+    # Yield should be lowest at the corner farthest from T_nominal=25
+    # (where tempco drift is largest, so spec ±1% is hardest to meet)
+    yields = {T: r.yield_pct for T, r in report.corners}
+    assert yields[25] >= yields[-40]
+    assert yields[25] >= yields[85]
+    assert report.worst_yield == min(yields.values())
+    assert report.worst_corner in (-40, 85)
+
+
+def test_analyze_corners_paired_seed():
+    """Same seed across corners → paired comparison; per-corner
+    component-perturbation patterns are identical (same RNG state
+    at each corner's analyze() call)."""
+    from utils.tolerance import analyze_corners
+    # Capture by corner T separately. Each corner's MC calls all have
+    # T equal to the corner value; the nominal call has T=25 and goes
+    # into a fourth bucket.
+    by_T = {}
+    def metrics(R, T=25):
+        by_T.setdefault(round(T, 1), []).append(R)
+        return {"R": R}
+
+    analyze_corners(
+        temperature_corners=[-40, 0, 85],   # avoid T=25 to keep MC samples separate from nominal
+        nominal_values={"R": 1000.0},
+        passive_tolerances={"R": 0.01},
+        metrics=metrics,
+        spec={"R": ("<", 1e9)},
+        n_mc=20, seed=42,
+        temperature_coefficients={"R": 0.0},   # no tempco → identical samples
+    )
+    # With zero tempco + same seed, R sequences at each corner should
+    # be identical (the paired-seed property)
+    assert by_T[-40] == by_T[0] == by_T[85]
+    assert len(by_T[-40]) == 20
+    # Nominal calls (T=25) should also exist
+    assert len(by_T[25]) == 3
+
+
+def test_temperature_sweep_returns_corner_report():
+    """temperature_sweep is just analyze_corners with many points —
+    same return type, used for yield-vs-T curves."""
+    from utils.tolerance import temperature_sweep
+    report = temperature_sweep(
+        temperature_points=range(-40, 86, 25),    # 6 points
+        nominal_values={"R": 1000.0},
+        passive_tolerances={"R": 0.01},
+        metrics=lambda R, T=25: {"R": R},
+        spec={"R": ("within", 0.01)},
+        n_mc=500, seed=1,
+        temperature_coefficients={"R": 100e-6},
+    )
+    assert len(report.corners) == 6
+
+
 def test_temperature_non_sampler_raises():
     with pytest.raises(TypeError, match="Sampler"):
         analyze(
