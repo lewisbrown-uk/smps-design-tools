@@ -79,9 +79,14 @@ TUBES = {
     # Buffer 1 non-inverting (gain = 1 + buf_fb1/1k); buf_fb1 = (k_buf-1)*1k.
     # Buffer 2 inverting (gain = -buf_fb_ap/1k); buf_fb_ap = k_buf*1k.
     # v_buf set just above V_top_pk for ~50-60% class-AB efficiency.
-    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=3.0e3, v_buf=2.7),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=11.0e3, buf_fb_ap=12.0e3, v_buf=5.2),
-    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=3.5e3, v_buf=3.0),
+    # Non-inverting Buffer 1 + Buffer 2: V_diff = V_drv_atten*k_buf*(1 - H).
+    # Same k_buf in both buffers (buf_fb1 = buf_fb_ap) so V_top and V_bot
+    # have matched magnitude. v_buf sized for V_top_pk = k_buf*V_drv_atten_pk
+    # plus ~1 V headroom (bootstrap caps on the bias chain let v_buf shrink
+    # toward V_top_pk for class-AB efficiency near pi/4).
+    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3, buf_fb_ap=6.2e3, v_buf=4.5),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=6.0),
+    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3, buf_fb_ap=6.2e3, v_buf=4.5),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
 # two non-inverting unity-gain op-amp + class-AB BC337/BC327 BJT pair buffers
@@ -241,10 +246,10 @@ def make_netlist(data_path: Path,
     use_booster = mc.get("booster", False)
     v_osc_drive = "v_osc_drive" if use_booster else "v_osc"
     v_ap_drive  = "v_ap_drive"  if use_booster else "v_ap"
-    # Comparator V+/V- swap depends on Buffer 2 polarity:
-    #   booster on  -> Buffer 2 inverting -> swap so demod sees -sign(V_osc)
-    #   booster off -> Buffer 2 doesn't exist -> keep natural sign(V_osc)
-    cmp_inputs = "0 v_osc" if use_booster else "v_osc 0"
+    # Comparator: natural sign(V_osc) for both booster and non-booster paths
+    # (Buffer 2 is non-inverting, so V_bot tracks V_ap with the same sign as
+    # V_osc; the demod's reference must be in-phase with V_osc).
+    cmp_inputs = "v_osc 0"
     # When booster is on, the all-pass JFET drain (and R_ap1) tap into
     # v_drv_atten (low-Z attenuated signal). Otherwise they tap into v_osc.
     v_osc_jfet  = "v_drv_atten" if use_booster else "v_osc"
@@ -286,23 +291,23 @@ C_obb_bot    mid_obb_bot  v_osc_drive  22u IC=0
 Q_o_npn  vcc_buf q_o_bn v_osc_drive QBC337
 Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
 
-* Buffer 2: V_ap -> V_ap_drive, INVERTING amp (gain -k_buf_ap).
-* Inverting topology so V_top and V_bot are nearly anti-phase, giving
-* V_diff = V_top - V_bot = V_drv_atten*k_buf*(1 + H) where H is the
-* all-pass response. |1+H| = 2/sqrt(1+(wRC)^2) is large at low wRC
-* (JFET in linear region, V_GS far from V_to) -- the OPPOSITE regime
-* from the old V_diff = V_drv_atten*k_buf*(1-H) topology, which needed
-* high wRC (JFET near pinch-off) for efficient operation. New topology
-* reaches good class-AB efficiency without entering the JFET-rectification
-* regime. Bootstrap caps mirror Buffer 1.
-XU_buf_ap    0           n_buf_ap_minus  vcc_buf vee_buf n_buf_ap_out {opamp_bufa}
+* Buffer 2: V_ap -> V_ap_drive (gain k_buf_ap, non-inverting class-AB).
+* V_diff = V_top - V_bot = V_drv_atten*k_buf*(1 - H) where H is the all-pass
+* response. |1-H| is large at high wRC (JFET near pinch-off) -- which is
+* also the regime where R_DS is large at cold start (JFET pinched off until
+* loop opens it), so the cold-start drive is naturally bounded. Keeps the
+* self-protecting startup property of the textbook topology.
+* Bootstrap caps mirror Buffer 1.
 * C_buf2_dcblock blocks the DC offset on v_ap (from JFET-channel rectification
-* at n_ap_plus, ~ -50 mV) so it isn't multiplied by Buffer 2's -12x gain into
-* a 568 mV bias on v_ap_drive. fc = 1/(2*pi*1k*10u) = 16 Hz, well below the
-* 1 kHz carrier (0.92 deg phase shift, absorbed by the JFET-driven all-pass).
-C_buf2_dcblock v_ap n_buf2_ac 10u IC=0
-R_buf2_in    n_buf2_ac   n_buf_ap_minus  1k
-R_buf2_fb    v_ap_drive  n_buf_ap_minus  {buf_fb_ap:.6g}
+* at n_ap_plus, ~ -50 mV) so it isn't multiplied by Buffer 2's gain into a
+* large bias on v_ap_drive. R_buf2_dcref provides a DC return path for the
+* op-amp + input; together fc = 1/(2*pi*R*C). Sized 100k * 100n = 10 ms
+* (fc = 16 Hz), well below the 1 kHz carrier.
+C_buf2_dcblock v_ap         n_buf2_ac    100n IC=0
+R_buf2_dcref   n_buf2_ac    0            100k
+XU_buf_ap    n_buf2_ac   n_buf_ap_fb     vcc_buf vee_buf n_buf_ap_out {opamp_bufa}
+R_buf2_fb1   v_ap_drive  n_buf_ap_fb     {buf_fb_ap:.6g}
+R_buf2_fb2   n_buf_ap_fb 0               1k
 R_abb_top_a  vcc_buf      mid_abb_top  340
 R_abb_top_b  mid_abb_top  q_a_bn       340
 C_abb_top    mid_abb_top  v_ap_drive   22u IC=0
