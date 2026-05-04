@@ -107,6 +107,40 @@ check second" can miss the right design. Exercises the per-component
 tolerance override in `passive_tolerances` (lookup by full name
 first, then by SPICE prefix).
 
+## `parametric_sweep_demo.py`
+
+Demonstrates the generic `parametric_sweep` and `parametric_dither`
+helpers — same infrastructure that powers `analyze_corners`,
+`temperature_sweep`, and `thermal_dither`, but for any external
+parameter the metric callable accepts (Vin, Iload, frequency,
+supply, etc.).
+
+Three sweeps on the marginal LDO at fixed T=25°C:
+
+1. **Line regulation** (`parametric_sweep(parameter='Vin')`): sweep
+   Vin from 6V to 14V at Iload=50mA. Yield 100% at every Vin from
+   the dropout edge (~6V) up to 14V. P_Q1 grows linearly from 52 mW
+   to 452 mW as expected (V_CE × Iload).
+
+2. **Load regulation** (`parametric_dither(parameter='Iload')`):
+   dither Iload around 50 mA by ±10 mA. Mean output impedance
+   77 mΩ — but the population shows large variance, including
+   **negative slopes** at the p1 corner (Vout *rises* with Iload).
+   That's positive feedback / instability, exactly what the
+   marginal LDO is meant to be marginal about. Yield against
+   |∂Vout/∂Iload| < 50 mΩ drops to 54%. The dither caught a
+   stability issue that a static yield-vs-Vin sweep misses.
+
+3. **Thermal recheck** (`parametric_dither(parameter='T')`): same
+   numbers as the dedicated `thermal_dither` helper — confirming
+   the generic helper's T path agrees with the specialised one.
+
+The take-home: slope-based analysis exposes parameter-sensitivity
+problems that yield-at-fixed-points doesn't see. A circuit can pass
+every static spec but have unstable dynamic sensitivity at some
+component combinations — `parametric_dither` makes this directly
+specifiable.
+
 ## `thermal_dither_existing.py`
 
 Applies `thermal_dither` to the LDO and Wien examples — the two

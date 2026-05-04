@@ -1248,3 +1248,124 @@ def test_thermal_dither_validates_T_dither():
             spec={"m": ("<", 1)},
             n_mc=5, T_dither=0,
         )
+
+
+# ---------- generic parametric sweep / dither ----------
+
+def test_parametric_sweep_over_supply_voltage():
+    """Sweep Vin from 9V to 13V; metric is simple linear in Vin.
+    Confirms non-T parameters are injected and reach the metric."""
+    from utils.tolerance import parametric_sweep
+
+    seen = []
+    def metrics(R, Vin):
+        seen.append(Vin)
+        return {"Vout": Vin / 2 + R * 0}     # R kept to silence lint
+
+    report = parametric_sweep(
+        parameter="Vin", values=[9.0, 11.0, 13.0],
+        nominal_values={"R": 1e3},
+        passive_tolerances={"R": 0.0},
+        metrics=metrics,
+        spec={"Vout": ("<", 100)},
+        n_mc=20, seed=0,
+    )
+    # Three corners returned, in order
+    assert [c[0] for c in report.corners] == [9.0, 11.0, 13.0]
+    # All three Vin values appear in the metric calls
+    assert 9.0 in seen and 11.0 in seen and 13.0 in seen
+    # Per-corner Vout means equal Vin/2 (R has zero tolerance)
+    for v, r in report.corners:
+        assert r.metric_stats["Vout"].mean == pytest.approx(v / 2, abs=1e-9)
+
+
+def test_parametric_sweep_T_uses_temperature_machinery():
+    """When parameter='T', tempcos must apply (proves we're using the
+    temperature= path, not just injecting T as a pinned input)."""
+    from utils.tolerance import parametric_sweep
+
+    captured = {}
+    def metrics(R, T):
+        captured.setdefault(round(T, 2), []).append(R)
+        return {"v": R}
+
+    parametric_sweep(
+        parameter="T", values=[-40.0, 85.0],
+        nominal_values={"R": 1000.0},
+        passive_tolerances={"R": 0.0},
+        distribution={"R": Constant(value=1000.0)},
+        metrics=metrics,
+        spec={"v": ("<", 1e9)},
+        n_mc=50, seed=0,
+        temperature_coefficients={"R": 1000e-6},     # 1000 ppm/°C
+        temperature_nominal=25.0,
+    )
+    # At T=-40 (ΔT=-65), R should be ~1000·(1 - 0.065) = 935
+    # At T=+85 (ΔT=+60), R should be ~1000·(1 + 0.060) = 1060
+    R_cold = captured[-40.0][0]
+    R_hot = captured[85.0][0]
+    assert R_cold == pytest.approx(935.0, abs=0.5)
+    assert R_hot == pytest.approx(1060.0, abs=0.5)
+
+
+def test_parametric_dither_load_regulation_slope():
+    """Dither over Iload; metric Vout = 5 - 0.001·Iload (1mΩ
+    output impedance). Slope ∂Vout/∂Iload should equal -0.001
+    exactly (linear function → exact finite difference)."""
+    from utils.tolerance import parametric_dither
+
+    def metrics(R, Iload):
+        return {"Vout": 5.0 - 0.001 * Iload}
+
+    report = parametric_dither(
+        parameter="Iload", base=0.050, dither=0.010,
+        nominal_values={"R": 1e3},
+        passive_tolerances={"R": 0.0},
+        metrics=metrics,
+        spec={"Vout": ("within", 0.01),
+              "Vout_dIload": ("<", 0)},
+        n_mc=20, seed=0,
+    )
+    # All MC samples should give exactly the linear slope
+    s = report.metric_stats["Vout_dIload"]
+    assert s.mean == pytest.approx(-0.001, abs=1e-9)
+    assert s.std == pytest.approx(0.0, abs=1e-12)
+
+
+def test_parametric_dither_clashes_with_existing_nominal():
+    """If the swept parameter is also a nominal_values entry, the
+    inject would silently overwrite — that's a usage bug, fail loud."""
+    from utils.tolerance import parametric_dither
+
+    def metrics(R, Vin):
+        return {"v": Vin / R}
+
+    with pytest.raises(ValueError, match="already in nominal_values"):
+        parametric_dither(
+            parameter="Vin", base=12.0, dither=1.0,
+            nominal_values={"R": 1e3, "Vin": 12.0},   # collision
+            passive_tolerances={"R": 0.0, "V": 0.0},
+            metrics=metrics,
+            spec={"v": ("<", 1)},
+            n_mc=5, seed=0,
+        )
+
+
+def test_sweep_report_str_uses_parameter_unit():
+    """SweepReport.__str__ must include the parameter name and unit
+    rather than hardcoding 'T (°C)'."""
+    from utils.tolerance import parametric_sweep
+
+    report = parametric_sweep(
+        parameter="Iload", values=[0.05, 0.10],
+        nominal_values={"R": 1e3},
+        passive_tolerances={"R": 0.0},
+        metrics=lambda R, Iload: {"P": Iload * 5},
+        spec={"P": ("<", 1)},
+        n_mc=10, seed=0,
+        unit="A",
+    )
+    s = str(report)
+    assert "Iload" in s
+    assert "A" in s
+    assert "T (°C)" not in s
