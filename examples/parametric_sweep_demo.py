@@ -223,16 +223,25 @@ def _with_pinned(kw, **pinned):
 
 
 def chart_line_regulation(sweep):
-    """3-panel chart of yield, Vout regulation band, and P_Q1 band vs Vin."""
+    """4-panel chart: yield, Vout band + per-sample spaghetti, P_Q1
+    band + per-sample spaghetti. The spaghetti plots exploit the
+    paired-seed trajectories — sample i at corner k is the same
+    simulated board across all corners, so connecting (Vin, Vout)
+    points gives that board's actual regulation curve."""
     Vins = np.array([v for v, _ in sweep.corners])
     yields = np.array([r.yield_pct for _, r in sweep.corners])
-    vout_p1 = np.array([r.metric_stats["Vout"].p1 for _, r in sweep.corners])
-    vout_p99 = np.array([r.metric_stats["Vout"].p99 for _, r in sweep.corners])
-    vout_mean = np.array([r.metric_stats["Vout"].mean for _, r in sweep.corners])
-    pq_mean = np.array([r.metric_stats["P_Q1"].mean for _, r in sweep.corners])
-    pq_p99 = np.array([r.metric_stats["P_Q1"].p99 for _, r in sweep.corners])
+    # Per-sample matrices: rows = samples, cols = Vin values
+    vout_mat = np.stack([r.metric_samples["Vout"]
+                         for _, r in sweep.corners], axis=1)
+    pq_mat = np.stack([r.metric_samples["P_Q1"]
+                       for _, r in sweep.corners], axis=1)
+    vout_p1 = np.percentile(vout_mat, 1, axis=0)
+    vout_p99 = np.percentile(vout_mat, 99, axis=0)
+    vout_mean = vout_mat.mean(axis=0)
+    pq_mean = pq_mat.mean(axis=0)
+    pq_p99 = np.percentile(pq_mat, 99, axis=0)
 
-    fig, axes = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(10, 11), sharex=True)
     ax_y, ax_v, ax_p = axes
     ax_y.plot(Vins, yields, "o-", color="C2", lw=2, markersize=6)
     ax_y.axhline(100, color="0.7", linestyle=":", lw=0.7)
@@ -241,6 +250,9 @@ def chart_line_regulation(sweep):
     ax_y.set_ylim(-3, 103)
     ax_y.grid(True, alpha=0.3)
 
+    # Spaghetti: one line per MC sample, paired across Vin via shared seed
+    for i in range(vout_mat.shape[0]):
+        ax_v.plot(Vins, vout_mat[i, :], color="C0", alpha=0.15, lw=0.6)
     ax_v.plot(Vins, vout_mean, "o-", color="C0", lw=2, markersize=4,
               label="Vout mean")
     ax_v.fill_between(Vins, vout_p1, vout_p99, color="C0", alpha=0.20,
@@ -253,6 +265,9 @@ def chart_line_regulation(sweep):
     ax_v.legend(fontsize=9, loc="lower right")
     ax_v.grid(True, alpha=0.3)
 
+    for i in range(pq_mat.shape[0]):
+        ax_p.plot(Vins, pq_mat[i, :] * 1000, color="C1",
+                  alpha=0.15, lw=0.6)
     ax_p.plot(Vins, pq_mean * 1000, "o-", color="C1", lw=2, markersize=4,
               label="P_Q1 mean")
     ax_p.fill_between(Vins, np.zeros_like(pq_p99), pq_p99 * 1000,
@@ -316,6 +331,100 @@ def chart_load_regulation(rep):
            f"p99={s.p99*1000:.1f} mΩ)")
 
 
+def chart_load_correlation():
+    """Read the cached load-regulation data, pair samples at
+    Iload=50mA vs 60mA by their (other) input values, compute slope
+    per pair, and correlate against each component to find what
+    drives the negative-output-impedance instability."""
+    import json
+    import sqlite3
+    db = sqlite3.connect("/tmp/parametric_demo.sqlite")
+    rows = db.execute("SELECT key, value FROM cache").fetchall()
+    db.close()
+
+    # Group by all-input-keys-except-Iload. Each group should have
+    # one entry at Iload=0.05 and one at Iload=0.06 — those are a
+    # paired sample.
+    pairs = {}
+    for key, value in rows:
+        inputs = dict(json.loads(key))
+        outputs = json.loads(value)
+        Iload = inputs.pop("Iload", None)
+        if Iload is None or "v_out" not in outputs:
+            continue
+        # Use sorted-tuple of remaining inputs as the pairing key
+        pair_key = tuple(sorted(inputs.items()))
+        pairs.setdefault(pair_key, {})[Iload] = (inputs, outputs)
+
+    # Extract (component_dict, slope) per complete pair
+    component_keys = ["Rb", "Cout", "Resr", "Rtop", "Rbot",
+                       "U1_Vos", "U1_Ib", "U1_Avol", "U1_GBW", "Q1_BF"]
+    slopes = []
+    components = {k: [] for k in component_keys}
+    for pair in pairs.values():
+        if len(pair) != 2:
+            continue
+        # Pair has exactly two Iload entries — sort by Iload value.
+        # FP arithmetic means the dither value is e.g. 0.060000...05,
+        # not exactly 0.06; min/max avoids equality on floats.
+        lo_I, hi_I = sorted(pair)
+        v_lo = pair[lo_I][1]["v_out"]
+        v_hi = pair[hi_I][1]["v_out"]
+        slope = (v_hi - v_lo) / (hi_I - lo_I)     # V/A = Ω
+        slopes.append(slope)
+        inputs = pair[lo_I][0]
+        for k in component_keys:
+            if k in inputs:
+                components[k].append(inputs[k])
+            else:
+                components[k].append(np.nan)
+    slopes = np.array(slopes)
+    components = {k: np.array(v) for k, v in components.items()}
+
+    # Pearson correlation per predictor; rank by |ρ|.
+    rhos = {}
+    for k, x in components.items():
+        m = np.isfinite(x) & np.isfinite(slopes)
+        if m.sum() > 5 and x[m].std() > 0:
+            rhos[k] = float(np.corrcoef(x[m], slopes[m])[0, 1])
+    print(f"\n  ∂Vout/∂Iload predictor correlations (n={len(slopes)}):")
+    for k, rho in sorted(rhos.items(), key=lambda kv: -abs(kv[1])):
+        print(f"    {k:>10s}  ρ = {rho:+.3f}")
+    top = sorted(rhos.items(), key=lambda kv: -abs(kv[1]))[:2]
+
+    # 2-panel scatter against the two strongest predictors, coloured
+    # by sign of slope (red=unstable / negative output Z).
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    neg_mask = slopes < 0
+    spec = 0.050    # 50 mΩ in V/A
+    for ax, (predictor, rho) in zip(axes, top):
+        x = components[predictor]
+        m = np.isfinite(x) & np.isfinite(slopes)
+        ax.scatter(x[m & ~neg_mask], slopes[m & ~neg_mask] * 1000,
+                   s=18, alpha=0.55, color="C0",
+                   label=f"pos ({(m & ~neg_mask).sum()})")
+        ax.scatter(x[m & neg_mask], slopes[m & neg_mask] * 1000,
+                   s=18, alpha=0.7, color="C3",
+                   label=f"neg → unstable ({(m & neg_mask).sum()})")
+        ax.axhline(0, color="black", lw=0.7, ls="--")
+        ax.axhline(spec * 1000, color="C3", lw=0.7, ls=":",
+                    label=f"spec ±{int(spec*1000)} mΩ")
+        ax.axhline(-spec * 1000, color="C3", lw=0.7, ls=":")
+        ax.set_xlabel(predictor)
+        ax.set_ylabel("∂Vout/∂Iload [mΩ]")
+        ax.set_title(f"vs {predictor}  (Pearson ρ = {rho:+.2f})")
+        ax.legend(fontsize=9, loc="upper right")
+        ax.grid(True, alpha=0.3)
+    fig.suptitle("Load-regulation slope vs strongest component predictors  "
+                  "(red = negative output Z = unstable)",
+                  y=1.02, fontsize=11)
+    fig.tight_layout()
+    fig.savefig("/tmp/parametric_load_correlation.png", dpi=120,
+                 bbox_inches="tight")
+    plt.close(fig)
+    print("  saved /tmp/parametric_load_correlation.png")
+
+
 def chart_thermal(rep):
     """Histogram of ∂P_Q1/∂T across the MC population. Should be tightly
     distributed near zero — confirming no thermal runaway risk."""
@@ -351,6 +460,7 @@ def main():
     chart_line_regulation(sweep)
     rep_load = load_regulation_dither()
     chart_load_regulation(rep_load)
+    chart_load_correlation()
     rep_t = thermal_runaway_recheck()
     chart_thermal(rep_t)
 
