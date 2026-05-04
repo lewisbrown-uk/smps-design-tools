@@ -7,6 +7,25 @@ examples/<name>.py` and it prints a `YieldReport`.
 Both examples need `ngspice` on `PATH` and use the bundled
 `ngspice_examples/uopamp.lib` macromodel.
 
+## `temperature_circuits.py`
+
+Temperature analysis on three demo circuits:
+
+- **Sallen-Key Butterworth** (closed-form): X7R ceramic + metal-film
+  R combo drops yield to 0% at corners; precision parts (C0G + metal-
+  film) are flat 100% across -40 to +85°C. Q is invariant under
+  proportional tempco scaling (it's a ratio); only fc drifts.
+- **Marginal LDO load-step ringing** (ngspice tran with `.temp`):
+  yield drops 14 percentage points from +80°C (96%) to -40°C (82%).
+  Cold-corner is the binding case — BJT V_BE/β temperature behaviour
+  changes loop dynamics.
+- **Marginal LDO Middlebrook PM** (ngspice .ac with `.temp`):
+  PM mean rises monotonically with T (4.05° → 4.54°), confirming
+  the time-domain finding. Cross-validates that cold is binding.
+
+Saves three charts at `/tmp/temp_*.png`. Closed-form section is
+instant; the two ngspice sweeps take ~65s + ~26s on a laptop.
+
 ## `temperature_demo.py`
 
 Precision divider over the -40 to +85°C industrial range using
