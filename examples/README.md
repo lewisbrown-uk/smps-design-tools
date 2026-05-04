@@ -107,6 +107,39 @@ check second" can miss the right design. Exercises the per-component
 tolerance override in `passive_tolerances` (lookup by full name
 first, then by SPICE prefix).
 
+## `thermal_dither_existing.py`
+
+Applies `thermal_dither` to the LDO and Wien examples — the two
+existing demos with transistors that could in principle dissipate
+or run away. **Expected and confirmed result: both safe.** This is
+the negative-control complement to `thermal_dither_demo.py`'s
+positive demonstration of risk.
+
+| Circuit | P mean | P_dT p99 | Runaway margin (TO-92) |
+|---|---|---|---|
+| LDO Q1 (NPN pass) | 200.0 mW | +69 µW/K | 0.014 |
+| Wien Q1 (clamp) | 0.002 mW | −5 nW/K | < 1e-7 |
+| Wien Q2 (clamp) | 0.002 mW | −5 nW/K | < 1e-7 |
+
+Why the LDO is safe: the closed-loop regulator holds Vout constant
+against T drift, so V_CE = Vraw − Vout is essentially T-invariant
+and P_Q1 ≈ V_CE × Iload barely moves. The +69 µW/K p99 worst-case
+slope comes from op-amp Vos drift bleeding through the divider into
+Vout — a very small effect.
+
+Why the Wien is safer: Q1 and Q2 are diode-connected clamps that
+only conduct briefly per cycle. As T rises, V_BE drops → clamp
+threshold drops → output amplitude drops → less voltage to clamp →
+*less* power dissipation. dP/dT is negative everywhere — the design
+is intrinsically self-stabilising. Combined with the absurdly small
+absolute power (microwatts), this is the textbook safe configuration.
+
+The demo's value is the negative result: when the analysis runs and
+returns "no risk", that's a real engineering deliverable. Add the
+spec on `P_Q1_dT` to a CI-style yield check and you have automatic
+catch for any future change that introduces thermal sensitivity
+(e.g., removing the loop, using a class-A bias instead of a clamp).
+
 ## `thermal_dither_demo.py`
 
 Demonstrates `thermal_dither` — paired-sample temperature-sensitivity
