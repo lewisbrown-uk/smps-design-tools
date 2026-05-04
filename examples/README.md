@@ -7,6 +7,24 @@ examples/<name>.py` and it prints a `YieldReport`.
 Both examples need `ngspice` on `PATH` and use the bundled
 `ngspice_examples/uopamp.lib` macromodel.
 
+## `asymmetric_tolerance_demo.py`
+
+Constructed example showing where the Robust ranker picks
+*qualitatively different* candidates from the algebraic ranker.
+
+A series-pair resistor design with R1 from a tight-binned 1% class
+and R2 from a wider 5% class. Two candidates that hit the algebraic
+target exactly (same nominal sum, same algebraic error 0) differ
+in yield by ~15 percentage points because R2's per-ohm tolerance is
+5× R1's — the algebraic ranker can't see the asymmetry. The Robust
+ranker systematically prefers small-R2 candidates; only 2 of its
+top 8 overlap with the algebraic top 8.
+
+This is the cleanest demonstration that "algebra first, robustness
+check second" can miss the right design. Exercises the per-component
+tolerance override in `passive_tolerances` (lookup by full name
+first, then by SPICE prefix).
+
 ## `eseries_to_tolerance_demo.py`
 
 The two libraries together, two ways:

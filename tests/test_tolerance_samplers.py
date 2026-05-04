@@ -531,6 +531,28 @@ def test_robust_ranker_attaches_yield_to_results():
     assert yields == sorted(yields, reverse=True)
 
 
+def test_passive_tolerances_per_component_override():
+    """passive_tolerances accepts full-name keys that override the
+    prefix default. Lookup order: name, then prefix."""
+    captured = []
+    def metrics(R1, R2):
+        captured.append((R1, R2))
+        return {"v": R1 + R2}
+    analyze(
+        nominal_values={"R1": 1e3, "R2": 1e3},
+        passive_tolerances={"R": 0.01, "R2": 0.10},   # R1 → 1%, R2 → 10%
+        metrics=metrics,
+        spec={"v": ("<", 1e9)},
+        n_mc=2000, seed=10,
+    )
+    import numpy as np
+    R1 = np.array([c[0] for c in captured[1:]])
+    R2 = np.array([c[1] for c in captured[1:]])
+    # R2 should have ~10× wider relative spread than R1
+    assert R2.std()/R2.mean() == pytest.approx(10 * R1.std()/R1.mean(),
+                                               rel=0.10)
+
+
 def test_robust_ranker_unknown_spec_target_raises():
     """A spec key that doesn't match any Problem target is a typo —
     fail loudly rather than silently scoring against a missing metric."""

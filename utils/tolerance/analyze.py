@@ -13,16 +13,24 @@ _VALID_DISTS = {"gaussian", "uniform"}
 
 
 def _classify(name, tolerances):
-    """Map a passive-component name to its tolerance-dict key by first
-    character (SPICE convention: R/C/L/...). Unknown prefixes raise —
-    silently treating an unrecognised component as zero-tolerance
-    would mask a real misconfiguration."""
+    """Map a passive-component name to its tolerance-dict key. Lookup
+    order: full name (per-component override), then first character
+    (SPICE prefix convention: R/C/L/...). Unknown raises — silently
+    treating an unrecognised component as zero-tolerance would mask a
+    real misconfiguration.
+
+    Per-name overrides let you give different tolerances to instances
+    of the same component class — e.g., a 1% precision divider where
+    one resistor is binned tighter than the other:
+    ``passive_tolerances={"R": 0.01, "Rsense": 0.001}``."""
+    if name in tolerances:
+        return name
     prefix = name[0]
     if prefix not in tolerances:
         known = sorted(tolerances)
         raise ValueError(
             f"Component {name!r} (prefix {prefix!r}) has no entry in "
-            f"passive_tolerances; known prefixes: {known}"
+            f"passive_tolerances; known names/prefixes: {known}"
         )
     return prefix
 
