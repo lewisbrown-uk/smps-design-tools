@@ -79,9 +79,9 @@ TUBES = {
     # Buffer 1 non-inverting (gain = 1 + buf_fb1/1k); buf_fb1 = (k_buf-1)*1k.
     # Buffer 2 inverting (gain = -buf_fb_ap/1k); buf_fb_ap = k_buf*1k.
     # v_buf set just above V_top_pk for ~50-60% class-AB efficiency.
-    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=3.0e3, v_buf=2.0),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=11.0e3, buf_fb_ap=12.0e3, v_buf=6.5),
-    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=3.5e3, v_buf=2.3),
+    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=3.0e3, v_buf=2.7),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=11.0e3, buf_fb_ap=12.0e3, v_buf=7.5),
+    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=3.5e3, v_buf=3.0),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
 # two non-inverting unity-gain op-amp + class-AB BC337/BC327 BJT pair buffers
@@ -268,7 +268,7 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp_buf0}
 
 * Buffer 1: V_drv_atten -> V_osc_drive (gain k_buf, class-AB BC337/BC327)
 * Feedback divider R_buf1_fb1:R_buf1_fb2 sets per-tube k_buf
-XU_buf_osc   v_drv_atten n_buf_osc_fb vcc vee n_buf_osc_out {opamp_bufo}
+XU_buf_osc   v_drv_atten n_buf_osc_fb vcc_buf vee_buf n_buf_osc_out {opamp_bufo}
 R_buf1_fb1   v_osc_drive n_buf_osc_fb {buf_fb1:.6g}
 R_buf1_fb2   n_buf_osc_fb 0           1k
 R_obb_top vcc_buf q_o_bn 680
@@ -287,7 +287,7 @@ Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
 * high wRC (JFET near pinch-off) for efficient operation. New topology
 * reaches good class-AB efficiency without entering the JFET-rectification
 * regime.
-XU_buf_ap    0           n_buf_ap_minus  vcc vee n_buf_ap_out {opamp_bufa}
+XU_buf_ap    0           n_buf_ap_minus  vcc_buf vee_buf n_buf_ap_out {opamp_bufa}
 R_buf2_in    v_ap        n_buf_ap_minus  1k
 R_buf2_fb    v_ap_drive  n_buf_ap_minus  {buf_fb_ap:.6g}
 R_abb_top vcc_buf q_a_bn 680
