@@ -867,3 +867,140 @@ def test_analyze_no_active_devices_yields_unchanged():
     r_no_active = analyze(active_devices=None, **common)
     r_default   = analyze(**common)
     assert r_no_active.samples_pass == r_default.samples_pass
+
+
+# ---------- Exponential tempco ----------
+
+def test_exponential_tempco_doubles_per_K():
+    """Exponential(factor=2, per_K=10) should double the value per
+    +10°C of warming above T_nominal — the bipolar Ib pattern."""
+    from utils.tolerance import Exponential
+
+    captured = []
+    def metrics(Ib, T):
+        captured.append((Ib, T))
+        return {"v": Ib}
+
+    analyze(
+        nominal_values={"Ib": 200e-9},
+        passive_tolerances={"I": 0.0},
+        distribution={"Ib": Constant(value=200e-9)},
+        metrics=metrics,
+        spec={"v": ("<", 1)},
+        n_mc=500, seed=0,
+        temperature=Constant(value=85.0),     # +60°C → 6 doublings
+        temperature_coefficients={"Ib": Exponential(factor=2.0, per_K=10.0)},
+        temperature_nominal=25,
+    )
+    Ib_values = [v for v, T in captured[1:]]
+    expected = 200e-9 * (2.0 ** 6)         # 12.8 µA
+    assert Ib_values[0] == pytest.approx(expected, rel=1e-9)
+    # All samples identical (Constant sampler + Constant T)
+    assert max(Ib_values) - min(Ib_values) < 1e-15
+
+
+def test_exponential_tempco_zero_at_T_nominal():
+    """At T = T_nominal, factor^0 = 1, so the value is unchanged."""
+    from utils.tolerance import Exponential
+
+    captured = []
+    def metrics(Ib, T):
+        captured.append(Ib)
+        return {"v": Ib}
+
+    analyze(
+        nominal_values={"Ib": 200e-9},
+        passive_tolerances={"I": 0.0},
+        distribution={"Ib": Constant(value=200e-9)},
+        metrics=metrics,
+        spec={"v": ("<", 1)},
+        n_mc=200, seed=0,
+        temperature=Constant(value=25.0),
+        temperature_coefficients={"Ib": Exponential(factor=2.0, per_K=10.0)},
+        temperature_nominal=25,
+    )
+    Ib_values = captured[1:]
+    assert all(v == pytest.approx(200e-9, rel=1e-12) for v in Ib_values)
+
+
+# ---------- DEVICE_TEMPCOS auto-merge ----------
+
+def test_device_tempcos_auto_applied_for_active_devices():
+    """When active_devices includes a part with library tempcos, those
+    tempcos must be applied automatically without the user passing them
+    via temperature_coefficients."""
+    from utils.tolerance import Exponential
+    from utils.tolerance.devices import DEVICE_TEMPCOS
+
+    # Sanity: NE5532 has Ib in its tempco library
+    assert "Ib" in DEVICE_TEMPCOS["NE5532"]
+    assert isinstance(DEVICE_TEMPCOS["NE5532"]["Ib"], Exponential)
+
+    captured = []
+    def metrics(R1, U1_Vos, U1_Ib, U1_Avol, U1_GBW, T):
+        captured.append((U1_Ib, T))
+        return {"ib": U1_Ib}
+
+    analyze(
+        nominal_values={"R1": 1e3},   # placeholder; analyze requires ≥1 passive
+        passive_tolerances={"R": 0.0},
+        active_devices={"U1": "NE5532"},
+        distribution={"U1_Vos": Constant(value=0.0),
+                       "U1_Ib": Constant(value=200e-9),
+                       "U1_Avol": Constant(value=1e5),
+                       "U1_GBW": Constant(value=10e6)},
+        metrics=metrics,
+        spec={"ib": ("<", 1)},
+        n_mc=200, seed=0,
+        temperature=Constant(value=85.0),     # +60°C → 6 doublings
+        temperature_nominal=25,
+        # No temperature_coefficients passed — must come from library
+    )
+    Ib_values = [v for v, T in captured[1:]]
+    expected = 200e-9 * (2.0 ** 6)
+    assert Ib_values[0] == pytest.approx(expected, rel=1e-9)
+
+
+def test_user_tempco_overrides_device_library():
+    """User-supplied temperature_coefficients must override the
+    DEVICE_TEMPCOS library entry for the same name."""
+    from utils.tolerance import Exponential
+
+    captured = []
+    def metrics(R1, U1_Vos, U1_Ib, U1_Avol, U1_GBW, T):
+        captured.append(U1_Ib)
+        return {"ib": U1_Ib}
+
+    analyze(
+        nominal_values={"R1": 1e3},   # placeholder; analyze requires ≥1 passive
+        passive_tolerances={"R": 0.0},
+        active_devices={"U1": "NE5532"},
+        distribution={"U1_Vos": Constant(value=0.0),
+                       "U1_Ib": Constant(value=200e-9),
+                       "U1_Avol": Constant(value=1e5),
+                       "U1_GBW": Constant(value=10e6)},
+        metrics=metrics,
+        spec={"ib": ("<", 1)},
+        n_mc=100, seed=0,
+        temperature=Constant(value=85.0),
+        temperature_nominal=25,
+        # Override: tripling per 10°C instead of doubling
+        temperature_coefficients={"U1_Ib": Exponential(factor=3.0, per_K=10.0)},
+    )
+    Ib_values = captured[1:]
+    expected = 200e-9 * (3.0 ** 6)         # 6 tripling intervals
+    assert Ib_values[0] == pytest.approx(expected, rel=1e-9)
+
+
+def test_expand_active_tempcos_skips_parts_without_tempco():
+    """Parts with no DEVICE_TEMPCOS entry (e.g. 2N3904 — handled
+    natively by ngspice .temp) contribute nothing to the expansion."""
+    from utils.tolerance.devices import expand_active_tempcos
+
+    tcs = expand_active_tempcos({"U1": "NE5532", "Q1": "2N3904"})
+    # NE5532 entries appear, 2N3904 does not
+    assert "U1_Vos" in tcs
+    assert "U1_Ib" in tcs
+    assert "U1_Avol" in tcs
+    assert "U1_GBW" in tcs
+    assert not any(k.startswith("Q1_") for k in tcs)

@@ -1,15 +1,27 @@
-"""Temperature analysis on three demo circuits — SK filter, LDO
-load-step ringing, LDO Middlebrook phase margin.
+"""Temperature analysis on four demo circuits — SK filter, Wien
+oscillator, LDO load-step ringing, LDO Middlebrook phase margin.
 
 Each section uses ``temperature_sweep`` (MC at each of many fixed T
 points) to map yield(T) and metric(T) curves across the industrial
 operating range. Saves a chart per circuit.
+
+The LDO sweeps and Wien sweep use ``active_devices=`` so the
+NE5532 op-amp's library tempcos (Vos drift, bipolar Ib doubling,
+Avol/GBW drift) and the 2N3904's native ngspice ``.temp`` model
+both contribute. The Wien chart is the cleanest demonstration that
+the diode-clamp Wien topology is robust against active-device
+temperature drift; the LDO charts show the marginal-stability
+regulator's loop dynamics shifting with T.
 
 Run all together to see the variety of temperature signatures:
 
 - **SK filter** (closed-form): tempco mismatch between R and C
   drifts the fc mean linearly with T. Q is invariant (it's a ratio
   of components). X7R caps + metal-film R is the killer.
+- **Wien** (ngspice tran with lock-in THD): the diode clamp
+  decouples loop gain from active-device drift. f0 drift comes
+  from passive R/C tempco; vpp and THD show small but measurable
+  active-tempco signatures.
 - **LDO ringing** (ngspice tran with .temp): cold-corner is worse.
   BJT V_BE/β drift change loop dynamics; ring_rms increases at
   low T, dragging yield down ~14 percentage points.
@@ -37,6 +49,7 @@ from utils.tolerance import (
     NgspiceBackend, CachedBackend,
     temperature_sweep,
     RelativeGaussian, RelativeUniform, Uniform, Constant,
+    lockin_thd_block,
 )
 
 
@@ -137,21 +150,29 @@ Rbot  fb    0     {{Rbot}}
 
 
 def _ldo_distribution_kw():
-    """Common per-component samplers for the LDO sweep."""
+    """Common per-component samplers for the LDO sweep.
+
+    Uses ``active_devices`` so the NE5532's DEVICE_TEMPCOS (Vos
+    Additive drift, bipolar Ib doubling, Avol/GBW drift) and the
+    2N3904's native ngspice ``.temp`` behaviour both contribute.
+    Per-component overrides on Resr (uniform over a wide range) and
+    on the slow op-amp's GBW (200kHz nominal, ±20%) capture the
+    chosen marginal design rather than the textbook NE5532 spread."""
     return dict(
         nominal_values={"Rb": 100, "Cout": 470e-6, "Resr": 1e-3,
-                        "Rtop": 10e3, "Rbot": 10e3,
-                        "U1_Vos": 0.0, "U1_Ib": 200e-9,
-                        "U1_Avol": 100e3, "U1_GBW": 300e3, "Q1_BF": 250},
+                        "Rtop": 10e3, "Rbot": 10e3},
         passive_tolerances={"R": 0.01, "C": 0.20},
+        active_devices={"U1": "NE5532", "Q1": "2N3904"},
         distribution={
+            # Override the curated NE5532 GBW: this design uses a
+            # deliberately slow op-amp (300 kHz) to make the loop
+            # marginal — not the typical 10 MHz NE5532.
             "U1_GBW":  RelativeGaussian(nominal_value=300e3, tol=0.20),
             "U1_Avol": RelativeUniform(nominal_value=100e3, tol=0.50),
-            "U1_Vos":  Constant(value=0.0),
-            "U1_Ib":   Constant(value=200e-9),
-            "Q1_BF":   Uniform(lo=100, hi=400),
             "Resr":    Uniform(lo=0.5e-3, hi=5e-3),
         },
+        # Passive tempcos add to the device-library tempcos that
+        # active_devices=NE5532 brings in automatically.
         temperature_coefficients={"R": 50e-6, "C": 200e-6},
     )
 
@@ -181,7 +202,6 @@ print v_set over_mv under_mv ring_mv
                               outputs=["v_set","over_mv","under_mv","ring_mv"],
                               timeout=20)
     cache = "/tmp/temp_ldo_tran.sqlite"
-    if os.path.exists(cache): os.remove(cache)
     cached = CachedBackend(backend, path=cache)
     metrics_fn = lambda **v: cached(**v)
     metrics_fn.signature = lambda: cached.signature
@@ -246,7 +266,6 @@ print fc pm
     )
     backend = NgspiceBackend(template=tpl, outputs=["fc", "pm"], timeout=10)
     cache = "/tmp/temp_ldo_pm.sqlite"
-    if os.path.exists(cache): os.remove(cache)
     cached = CachedBackend(backend, path=cache)
     metrics_fn = lambda **v: cached(**v)
     metrics_fn.signature = lambda: cached.signature
@@ -293,11 +312,176 @@ print fc pm
     print("  saved /tmp/temp_ldo_pm.png")
 
 
+def _wien_template():
+    """Wien netlist with .temp injection and lock-in THD measurement.
+    Same topology as wien_thd_demo.py, with one change: ``.temp {T}``
+    so ngspice models for Q1 (2N3904) reflect ambient T."""
+    lockin = lockin_thd_block(
+        signal="v(out)",
+        window=(80e-3, 100e-3),
+        f0_init_expr="1/(t2-t1)",
+    )
+    return f"""* Wien bridge oscillator with lock-in THD measurement and .temp
+.include {UOPAMP}
+.temp {{T}}
+
+R1   out  ns      {{R1}}
+C1   ns   np      {{C1}}  IC=0
+R2   np_eff 0     {{R2}}
+C2   np_eff 0     {{C2}}  IC=10m
+
+Vos1 np   np_eff  {{U1_Vos}}
+
+Rg   nn   0       {{Rg}}
+Rfa  nn   fb      {{Rfa}}
+Rfb  fb   out     {{Rfb}}
+
+Q1   fb   fb   out  Q2N3904
+Q2   out  out  fb   Q2N3904
+
+Vcc  vcc 0  15
+Vee  vee 0 -15
+
+XU1  np nn vcc vee out uopamp_lvl2
++    Avol={{U1_Avol}} GBW={{U1_GBW}} Rin=100k Rout=30 Iq=8m
++    Ilimit=1 Vrail=1.4 Vmax=40
+
+.model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF={{Q1_BF}}
++ NE=1.259 ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0
++ IKR=0 RC=1 CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p
++ MJE=.2593 VJE=.75 TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
+
+.tran 1u 100m UIC
+
+.control
+run
+
+* Coarse f0 from zero-crossing period (10 cycles apart for accuracy)
+meas tran t1 when v(out)=0 fall=20
+meas tran t2 when v(out)=0 fall=21
+
+* Peak-to-peak amplitude in the same window the lock-in uses
+meas tran amp_max max v(out) from=80m to=100m
+meas tran amp_min min v(out) from=80m to=100m
+
+{lockin}
+.endc
+.end
+"""
+
+
+def chart_wien():
+    """Wien bridge oscillator temperature sweep.
+
+    The diode-clamp Wien topology is famously robust against active-
+    device variation: the oscillation frequency is set by R1·R2·C1·C2,
+    and the amplitude is regulated by the diode clamp rather than the
+    op-amp loop gain. Library tempcos for the NE5532 (Vos drift, Ib
+    doubling, Avol/GBW drift) and the 2N3904's native ngspice .temp
+    behaviour both contribute, but the headline metric (f0) only
+    drifts with the passive R/C tempco mismatch."""
+    template = _wien_template()
+    backend = NgspiceBackend(
+        template=template,
+        outputs=["t1", "t2", "amp_max", "amp_min",
+                 "f_new", "a_rms", "h_rms", "thd", "thd_db"],
+        timeout=20,
+    )
+    cache = "/tmp/temp_wien.sqlite"
+    cached = CachedBackend(backend, path=cache)
+
+    def metrics(**v):
+        r = cached(**v)
+        return {
+            "f0":     r.get("f_new", float("nan")),
+            "v_pp":   r["amp_max"] - r["amp_min"],
+            "thd_db": r["thd_db"],
+        }
+    metrics.signature = lambda: cached.signature
+
+    T_points = list(range(-40, 86, 25))     # 6 points: -40, -15, 10, 35, 60, 85
+    print(f"Wien oscillator temperature sweep "
+          f"({len(T_points)} T-points × 100 MC) ...")
+    t0 = time.perf_counter()
+    sweep = temperature_sweep(
+        temperature_points=T_points,
+        nominal_values={
+            "R1": 10e3, "R2": 10e3,
+            "C1": 15.915e-9, "C2": 15.915e-9,
+            "Rg": 10e3, "Rfa": 10e3, "Rfb": 12e3,
+        },
+        passive_tolerances={"R": 0.05, "C": 0.10},
+        active_devices={"U1": "NE5532", "Q1": "2N3904"},
+        metrics=metrics,
+        spec={
+            "f0":     ("within", 0.05),
+            "v_pp":   ("within", 0.10),
+            "thd_db": ("<", -20),
+        },
+        n_mc=100, seed=4242, workers=8,
+        # Passive tempcos: NP0 ceramic + metal-film R combo (precision
+        # build), so the f0 drift signature is small. Switch to
+        # ``"C": 1500e-6`` (X7R) to see a much steeper f0(T) curve.
+        temperature_coefficients={"R": 50e-6, "C": 30e-6},
+    )
+    print(f"  {time.perf_counter()-t0:.1f}s")
+
+    Ts = np.array([T for T, _ in sweep.corners])
+    yields = np.array([r.yield_pct for _, r in sweep.corners])
+    f0_mean = np.array([r.metric_stats["f0"].mean for _, r in sweep.corners])
+    vpp_mean = np.array([r.metric_stats["v_pp"].mean for _, r in sweep.corners])
+    thd_mean = np.array([r.metric_stats["thd_db"].mean for _, r in sweep.corners])
+    f0_nominal = sweep.corners[0][1].nominal_metrics["f0"]
+    vpp_nominal = sweep.corners[0][1].nominal_metrics["v_pp"]
+
+    fig, axes = plt.subplots(4, 1, figsize=(10, 11), sharex=True)
+    ax_y, ax_f, ax_v, ax_t = axes
+    ax_y.plot(Ts, yields, color="C2", lw=2, marker="o", markersize=5)
+    ax_y.axvline(25, color="0.5", linestyle=":", lw=0.6)
+    ax_y.set_ylabel("Yield (%)")
+    ax_y.set_title("Wien oscillator yield over T  (spec: f0 ±5%, "
+                   "v_pp ±10%, THD < −20 dB)")
+    ax_y.grid(True, alpha=0.3); ax_y.set_ylim(-3, 103)
+
+    ax_f.plot(Ts, f0_mean, color="C2", lw=2, marker="o", markersize=4)
+    ax_f.axhline(f0_nominal, color="black", linestyle="--", lw=0.7,
+                 label=f"nominal {f0_nominal:.1f} Hz")
+    for v in (f0_nominal*0.95, f0_nominal*1.05):
+        ax_f.axhline(v, color="#d62728", linestyle=":", lw=1, alpha=0.7)
+    ax_f.set_ylabel("f0 mean [Hz]")
+    ax_f.legend(fontsize=9); ax_f.grid(True, alpha=0.3)
+
+    # v_pp panel: this is the binding metric. The 2N3904 diode-clamp
+    # V_BE drops ~2 mV/°C with T, shifting the clamp voltage and so
+    # v_pp. ngspice .temp handles BJT V_BE drift natively — no library
+    # tempco needed for this effect.
+    ax_v.plot(Ts, vpp_mean, color="C0", lw=2, marker="o", markersize=4)
+    ax_v.axhline(vpp_nominal, color="black", linestyle="--", lw=0.7,
+                 label=f"nominal {vpp_nominal:.3f} V")
+    for v in (vpp_nominal*0.90, vpp_nominal*1.10):
+        ax_v.axhline(v, color="#d62728", linestyle=":", lw=1, alpha=0.7)
+    ax_v.set_ylabel("v_pp mean [V]")
+    ax_v.legend(fontsize=9); ax_v.grid(True, alpha=0.3)
+
+    ax_t.plot(Ts, thd_mean, color="C3", lw=2, marker="o", markersize=4,
+              label="THD+N mean")
+    ax_t.axhline(-20, color="#d62728", linestyle=":", lw=1,
+                 label="spec −20 dB")
+    ax_t.set_xlabel("ambient T [°C]")
+    ax_t.set_ylabel("THD+N [dB]")
+    ax_t.legend(fontsize=9); ax_t.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig("/tmp/temp_wien.png", dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    print("  saved /tmp/temp_wien.png")
+
+
 def main():
     chart_sk()
+    chart_wien()
     chart_ldo_ringing()
     chart_ldo_pm()
-    print("\nAll three temperature charts saved at /tmp/temp_*.png")
+    print("\nAll four temperature charts saved at /tmp/temp_*.png")
 
 
 if __name__ == "__main__":

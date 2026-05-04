@@ -30,11 +30,14 @@ from .samplers import (
     RelativeGaussian, RelativeUniform, AbsoluteGaussian,
     Uniform, LogUniform, Constant,
 )
-from .devices import DEVICES, expand_active_devices
+from .devices import (
+    DEVICES, DEVICE_TEMPCOS,
+    expand_active_devices, expand_active_tempcos,
+)
 from .spice_helpers import lockin_thd_block
 from .robust_ranker import Robust
 from .temperature import analyze_corners, temperature_sweep, CornerReport
-from .tempco import Additive
+from .tempco import Additive, Exponential
 
 __all__ = [
     "analyze",
@@ -42,9 +45,10 @@ __all__ = [
     "NgspiceBackend", "RemoteNgspiceBackend", "CachedBackend",
     "Sampler", "RelativeGaussian", "RelativeUniform",
     "AbsoluteGaussian", "Uniform", "LogUniform", "Constant",
-    "DEVICES", "expand_active_devices",
+    "DEVICES", "DEVICE_TEMPCOS",
+    "expand_active_devices", "expand_active_tempcos",
     "lockin_thd_block",
     "Robust",
     "analyze_corners", "temperature_sweep", "CornerReport",
-    "Additive",
+    "Additive", "Exponential",
 ]

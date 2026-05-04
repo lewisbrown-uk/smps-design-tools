@@ -9,22 +9,32 @@ Both examples need `ngspice` on `PATH` and use the bundled
 
 ## `temperature_circuits.py`
 
-Temperature analysis on three demo circuits:
+Temperature analysis on four demo circuits:
 
 - **Sallen-Key Butterworth** (closed-form): X7R ceramic + metal-film
   R combo drops yield to 0% at corners; precision parts (C0G + metal-
   film) are flat 100% across -40 to +85°C. Q is invariant under
   proportional tempco scaling (it's a ratio); only fc drifts.
-- **Marginal LDO load-step ringing** (ngspice tran with `.temp`):
-  yield drops 14 percentage points from +80°C (96%) to -40°C (82%).
-  Cold-corner is the binding case — BJT V_BE/β temperature behaviour
-  changes loop dynamics.
-- **Marginal LDO Middlebrook PM** (ngspice .ac with `.temp`):
-  PM mean rises monotonically with T (4.05° → 4.54°), confirming
-  the time-domain finding. Cross-validates that cold is binding.
+- **Wien oscillator** (ngspice tran with lock-in THD + `.temp`): the
+  diode-clamp Wien topology is famously robust against active-device
+  variation. The library tempcos for the NE5532 (Vos additive drift,
+  Ib doubling per 10°C, Avol/GBW drift) are auto-applied via
+  `active_devices=`, but the headline f0 metric only drifts with the
+  passive R/C tempco mismatch.
+- **Marginal LDO load-step ringing** (ngspice tran with `.temp` +
+  NE5532 library tempcos): yield drops 19 percentage points from
+  +80°C (95%) to -40°C (76%) — steeper than the LDO without active
+  tempcos because Avol/GBW drift now compounds with the BJT V_BE/β
+  temperature behaviour. Cold-corner ringing RMS mean is roughly
+  2× the hot-corner mean.
+- **Marginal LDO Middlebrook PM** (ngspice .ac with `.temp` + NE5532
+  library tempcos): PM rises monotonically with T, confirming the
+  time-domain finding. Cross-validates that cold is binding.
 
-Saves three charts at `/tmp/temp_*.png`. Closed-form section is
-instant; the two ngspice sweeps take ~65s + ~26s on a laptop.
+Saves four charts at `/tmp/temp_*.png`. Closed-form section is
+instant; the three ngspice sweeps take ~3 min + ~65s + ~26s on a
+laptop. Re-runs are cheap because each ngspice sweep persists its
+results to a sqlite cache (`/tmp/temp_*.sqlite`).
 
 ## `temperature_demo.py`
 

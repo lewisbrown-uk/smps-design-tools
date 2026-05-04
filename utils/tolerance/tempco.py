@@ -22,6 +22,32 @@ import numpy as np
 
 
 @dataclass
+class Exponential:
+    """Exponential tempco: ``value(T) = value · factor ^ ((T - T_nominal)/per_K)``.
+
+    Headline use case: bipolar op-amp input bias current, which doubles
+    roughly every 10°C — ``Exponential(factor=2, per_K=10)``. CMOS
+    leakage current has a similar pattern but with a different per_K
+    (typically 8-10°C as well, but the absolute current at room temp
+    is much smaller).
+
+    Args:
+        factor: scale factor over each ``per_K`` of warming. ``2`` for
+            doubling-every-N-degrees patterns. Use ``< 1`` for params
+            that decrease with temperature.
+        per_K: temperature interval over which one ``factor`` of
+            scaling happens.
+    """
+    factor: float
+    per_K: float
+
+    def apply(self, sample_array: np.ndarray, T_samples: np.ndarray,
+              T_nominal: float, rng: np.random.Generator) -> np.ndarray:
+        scale = self.factor ** ((T_samples - T_nominal) / self.per_K)
+        return sample_array * scale
+
+
+@dataclass
 class Additive:
     """Additive tempco with per-part drift coefficient.
 

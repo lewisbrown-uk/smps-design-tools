@@ -24,6 +24,7 @@ build per-parameter samplers manually and pass them via
 from .samplers import (
     AbsoluteGaussian, RelativeGaussian, LogUniform, Uniform,
 )
+from .tempco import Additive, Exponential
 
 
 DEVICES = {
@@ -65,6 +66,67 @@ DEVICES = {
         "Vto":  Uniform(lo=-2.3, hi=-0.4),
     },
 }
+
+
+DEVICE_TEMPCOS = {
+    # Op-amp tempcos. Datasheet typ values; users can override via
+    # ``temperature_coefficients={"U1_Vos": ...}``.
+    "NE5532": {
+        # Vos drift typ ±5 µV/°C — Additive: nominal Vos is zero so the
+        # multiplicative form is wrong; the per-part drift coefficient is
+        # itself a random variable.
+        "Vos":  Additive(sigma=5e-6),
+        # Bipolar Ib doubles roughly every 10°C — Exponential model.
+        "Ib":   Exponential(factor=2.0, per_K=10.0),
+        # Avol drops with T (typ -2000 ppm/°C); GBW rolls off slightly.
+        # Multiplicative scalars — these are well-behaved non-zero
+        # nominal values where ratiometric drift is the right shape.
+        "Avol": -2000e-6,
+        "GBW":  -500e-6,
+    },
+    "TLV9104": {
+        # CMOS — lower Vos drift, much smaller Ib but still doubles
+        # with T. Typ Vos drift ~1 µV/°C, max ~5 µV/°C → σ ≈ 2 µV/°C.
+        "Vos":  Additive(sigma=2e-6),
+        "Ib":   Exponential(factor=2.0, per_K=10.0),
+        "Avol": -1500e-6,
+        "GBW":  -500e-6,
+    },
+    # 2N3904 BJT and J201 JFET: their temperature dependence (V_BE,
+    # β, Vto, Idss) is handled natively by ngspice when ``.temp`` is
+    # injected. Don't double-count by adding library tempcos here —
+    # that would compound on top of what the device model already
+    # does in the simulator. For the closed-form backend, BJT/JFET
+    # tempcos would need adding manually if the metric uses them.
+}
+
+
+def expand_active_tempcos(active_devices, library=None):
+    """Expand ``{instance_name: part_number}`` into per-parameter
+    tempcos keyed by ``{instance}_{param}``, drawing from
+    ``DEVICE_TEMPCOS``.
+
+    Args:
+        active_devices: same ``{instance: part}`` mapping passed to
+            ``expand_active_devices``.
+        library: Optional override for the tempco library. Defaults to
+            the curated ``DEVICE_TEMPCOS`` dict.
+
+    Returns:
+        ``{f"{instance}_{param}": tempco}`` for every instance/param
+        whose part has an entry in the library. Parts with no library
+        entry (e.g. ``2N3904``) contribute nothing — the user can still
+        supply tempcos for them via ``temperature_coefficients`` if
+        the metric needs them outside ngspice.
+    """
+    library = library if library is not None else DEVICE_TEMPCOS
+    tcs = {}
+    for instance, part in active_devices.items():
+        if part not in library:
+            continue
+        for param, tc in library[part].items():
+            tcs[f"{instance}_{param}"] = tc
+    return tcs
 
 
 def expand_active_devices(active_devices, library=None):

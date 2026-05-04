@@ -5,8 +5,8 @@ import numpy as np
 from .report import YieldReport, MetricStats
 from .samplers import (Sampler, RelativeGaussian, RelativeUniform,
                        AbsoluteGaussian)
-from .devices import expand_active_devices
-from .tempco import Additive
+from .devices import expand_active_devices, expand_active_tempcos
+from .tempco import Additive, Exponential
 
 
 _VALID_OPS = {"<", "<=", ">", ">=", "within", "within_db"}
@@ -278,8 +278,8 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
             integrated over (e.g. unconditioned ambient with a wide
             distribution).
         temperature_coefficients: ``{name_or_prefix: tempco}`` —
-            per-component tempco model. Lookup order: full name,
-            then SPICE prefix. Two forms accepted:
+            per-component tempco overrides. Lookup order: full name,
+            then SPICE prefix. Three forms accepted:
 
             - **Bare scalar** (e.g. ``50e-6`` for 50 ppm/°C):
               multiplicative drift, ``value(T) = value · (1 +
@@ -287,11 +287,23 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
               and op-amp Avol/GBW.
             - **``Additive(sigma=...)``** instance: additive drift
               with per-part drift coefficient sampled from
-              ``Normal(0, sigma)``. ``value(T) = value + drift_i ·
+              ``Normal(mean, sigma)``. ``value(T) = value + drift_i ·
               ΔT``. Use for parameters whose nominal is zero or
               whose drift coefficient varies part-to-part — most
-              notably op-amp Vos (NE5532: ``Additive(sigma=5e-6)``
-              models the typ ±5 µV/°C drift spec).
+              notably op-amp Vos.
+            - **``Exponential(factor, per_K)``** instance: exponential
+              drift, ``value(T) = value · factor ^ (ΔT / per_K)``. Use
+              for bipolar Ib (doubles every ~10°C → ``Exponential(2,
+              10)``) and similar physics.
+
+            When ``active_devices`` is set, tempcos for the named parts
+            come from ``DEVICE_TEMPCOS`` automatically (NE5532 Vos
+            drift, bipolar Ib doubling, Avol/GBW drift, etc.). Entries
+            here override the library defaults — useful for studying
+            parts where the typical drift differs from the curated
+            value or for adding tempcos to params the library skips
+            (BJT BF, JFET Vto — both handled natively by ngspice
+            ``.temp`` so the library doesn't double-count them).
         temperature_nominal: Reference °C where tempco = 0 (default
             25). Only meaningful when ``temperature`` is set.
         workers: Concurrent metric evaluations via
@@ -451,14 +463,20 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
     # a random variable.
     if temperature is not None:
         T_samples = temperature.sample(rng, n_mc)
-        tcs = temperature_coefficients or {}
+        # Merge: device-library tempcos provide sensible defaults for
+        # active params; user-supplied temperature_coefficients overrides
+        # them (so passing {"U1_Vos": Additive(sigma=10e-6)} swaps the
+        # library default cleanly).
+        tcs = dict(expand_active_tempcos(active_devices)) if active_devices else {}
+        if temperature_coefficients:
+            tcs.update(temperature_coefficients)
         for j, name in enumerate(names):
             tc = tcs.get(name)
             if tc is None:
                 tc = tcs.get(name[0])
             if tc is None:
                 continue
-            if isinstance(tc, Additive):
+            if isinstance(tc, (Additive, Exponential)):
                 samples[:, j] = tc.apply(samples[:, j], T_samples,
                                           temperature_nominal, rng)
             else:
