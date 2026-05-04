@@ -62,12 +62,15 @@ def report(tube, res):
     print(f"\n=== {m.TUBES[tube]['name']} (last 100 ms steady-state) ===")
     t = res["t"]
     ss = t > t[-1] - 0.1
+    tt = t[ss]; dur = tt[-1] - tt[0]
     for name in ["v(v_osc)", "v(v_drv_atten)", "v(v_ap)",
                  "v(v_osc_drive)", "v(v_ap_drive)",
                  "v(n_buf_osc_out)", "v(n_buf_ap_out)",
                  "v(n_ap_plus)", "v(v_int_out)", "v(v_ctl)"]:
         s = res[name][ss]
-        print(f"  {name:<22s} mean={np.mean(s):+.4f}  max={np.max(s):+.4f}  min={np.min(s):+.4f}  pp={(np.max(s)-np.min(s)):.4f}")
+        # Time-weighted mean -- np.mean is biased on ngspice variable-timestep data.
+        twm = np.trapezoid(s, tt) / dur
+        print(f"  {name:<22s} mean={twm:+.4f}  max={np.max(s):+.4f}  min={np.min(s):+.4f}  pp={(np.max(s)-np.min(s)):.4f}")
 
 
 def main():

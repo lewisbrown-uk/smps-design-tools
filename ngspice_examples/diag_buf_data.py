@@ -71,8 +71,11 @@ wrdata {dat.as_posix()} v_in v_op v_out v_qbn v_qbp v_pos v_neg
     vn   = v_neg[mask]
     vbe_npn = qbn - vout    # NPN V_BE
     veb_pnp = vout - qbp    # PNP V_EB
+    # Time-weighted mean -- np.mean is biased on ngspice variable-timestep data.
+    dur = ts[-1] - ts[0]
+    def twm(x): return np.trapezoid(x, ts) / dur
     print(f"=== {spec['name']} (last 5 ms steady-state, n={len(ts)} samples) ===\n")
-    print(f"Supply rails: v_buf = {np.mean(vp):+.3f}V, -v_buf = {np.mean(vn):+.3f}V\n")
+    print(f"Supply rails: v_buf = {twm(vp):+.3f}V, -v_buf = {twm(vn):+.3f}V\n")
     for label, x in [
         ("v_drv_atten",       vin),
         ("n_buf_osc_out",     vop),
@@ -84,19 +87,21 @@ wrdata {dat.as_posix()} v_in v_op v_out v_qbn v_qbp v_pos v_neg
     ]:
         i_max = int(np.argmax(x))
         i_min = int(np.argmin(x))
-        print(f"  {label:35s}  mean={np.mean(x):+.4f}  max={np.max(x):+.4f} @ t-rel={ts[i_max]-ts[0]:.5f}s   min={np.min(x):+.4f} @ t-rel={ts[i_min]-ts[0]:.5f}s")
+        print(f"  {label:35s}  mean={twm(x):+.4f}  max={np.max(x):+.4f} @ t-rel={ts[i_max]-ts[0]:.5f}s   min={np.min(x):+.4f} @ t-rel={ts[i_min]-ts[0]:.5f}s")
 
-    # Op-amp rail saturation: how often does v_op come within 0.1V of either rail?
-    v_pos_mean = np.mean(vp)
-    v_neg_mean = np.mean(vn)
-    near_pos = np.mean(vop > v_pos_mean - 0.1)
-    near_neg = np.mean(vop < v_neg_mean + 0.1)
+    # Op-amp rail saturation: what FRACTION OF TIME does v_op come within 0.1V of either rail?
+    # Use trapezoidal integration of the boolean indicator -- np.mean overweights
+    # the steep transitions where samples cluster.
+    v_pos_mean = twm(vp)
+    v_neg_mean = twm(vn)
+    near_pos = twm((vop > v_pos_mean - 0.1).astype(float))
+    near_neg = twm((vop < v_neg_mean + 0.1).astype(float))
     print(f"\n  Op-amp output near +v_buf rail (within 0.1V): {near_pos*100:.2f}% of cycle")
     print(f"  Op-amp output near -v_buf rail (within 0.1V): {near_neg*100:.2f}% of cycle")
 
-    # V_BE NPN reverse bias episodes
-    rev_npn = np.mean(vbe_npn < 0)
-    rev_pnp = np.mean(veb_pnp < 0)
+    # V_BE NPN reverse bias episodes (fraction of time, not fraction of samples)
+    rev_npn = twm((vbe_npn < 0).astype(float))
+    rev_pnp = twm((veb_pnp < 0).astype(float))
     print(f"\n  V_BE NPN reverse-biased (V_BE < 0): {rev_npn*100:.2f}% of cycle")
     print(f"  V_EB PNP reverse-biased (V_EB < 0): {rev_pnp*100:.2f}% of cycle")
     if rev_npn > 0:

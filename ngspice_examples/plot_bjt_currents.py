@@ -114,11 +114,14 @@ def plot_tube(tube, r):
     out = HERE / f"bjt_currents_{tube}.png"
     fig.savefig(out, dpi=120); plt.close(fig)
     print(f"Wrote {out}")
-    # Also print per-BJT mean and peak
-    print(f"  Q_o_npn:   mean={np.mean(r['ic_o_npn'][mask])*1e3:+.2f} mA   peak={np.max(r['ic_o_npn'][mask])*1e3:+.2f} mA")
-    print(f"  Q_o_pnp:  -mean={np.mean(-r['ic_o_pnp'][mask])*1e3:+.2f} mA  -peak={np.max(-r['ic_o_pnp'][mask])*1e3:+.2f} mA")
-    print(f"  Q_a_npn:   mean={np.mean(r['ic_a_npn'][mask])*1e3:+.2f} mA   peak={np.max(r['ic_a_npn'][mask])*1e3:+.2f} mA")
-    print(f"  Q_a_pnp:  -mean={np.mean(-r['ic_a_pnp'][mask])*1e3:+.2f} mA  -peak={np.max(-r['ic_a_pnp'][mask])*1e3:+.2f} mA")
+    # Also print per-BJT mean and peak. Use time-weighted mean
+    # (np.mean is biased on ngspice variable-timestep data).
+    tw = r["t"][mask]; dur_w = tw[-1] - tw[0]
+    def twm(x): return np.trapezoid(x[mask], tw) / dur_w
+    print(f"  Q_o_npn:   mean={twm(r['ic_o_npn'])*1e3:+.2f} mA   peak={np.max(r['ic_o_npn'][mask])*1e3:+.2f} mA")
+    print(f"  Q_o_pnp:  -mean={twm(-r['ic_o_pnp'])*1e3:+.2f} mA  -peak={np.max(-r['ic_o_pnp'][mask])*1e3:+.2f} mA")
+    print(f"  Q_a_npn:   mean={twm(r['ic_a_npn'])*1e3:+.2f} mA   peak={np.max(r['ic_a_npn'][mask])*1e3:+.2f} mA")
+    print(f"  Q_a_pnp:  -mean={twm(-r['ic_a_pnp'])*1e3:+.2f} mA  -peak={np.max(-r['ic_a_pnp'][mask])*1e3:+.2f} mA")
 
 
 def main():

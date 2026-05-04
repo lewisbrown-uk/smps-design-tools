@@ -131,9 +131,11 @@ def main():
     P_smooth_uni = np.convolve(P_uni, np.ones(win_n)/win_n, mode="same")
     P_smooth = np.interp(t, t_uni, P_smooth_uni)
 
-    # True power average over the last 10 cycles (avoids boxcar edge bias)
+    # True power average over the last 10 cycles (avoids boxcar edge bias).
+    # Time-weighted mean -- np.mean is biased on ngspice variable-timestep data.
     sel_late = t > T_END - 10 / F0
-    P_avg_settled = float(np.mean(P_inst[sel_late]))
+    ts_late = t[sel_late]; dur_late = ts_late[-1] - ts_late[0]
+    P_avg_settled = float(np.trapezoid(P_inst[sel_late], ts_late) / dur_late)
 
     print(f"\nSettled values at t={t[-1]*1e3:.0f} ms:")
     print(f"  T   = {T[-1]:.2f} K   (target {T_OP_TARGET:.0f} K)")

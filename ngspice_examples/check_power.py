@@ -124,9 +124,14 @@ wrdata {dat.as_posix()} {wrdata_args}
         p_pos = np.where(p > 0, p, 0.0)
         # Steady-state window: last 100 ms
         ss = t > t[-1] - 0.1
+        # Time-weighted mean -- np.mean is biased on ngspice variable-timestep
+        # data because samples cluster at high-dV/dt regions. Trapezoidal
+        # integration weights each sample by its dt and gives the true average.
+        t_ss = t[ss]
+        ss_dur = t_ss[-1] - t_ss[0]
         out[name] = {
             "p_peak":     float(np.max(p_pos)),
-            "p_ss_mean":  float(np.mean(p_pos[ss])),
+            "p_ss_mean":  float(np.trapezoid(p_pos[ss], t_ss) / ss_dur),
             "p_ss_max":   float(np.max(p_pos[ss])),
             "rating":     rating,
         }

@@ -80,8 +80,11 @@ def plot_tube(tube, r):
     t_start = T_END - N_PERIODS * T_PERIOD
     mask = (t >= t_start) & (t <= T_END)
     ts = (t[mask] - t_start) * 1000
-    rail_p = np.mean(r["v_rail_p"][mask])
-    rail_n = np.mean(r["v_rail_n"][mask])
+    # Time-weighted mean for rail labels -- np.mean is biased on
+    # ngspice variable-timestep data.
+    tw = t[mask]; dur_w = tw[-1] - tw[0]
+    rail_p = float(np.trapezoid(r["v_rail_p"][mask], tw) / dur_w)
+    rail_n = float(np.trapezoid(r["v_rail_n"][mask], tw) / dur_w)
     spec = m.TUBES[tube]
     fig, axes = plt.subplots(3, 1, figsize=(11, 9), sharex=True)
     # Top: v_in (scaled), v_op, v_out

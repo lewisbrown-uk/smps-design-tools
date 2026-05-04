@@ -1183,10 +1183,14 @@ def main():
             for k in ("R_op", "V_op", "T_op", "P_op", "r_amb",
                       "r_top_ref", "r_bot_ref", "r_sense"):
                 m[k] = spec[k]
-            # V_filament RMS over the last 50 ms
+            # V_filament RMS over the last 50 ms (time-weighted -- ngspice
+            # variable-timestep clusters samples non-uniformly, so a plain
+            # np.mean is biased; trapezoidal integration is correct).
             t = r["t"]; v_fil = r["v_osc"] - r["v_A"]
             late = t > (t[-1] - 0.05)
-            m["V_fil_rms"] = float(np.sqrt(np.mean(v_fil[late]**2)))
+            t_late = t[late]; v_late = v_fil[late]
+            dur_late = t_late[-1] - t_late[0]
+            m["V_fil_rms"] = float(np.sqrt(np.trapezoid(v_late**2, t_late) / dur_late))
             m["I_fil_rms"] = m["V_fil_rms"] / m["R_final"] if m["R_final"] else float("nan")
             return name, m, decimate_run(r, npts=2000)
 

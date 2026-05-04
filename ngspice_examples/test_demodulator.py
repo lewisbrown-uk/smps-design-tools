@@ -107,10 +107,12 @@ def main():
     rows = []
     for phi in PHIS_DEG:
         t, v_dc, v_out = run_one(phi)
-        # Average over the last 50 ms (well after the LP transient settles)
+        # Average over the last 50 ms (well after the LP transient settles).
+        # Time-weighted mean -- np.mean is biased on ngspice variable-timestep data.
         sel = t > T_END - 0.050
-        v_dc_settled = float(np.mean(v_dc[sel]))
-        v_dc_ripple = float(np.std(v_dc[sel]))
+        ts_sel = t[sel]; dur_sel = ts_sel[-1] - ts_sel[0]
+        v_dc_settled = float(np.trapezoid(v_dc[sel], ts_sel) / dur_sel)
+        v_dc_ripple = float(np.sqrt(np.trapezoid((v_dc[sel] - v_dc_settled)**2, ts_sel) / dur_sel))
         rows.append((phi, v_dc_settled, v_dc_ripple))
         print(f"phi = {phi:3d} deg   V_DC = {v_dc_settled:+.4f} V   "
               f"ripple_std = {v_dc_ripple*1e3:.2f} mV   "

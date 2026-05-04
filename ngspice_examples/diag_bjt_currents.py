@@ -63,6 +63,7 @@ def report(tube, r):
     t = r["t"]
     # Steady-state, last 10 ms (10 cycles at 1 kHz)
     ss = (t > t[-1] - 0.010) & (t < t[-1] - 0.001)
+    tt = t[ss]
     ic_npn = r["ic_npn"][ss]
     ic_pnp = r["ic_pnp"][ss]
     v_osc_d = r["v_osc_d"][ss]
@@ -70,23 +71,31 @@ def report(tube, r):
     # PNP convention: ic is negative when conducting (current out of collector)
     pnp_cond_current = -ic_pnp  # positive when PNP sinks current
     npn_cond_current = ic_npn   # positive when NPN sources current
+    # Time-weighted mean (np.mean is biased on ngspice variable-timestep data;
+    # samples cluster at high-dV/dt regions and skew the unweighted mean).
+    dur = tt[-1] - tt[0]
+    def twm(x): return np.trapezoid(x, tt) / dur
     print(f"\n=== {m.TUBES[tube]['name']} ===")
-    print(f"  Q_o_npn ic:  mean={np.mean(npn_cond_current)*1e3:+8.3f}mA  "
+    print(f"  Q_o_npn ic:  mean={twm(npn_cond_current)*1e3:+8.3f}mA  "
           f"max={np.max(npn_cond_current)*1e3:+8.3f}mA  min={np.min(npn_cond_current)*1e3:+8.3f}mA")
-    print(f"  Q_o_pnp -ic: mean={np.mean(pnp_cond_current)*1e3:+8.3f}mA  "
+    print(f"  Q_o_pnp -ic: mean={twm(pnp_cond_current)*1e3:+8.3f}mA  "
           f"max={np.max(pnp_cond_current)*1e3:+8.3f}mA  min={np.min(pnp_cond_current)*1e3:+8.3f}mA")
-    # Conduction fraction (ic > 1 mA)
-    npn_frac = np.mean(npn_cond_current > 1e-3)
-    pnp_frac = np.mean(pnp_cond_current > 1e-3)
+    # Conduction fraction (ic > 1 mA) -- time-weighted (fraction of TIME, not samples)
+    npn_frac = twm((npn_cond_current > 1e-3).astype(float))
+    pnp_frac = twm((pnp_cond_current > 1e-3).astype(float))
     print(f"  NPN conducts (>1mA): {npn_frac*100:.1f}% of cycle")
     print(f"  PNP conducts (>1mA): {pnp_frac*100:.1f}% of cycle")
-    # Mean v_osc_drive during NPN vs PNP conduction
+    # Mean v_osc_drive during NPN vs PNP conduction (conditional time-weighted mean)
+    def cond_twm(x, mask):
+        if mask.sum() < 2: return float("nan")
+        # Numerator: integral of x over masked region; denominator: total time of mask
+        return np.trapezoid(np.where(mask, x, 0.0), tt) / np.trapezoid(mask.astype(float), tt)
     if npn_frac > 0.01:
-        print(f"  <v_osc_drive> | NPN conducting = {np.mean(v_osc_d[npn_cond_current > 1e-3]):+.3f} V")
+        print(f"  <v_osc_drive> | NPN conducting = {cond_twm(v_osc_d, npn_cond_current > 1e-3):+.3f} V")
     if pnp_frac > 0.01:
-        print(f"  <v_osc_drive> | PNP conducting = {np.mean(v_osc_d[pnp_cond_current > 1e-3]):+.3f} V")
+        print(f"  <v_osc_drive> | PNP conducting = {cond_twm(v_osc_d, pnp_cond_current > 1e-3):+.3f} V")
     # Op-amp output stats
-    print(f"  n_buf_osc_out: mean={np.mean(n_buf_o):+.3f}V  pp={np.max(n_buf_o)-np.min(n_buf_o):.3f}V")
+    print(f"  n_buf_osc_out: mean={twm(n_buf_o):+.3f}V  pp={np.max(n_buf_o)-np.min(n_buf_o):.3f}V")
 
 
 def main():
