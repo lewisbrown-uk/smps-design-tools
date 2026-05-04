@@ -36,6 +36,7 @@ from .devices import (
 )
 from .spice_helpers import lockin_thd_block
 from .robust_ranker import Robust
+from .linearized_ranker import Linearized
 from .temperature import analyze_corners, temperature_sweep, CornerReport
 from .tempco import Additive, Exponential
 
@@ -48,7 +49,7 @@ __all__ = [
     "DEVICES", "DEVICE_TEMPCOS",
     "expand_active_devices", "expand_active_tempcos",
     "lockin_thd_block",
-    "Robust",
+    "Robust", "Linearized",
     "analyze_corners", "temperature_sweep", "CornerReport",
     "Additive", "Exponential",
 ]

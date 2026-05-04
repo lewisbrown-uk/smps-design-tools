@@ -107,6 +107,46 @@ check second" can miss the right design. Exercises the per-component
 tolerance override in `passive_tolerances` (lookup by full name
 first, then by SPICE prefix).
 
+## `linearized_ranker_demo.py`
+
+Demonstrates `Linearized` — sensitivity-based yield estimation that
+replaces full Monte-Carlo per candidate with a Jacobian + analytic
+covariance propagation. Cost per candidate drops from `n_mc` to
+`1 + 2·N_components` simulator calls.
+
+**Topology**: 1st-order RC LPF feeding an NE5532 unity-gain buffer
+with explicit Cin = 5 pF (the NE5532's typical input capacitance).
+The algebraic transfer function fc = 1/(2π·R·C) ignores Cin; the
+in-circuit fc is shifted by C/(C+Cin), which bites hard at small C
+(high R) and is essentially invisible at large C (low R).
+
+Three rankings on the same 925-candidate E12 grid:
+
+1. **Algebraic Linearized**: closed-form fc + sensitivity. R=47k,
+   C=33pF tied at top with R=4.7k, C=330pF — both hit fc≈100kHz
+   algebraically.
+2. **In-circuit Linearized**: ngspice .ac of the actual buffered
+   filter, same sensitivity machinery. R=47k disappears from top-10
+   entirely; in-circuit fc shifts to 88 kHz because Cin dominates
+   at C=33pF. Top now is R=15k, R=4.7k, R=18k — all with C ≫ Cin.
+3. **In-circuit Robust** (top-3 only, validation): full MC at
+   n_mc=200 per candidate. Yields match Linearized **exactly**
+   (99.00% vs 99.00%, 97.50% vs 97.50%) — confirming the
+   linearisation is correct for this smooth metric.
+
+The speedup: 5 ngspice calls/candidate × 925 = 4625 total for
+Linearized, vs 200 × 925 = 185000 for Robust on the full grid.
+**40× fewer calls** for the same ranking (and the same yield
+estimates within MC noise). For ngspice-backed metrics this is the
+difference between a one-minute sweep and a 40-minute sweep.
+
+The Linearized ranker lives in `utils.tolerance.Linearized`. Same
+plug-in shape as `Robust`. Use it as the first-pass ranker on the
+full grid, then verify the top-K with `Robust` for final
+confidence — Linearized's analytic yield is exact only where the
+metric is locally smooth, so for circuits that clip, capture, or
+toggle stability boundaries, MC is still the gold standard.
+
 ## `eseries_to_tolerance_demo.py`
 
 The two libraries together, two ways:

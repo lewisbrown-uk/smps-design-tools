@@ -1004,3 +1004,167 @@ def test_expand_active_tempcos_skips_parts_without_tempco():
     assert "U1_Avol" in tcs
     assert "U1_GBW" in tcs
     assert not any(k.startswith("Q1_") for k in tcs)
+
+
+# ---------- Linearized ranker ----------
+
+def test_linearized_ranker_attaches_yield_to_results():
+    """Linearized ranker estimates yield analytically and tags each
+    Result with yield_pct, yield_per_spec, metric_sigma."""
+    from utils.eseries_opt import Problem, Resistor, Capacitor
+    from utils.tolerance import Linearized
+
+    p = Problem()
+    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    p.add(Capacitor("C", e_series=12, range=(1e-9, 1e-7)))
+    p.add_target("fc", lambda R, C: 1 / (2 * math.pi * R * C),
+                 target=1591.55)
+    ranker = Linearized(
+        passive_tolerances={"R": 0.01, "C": 0.05},
+        spec={"fc": ("within", 0.05)},
+    )
+    results = p.solve(strategy="brute", n_results=5, rank=ranker)
+    for c in results:
+        assert hasattr(c, "yield_pct")
+        assert hasattr(c, "yield_per_spec")
+        assert hasattr(c, "metric_sigma")
+        assert "fc" in c.yield_per_spec
+        assert "fc" in c.metric_sigma
+        assert 0 <= c.yield_pct <= 100
+    assert [c.yield_pct for c in results] == \
+        sorted([c.yield_pct for c in results], reverse=True)
+
+
+def test_linearized_yield_matches_robust_for_smooth_metric():
+    """For a smooth closed-form metric, Linearized's analytic yield
+    should match Robust's MC yield within a few percentage points.
+    Pick a few hand-chosen candidates and compare directly — avoids
+    the tie-break ambiguity of comparing top-N lists when many
+    candidates tie at high yield."""
+    from utils.eseries_opt import Problem, Resistor, Capacitor
+    from utils.tolerance import Linearized, Robust
+
+    def fc(R, C):
+        return 1 / (2 * math.pi * R * C)
+
+    # Build a Problem and grab one mid-yield candidate by setting a
+    # target it doesn't perfectly hit — with the wide tolerance + tight
+    # spec the yield will sit somewhere in the [50, 99]% range where
+    # MC vs analytic comparison is most discriminating.
+    common = dict(
+        passive_tolerances={"R": 0.05, "C": 0.10},   # wide
+        spec={"fc": ("within", 0.05)},                # tight
+    )
+
+    p = Problem()
+    p.add(Resistor("R", e_series=24, range=(1e3, 1e4)))
+    p.add(Capacitor("C", e_series=24, range=(1e-9, 1e-7)))
+    p.add_target("fc", fc, target=1591.55)
+
+    lin = p.solve(strategy="brute", n_results=20,
+                  rank=Linearized(**common))
+    # Match Robust on the same candidates by re-using their (R, C)
+    # — pull MC yield for each top-20 Linearized result.
+    rob_ranker = Robust(n_mc=4000, seed=7, **common)
+
+    class _Cand:
+        def __init__(self, values, breakdown):
+            self.values = values; self.breakdown = breakdown
+            self.error = 0.0
+
+    p2 = Problem()
+    p2.add(Resistor("R", e_series=24, range=(1e3, 1e4)))
+    p2.add(Capacitor("C", e_series=24, range=(1e-9, 1e-7)))
+    p2.add_target("fc", fc, target=1591.55)
+    targets = p2.targets
+
+    cands = [_Cand(c.values, c.breakdown) for c in lin]
+    rob_ranker.rank(cands, targets)
+    rob_lookup = {tuple(sorted(c.values.items())): c.yield_pct
+                   for c in cands}
+    for c in lin:
+        key = tuple(sorted(c.values.items()))
+        diff = abs(c.yield_pct - rob_lookup[key])
+        # ±3 pp tolerance — within MC sampling noise at n_mc=4000
+        assert diff < 3.0, (
+            f"Yield mismatch on {c.values}: "
+            f"lin={c.yield_pct:.2f}, rob={rob_lookup[key]:.2f}"
+        )
+
+
+def test_linearized_unknown_spec_raises():
+    """Same loud-fail behaviour as Robust on a spec typo."""
+    from utils.eseries_opt import Problem, Resistor
+    from utils.tolerance import Linearized
+
+    p = Problem()
+    p.add(Resistor("R", e_series=12, range=(1e3, 1e4)))
+    p.add_target("v", lambda R: R, target=4.7e3, metric="abs")
+    ranker = Linearized(
+        passive_tolerances={"R": 0.01},
+        spec={"made_up_metric": ("<", 1)},
+    )
+    with pytest.raises(ValueError, match="made_up_metric"):
+        p.solve(strategy="brute", n_results=3, rank=ranker)
+
+
+def test_linearized_eps_frac_robust_to_perturbation_size():
+    """The yield ESTIMATE for one fixed candidate should match across
+    reasonable eps_frac values — sanity check on the central-
+    difference choice for a smooth metric."""
+    from utils.tolerance import Linearized
+
+    class _T:
+        name = "fc"; weight = 1.0
+        @staticmethod
+        def expr(R, C):
+            return 1 / (2 * math.pi * R * C)
+
+    class _C:
+        def __init__(self):
+            self.values = {"R": 4.7e3, "C": 22e-9}
+            self.breakdown = {"fc": 0.0}
+            self.error = 0.0
+
+    common = dict(passive_tolerances={"R": 0.05, "C": 0.10},
+                   spec={"fc": ("within", 0.05)})
+    yields = []
+    for eps in (0.05, 0.10, 0.20):
+        cand = _C()
+        Linearized(eps_frac=eps, **common).rank([cand], [_T])
+        yields.append(cand.yield_pct)
+    # All three should match to <0.1 pp for a smooth metric
+    assert max(yields) - min(yields) < 0.1, (
+        f"eps_frac yield sensitivity: {yields}"
+    )
+
+
+def test_linearized_constant_input_contributes_zero_variance():
+    """Constant samplers have σ=0 — they should be skipped in the
+    perturbation loop and contribute nothing to metric variance."""
+    from utils.tolerance import Linearized
+    from utils.tolerance.samplers import Constant
+
+    class FakeTarget:
+        name = "v"
+        weight = 1.0
+        expr = staticmethod(lambda R, K: R + K)
+
+    class FakeCandidate:
+        def __init__(self):
+            self.values = {"R": 1e3, "K": 5.0}
+            self.breakdown = {"v": 0.0}
+            self.error = 0.0
+
+    ranker = Linearized(
+        passive_tolerances={"R": 0.01},
+        spec={"v": ("within", 0.05)},
+        distribution={"K": Constant(value=5.0)},   # K pinned
+    )
+    cand = FakeCandidate()
+    ranked = ranker.rank([cand], [FakeTarget])
+    # K contributes zero; only R variance matters. R is 1% with default
+    # tolerance_sigma=3, so σ_R ≈ 1000·0.01/3 ≈ 3.33, σ_v = σ_R = 3.33,
+    # spec is ±5% of (R+K) = ±50.25 → ~15σ, ~100% yield.
+    assert ranked[0].metric_sigma["v"] == pytest.approx(3.33, rel=0.10)
+    assert ranked[0].yield_pct > 99.5

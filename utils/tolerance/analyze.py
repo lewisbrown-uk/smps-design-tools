@@ -163,6 +163,34 @@ def _validate_correlations(correlations, samplers):
             seen.add(nm)
 
 
+def _build_samplers(nominal_values, passive_tolerances, distribution,
+                     tolerance_sigma, active_samplers):
+    """Build the ``{name: Sampler}`` map for one analyse-style call.
+    Same logic as the inline block in ``analyze`` — extracted so the
+    Linearized ranker can re-use it without going through MC."""
+    samplers = {}
+    for name in nominal_values:
+        explicit = (isinstance(distribution, dict) and name in distribution
+                    and isinstance(distribution[name], Sampler))
+        if explicit:
+            samplers[name] = distribution[name]
+        else:
+            prefix = _classify(name, passive_tolerances)
+            dist_name = _resolve_distribution_name(name, prefix,
+                                                    distribution)
+            tol = passive_tolerances[prefix]
+            samplers[name] = _build_sampler(
+                nominal_values[name], tol, dist_name, tolerance_sigma
+            )
+    for name, sampler in active_samplers.items():
+        if isinstance(distribution, dict) and name in distribution \
+                and isinstance(distribution[name], Sampler):
+            samplers[name] = distribution[name]
+        else:
+            samplers[name] = sampler
+    return samplers
+
+
 def _evaluate(value, op, threshold, nominal_value):
     if op == "<":  return value <  threshold
     if op == "<=": return value <= threshold
@@ -371,37 +399,16 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
     # determinism: passives in their declared order, then active
     # params in declared order. A given (seed, sampler-set) → same
     # samples, regardless of insertion order in the underlying dict.
-    samplers = {}
-    component_types = {}
-    for name in nominal_values:
-        # Per-component override in distribution dict can be a Sampler
-        # instance (full custom shape) or a string ("gaussian"/"uniform").
-        # When the user provides an explicit Sampler, the name doesn't
-        # need to match a passive prefix — it can be anything (e.g., a
-        # one-off active-device param like "Vos_U1" outside the curated
-        # device library, or a derived parameter like "ESR" for a cap's
-        # series resistance). Skip the prefix classifier in that case.
-        explicit = (isinstance(distribution, dict) and name in distribution
-                    and isinstance(distribution[name], Sampler))
-        if explicit:
-            samplers[name] = distribution[name]
-            component_types[name] = None
-        else:
-            prefix = _classify(name, passive_tolerances)
-            component_types[name] = prefix
-            dist_name = _resolve_distribution_name(name, prefix,
-                                                    distribution)
-            tol = passive_tolerances[prefix]
-            samplers[name] = _build_sampler(
-                nominal_values[name], tol, dist_name, tolerance_sigma
-            )
-    for name, sampler in active_samplers.items():
-        # Per-component override beats device-library default
-        if isinstance(distribution, dict) and name in distribution \
-                and isinstance(distribution[name], Sampler):
-            samplers[name] = distribution[name]
-        else:
-            samplers[name] = sampler
+    # Per-component override in distribution dict can be a Sampler
+    # instance (full custom shape) or a string ("gaussian"/"uniform").
+    # When the user provides an explicit Sampler, the name doesn't
+    # need to match a passive prefix — it can be anything (e.g., a
+    # one-off active-device param like "Vos_U1" outside the curated
+    # device library, or a derived parameter like "ESR" for a cap's
+    # series resistance).
+    samplers = _build_samplers(nominal_values, passive_tolerances,
+                                distribution, tolerance_sigma,
+                                active_samplers)
 
     # 6. Build the enriched nominal-values dict for the metrics()
     # reference call. Active params use Sampler.nominal().
