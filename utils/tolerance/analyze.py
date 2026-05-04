@@ -6,6 +6,7 @@ from .report import YieldReport, MetricStats
 from .samplers import (Sampler, RelativeGaussian, RelativeUniform,
                        AbsoluteGaussian)
 from .devices import expand_active_devices
+from .tempco import Additive
 
 
 _VALID_OPS = {"<", "<=", ">", ">=", "within", "within_db"}
@@ -276,13 +277,21 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
             during operation really is a random variable to be
             integrated over (e.g. unconditioned ambient with a wide
             distribution).
-        temperature_coefficients: ``{name_or_prefix: tempco}`` in
-            fractional change per °C (e.g. ``50e-6`` for 50 ppm/°C
-            metal-film R, ``1500e-6`` for X7R ceramic C). Lookup
-            order: full name (per-component override), then SPICE
-            prefix. After standard tolerance perturbation, each
-            component's value is multiplied by
-            ``1 + tempco · (T - temperature_nominal)``.
+        temperature_coefficients: ``{name_or_prefix: tempco}`` —
+            per-component tempco model. Lookup order: full name,
+            then SPICE prefix. Two forms accepted:
+
+            - **Bare scalar** (e.g. ``50e-6`` for 50 ppm/°C):
+              multiplicative drift, ``value(T) = value · (1 +
+              tc · ΔT)``. The ratiometric default for passive R/C
+              and op-amp Avol/GBW.
+            - **``Additive(sigma=...)``** instance: additive drift
+              with per-part drift coefficient sampled from
+              ``Normal(0, sigma)``. ``value(T) = value + drift_i ·
+              ΔT``. Use for parameters whose nominal is zero or
+              whose drift coefficient varies part-to-part — most
+              notably op-amp Vos (NE5532: ``Additive(sigma=5e-6)``
+              models the typ ±5 µV/°C drift spec).
         temperature_nominal: Reference °C where tempco = 0 (default
             25). Only meaningful when ``temperature`` is set.
         workers: Concurrent metric evaluations via
@@ -433,9 +442,13 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
             for k, nm in enumerate(group_names):
                 samples[:, names.index(nm)] = joint[:, k]
 
-    # Apply temperature scaling: sample T per MC, multiply each
-    # component's already-perturbed value by (1 + tempco·(T - T_ref)).
-    # Tempcos are looked up by full name first, then by SPICE prefix.
+    # Apply temperature scaling: sample T per MC, then per-component
+    # apply the tempco. Lookup by full name first, then by SPICE
+    # prefix. Bare scalars apply as multiplicative drift (the
+    # ratiometric default for passive R/C, op-amp Avol/GBW). Tempco
+    # instances (Additive, ...) handle non-multiplicative cases like
+    # op-amp Vos drift where the per-part drift coefficient is itself
+    # a random variable.
     if temperature is not None:
         T_samples = temperature.sample(rng, n_mc)
         tcs = temperature_coefficients or {}
@@ -443,7 +456,13 @@ def analyze(*, nominal_values, passive_tolerances, metrics, spec,
             tc = tcs.get(name)
             if tc is None:
                 tc = tcs.get(name[0])
-            if tc:
+            if tc is None:
+                continue
+            if isinstance(tc, Additive):
+                samples[:, j] = tc.apply(samples[:, j], T_samples,
+                                          temperature_nominal, rng)
+            else:
+                # Bare scalar = multiplicative
                 samples[:, j] *= 1.0 + tc * (T_samples - temperature_nominal)
     else:
         T_samples = None

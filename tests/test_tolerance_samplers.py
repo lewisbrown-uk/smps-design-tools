@@ -568,6 +568,66 @@ def test_temperature_scales_components_by_tempco():
         assert R == pytest.approx(expected, rel=1e-9)
 
 
+def test_additive_tempco_zero_at_T_nominal():
+    """At T = T_nominal, the additive tempco contribution is zero by
+    construction (drift × 0 = 0). The sample equals the per-component
+    sampler's draw."""
+    from utils.tolerance import Additive
+    captured = []
+    def metrics(Vos, T=25):
+        captured.append((Vos, T))
+        return {"v": Vos}
+
+    analyze(
+        nominal_values={"Vos": 0.0},
+        passive_tolerances={"V": 0.0},   # placeholder for prefix lookup
+        distribution={"Vos": AbsoluteGaussian(mean=0.0, sigma=1e-3)},
+        metrics=metrics,
+        spec={"v": ("<", 1e9)},
+        n_mc=500, seed=0,
+        temperature=Constant(value=25.0),     # all samples at T=25
+        temperature_coefficients={"Vos": Additive(sigma=5e-6)},
+        temperature_nominal=25,
+    )
+    # At T=25, drift × 0 = 0, so Vos values come entirely from the
+    # sampler. σ should be ~1mV (the Vos sampler), not influenced by drift.
+    Vos_values = [v for v, T in captured[1:]]   # skip nominal call
+    import numpy as np
+    sigma = np.std(Vos_values)
+    assert sigma == pytest.approx(1e-3, rel=0.10)
+
+
+def test_additive_tempco_widens_distribution_at_corners():
+    """At a corner T (e.g., +85°C), Additive tempco adds drift × ΔT
+    in quadrature with the room-T distribution. Total σ = √(σ_room² +
+    (sigma_drift · ΔT)²)."""
+    from utils.tolerance import Additive
+    import numpy as np
+
+    captured = []
+    def metrics(Vos, T=25):
+        captured.append(Vos)
+        return {"v": Vos}
+
+    analyze(
+        nominal_values={"Vos": 0.0},
+        passive_tolerances={"V": 0.0},
+        distribution={"Vos": AbsoluteGaussian(mean=0.0, sigma=1e-3)},
+        metrics=metrics,
+        spec={"v": ("<", 1e9)},
+        n_mc=20000, seed=1,
+        temperature=Constant(value=85.0),     # +60°C from nominal
+        temperature_coefficients={"Vos": Additive(sigma=5e-6)},  # 5 µV/°C
+        temperature_nominal=25,
+    )
+    # Expected: σ_total = √(1mV² + (5e-6 · 60)²) = √(1e-6 + 9e-8)
+    # = √(1.09e-6) ≈ 1.044 mV
+    Vos_values = np.array(captured[1:])
+    sigma = Vos_values.std()
+    expected = np.sqrt(1e-3 ** 2 + (5e-6 * 60) ** 2)
+    assert sigma == pytest.approx(expected, rel=0.05)
+
+
 def test_temperature_per_component_tempco_overrides_prefix():
     """Per-name tempcos override the prefix default — allows mixing
     e.g. one precision low-tempco part with standard parts."""
