@@ -38,6 +38,7 @@ from .spice_helpers import lockin_thd_block
 from .robust_ranker import Robust
 from .linearized_ranker import Linearized
 from .temperature import analyze_corners, temperature_sweep, CornerReport
+from .thermal import thermal_dither
 from .tempco import Additive, Exponential
 
 __all__ = [
@@ -51,5 +52,6 @@ __all__ = [
     "lockin_thd_block",
     "Robust", "Linearized",
     "analyze_corners", "temperature_sweep", "CornerReport",
+    "thermal_dither",
     "Additive", "Exponential",
 ]

@@ -1168,3 +1168,83 @@ def test_linearized_constant_input_contributes_zero_variance():
     # spec is ±5% of (R+K) = ±50.25 → ~15σ, ~100% yield.
     assert ranked[0].metric_sigma["v"] == pytest.approx(3.33, rel=0.10)
     assert ranked[0].yield_pct > 99.5
+
+
+# ---------- thermal_dither ----------
+
+def test_thermal_dither_computes_known_slope():
+    """For a metric m(T) = a + b·T, the dither slope must equal b
+    exactly (linear function → finite-difference is exact)."""
+    from utils.tolerance import thermal_dither
+
+    def metrics(R, T):
+        return {"m": 10.0 + 0.05 * (T - 25)}      # slope = 0.05
+
+    report = thermal_dither(
+        nominal_values={"R": 1e3},
+        passive_tolerances={"R": 0.0},
+        metrics=metrics,
+        spec={"m": ("<", 1e9), "m_dT": ("<", 1.0)},
+        n_mc=20, seed=0,
+        T_nominal=25.0, T_dither=5.0,
+    )
+    assert report.metric_stats["m_dT"].mean == pytest.approx(0.05, abs=1e-9)
+    assert report.metric_stats["m_dT"].std == pytest.approx(0.0, abs=1e-9)
+
+
+def test_thermal_dither_negative_slope_for_self_stabilizing():
+    """A metric whose value falls with T (e.g., a self-stabilising
+    bias) should produce negative slopes."""
+    from utils.tolerance import thermal_dither
+
+    def metrics(R, T):
+        return {"m": 100.0 - 0.5 * (T - 25)}     # slope = -0.5
+
+    report = thermal_dither(
+        nominal_values={"R": 1e3},
+        passive_tolerances={"R": 0.0},
+        metrics=metrics,
+        spec={"m_dT": ("<", 0)},     # require dropping with T
+        n_mc=20, seed=0,
+        T_dither=2.0,
+    )
+    assert report.metric_stats["m_dT"].mean == pytest.approx(-0.5, abs=1e-9)
+    assert report.yield_pct == 100.0
+
+
+def test_thermal_dither_distinguishes_smooth_vs_steep():
+    """A spec on a `_dT` derived metric should pass for shallow-
+    sensitivity designs and fail for steep ones — this is the whole
+    point of the helper."""
+    from utils.tolerance import thermal_dither
+
+    # Steep slope: 5 mW/K
+    def metrics_steep(R, T):
+        return {"P": 0.030 + 0.005 * (T - 25)}
+    # Shallow slope: 0.1 mW/K
+    def metrics_shallow(R, T):
+        return {"P": 0.030 + 0.0001 * (T - 25)}
+
+    common = dict(
+        nominal_values={"R": 1e3},
+        passive_tolerances={"R": 0.0},
+        n_mc=10, seed=0, T_dither=5.0,
+        spec={"P_dT": ("<", 0.001)},   # < 1 mW/K
+    )
+    rep_steep = thermal_dither(metrics=metrics_steep, **common)
+    rep_shallow = thermal_dither(metrics=metrics_shallow, **common)
+    assert rep_steep.yield_pct == 0.0           # 5 mW/K > 1 mW/K, all fail
+    assert rep_shallow.yield_pct == 100.0       # 0.1 mW/K < 1 mW/K, all pass
+
+
+def test_thermal_dither_validates_T_dither():
+    """Zero or negative T_dither is a usage bug."""
+    from utils.tolerance import thermal_dither
+    with pytest.raises(ValueError, match="T_dither"):
+        thermal_dither(
+            nominal_values={"R": 1e3},
+            passive_tolerances={"R": 0.0},
+            metrics=lambda R, T: {"m": 0},
+            spec={"m": ("<", 1)},
+            n_mc=5, T_dither=0,
+        )

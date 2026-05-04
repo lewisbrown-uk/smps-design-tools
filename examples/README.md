@@ -107,6 +107,43 @@ check second" can miss the right design. Exercises the per-component
 tolerance override in `passive_tolerances` (lookup by full name
 first, then by SPICE prefix).
 
+## `thermal_dither_demo.py`
+
+Demonstrates `thermal_dither` — paired-sample temperature-sensitivity
+analysis. For each MC sample, the metric is evaluated twice (at T
+and T+ΔT) with the SAME component perturbations, and the per-sample
+slope ∂metric/∂T is exposed as a derived metric `{m}_dT`. Spec on
+the slope to bound thermal sensitivity (and, with an assumed R_th,
+the classical runaway margin dP/dT × R_th < 1).
+
+**Test vehicle**: 2N3904 common-emitter bias, two configurations:
+
+- **Unstabilized** (no Re): V_BE = Vbias directly, I_C exponentially
+  sensitive to T via I_S(T) and V_BE intrinsic drift.
+- **Stabilized** (Re=180Ω): negative current feedback through the
+  emitter resistor.
+
+Closed-form Ebers-Moll model with standard Si bandgap parameters.
+Both designs target Iq ≈ 5 mA, P ≈ 30 mW.
+
+Headline numbers (n_mc=2000, ΔT=5K):
+
+|                 | Unstabilized | Stabilized | ratio |
+|-----------------|--------------|------------|-------|
+| P_Q1 p99        | 36.9 mW      | 31.3 mW    | —     |
+| P_Q1_dT p99     | +1.20 mW/K   | +0.016 mW/K| 75×   |
+| Ic p99          | 11.75 mA     | 5.09 mA    | 2.3×  |
+| dP/dT × R_th_TO-92 | 0.24      | 0.003      | 80×   |
+| Yield (dP/dT < 1 mW/K) | 72.5% | 100%      | —     |
+
+The dither exposes both **thermal** and **bias-tolerance** sensitivity
+in one pass because both manifest as "metric varies between paired
+evaluations". Spec on `P_Q1_dT` cleanly separates the two designs
+without needing a thermal-network model. The library doesn't compute
+the runaway margin directly (R_th is a packaging choice, not a
+parameter of the analysis), but the demo shows how to combine the
+analysis output with a chosen R_th to get the classical criterion.
+
 ## `linearized_ranker_demo.py`
 
 Demonstrates `Linearized` — sensitivity-based yield estimation that
