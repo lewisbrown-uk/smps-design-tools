@@ -20,8 +20,8 @@ Vee  vee 0 -9.0
 * during conduction -- avoids burning P_filament*((VCC/V_op_pk) - 1)
 * Watts in the BJT pair, which is the fundamental class-B inefficiency
 * when V_CC >> V_pk. Falls back to VCC/VEE if not specified.
-Vcc_buf vcc_buf 0  2.5
-Vee_buf vee_buf 0 -2.5
+Vcc_buf vcc_buf 0  1.5
+Vee_buf vee_buf 0 -1.5
 
 * === Wien bridge oscillator (alpha=0.5) ===
 R1   v_osc  ns   10000
@@ -187,7 +187,7 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten uopamp_lvl2 Avol=1
 * for class-AB efficiency near pi/4 instead of the textbook (pi/4)*Vpk/Vbuf.
 * Feedback divider R_buf1_fb1:R_buf1_fb2 sets per-tube k_buf
 XU_buf_osc   v_drv_atten n_buf_osc_fb vcc_buf vee_buf n_buf_osc_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-R_buf1_fb1   v_osc_drive n_buf_osc_fb 6200
+R_buf1_fb1   v_osc_drive n_buf_osc_fb 1000
 R_buf1_fb2   n_buf_osc_fb 0           1k
 R_obb_top_a  vcc_buf      mid_obb_top  340
 R_obb_top_b  mid_obb_top  q_o_bn       340
@@ -215,7 +215,7 @@ Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
 C_buf2_dcblock v_ap         n_buf2_ac    100n IC=0
 R_buf2_dcref   n_buf2_ac    0            100k
 XU_buf_ap    n_buf2_ac   n_buf_ap_fb     vcc_buf vee_buf n_buf_ap_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-R_buf2_fb1   v_ap_drive  n_buf_ap_fb     6200
+R_buf2_fb1   v_ap_drive  n_buf_ap_fb     1000
 R_buf2_fb2   n_buf_ap_fb 0               1k
 R_abb_top_a  vcc_buf      mid_abb_top  340
 R_abb_top_b  mid_abb_top  q_a_bn       340
