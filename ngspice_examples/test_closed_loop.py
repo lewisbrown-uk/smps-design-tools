@@ -84,9 +84,9 @@ TUBES = {
     # have matched magnitude. v_buf sized for V_top_pk = k_buf*V_drv_atten_pk
     # plus ~1 V headroom (bootstrap caps on the bias chain let v_buf shrink
     # toward V_top_pk for class-AB efficiency near pi/4).
-    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3, buf_fb_ap=6.2e3, v_buf=4.5),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=6.0),
-    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3, buf_fb_ap=6.2e3, v_buf=4.5),
+    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3, buf_fb_ap=6.2e3, v_buf=2.5),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=4.5),
+    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=6.2e3, buf_fb_ap=6.2e3, v_buf=2.5),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
 # two non-inverting unity-gain op-amp + class-AB BC337/BC327 BJT pair buffers
