@@ -210,7 +210,12 @@ Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
 * reaches good class-AB efficiency without entering the JFET-rectification
 * regime. Bootstrap caps mirror Buffer 1.
 XU_buf_ap    0           n_buf_ap_minus  vcc_buf vee_buf n_buf_ap_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-R_buf2_in    v_ap        n_buf_ap_minus  1k
+* C_buf2_dcblock blocks the DC offset on v_ap (from JFET-channel rectification
+* at n_ap_plus, ~ -50 mV) so it isn't multiplied by Buffer 2's -12x gain into
+* a 568 mV bias on v_ap_drive. fc = 1/(2*pi*1k*10u) = 16 Hz, well below the
+* 1 kHz carrier (0.92 deg phase shift, absorbed by the JFET-driven all-pass).
+C_buf2_dcblock v_ap n_buf2_ac 10u IC=0
+R_buf2_in    n_buf2_ac   n_buf_ap_minus  1k
 R_buf2_fb    v_ap_drive  n_buf_ap_minus  3500
 R_abb_top_a  vcc_buf      mid_abb_top  340
 R_abb_top_b  mid_abb_top  q_a_bn       340
