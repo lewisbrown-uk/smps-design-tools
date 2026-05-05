@@ -15,13 +15,11 @@
 
 Vcc  vcc 0  9.0
 Vee  vee 0 -9.0
-* Separate buffer rail for the class-AB BJT collectors. Sized per tube
-* to V_op_pk + ~1.5V headroom so the BJTs run with V_CE close to V_BE
-* during conduction -- avoids burning P_filament*((VCC/V_op_pk) - 1)
-* Watts in the BJT pair, which is the fundamental class-B inefficiency
-* when V_CC >> V_pk. Falls back to VCC/VEE if not specified.
-Vcc_buf vcc_buf 0  9
-Vee_buf vee_buf 0 -9
+* Buffer rails for the class-AB BJT collectors. Class-H envelope-tracking
+* servo in booster mode (auto-tunes vcc_buf/vee_buf to V_top_pk + 0.3 V),
+* fixed at VCC/VEE in non-booster mode (no buffers to power).
+Vcc_buf vcc_buf 0 9.0
+Vee_buf vee_buf 0 -9.0
 
 * === Wien bridge oscillator (alpha=0.5) ===
 R1   v_osc  ns   10000

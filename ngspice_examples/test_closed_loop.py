@@ -265,6 +265,37 @@ def make_netlist(data_path: Path,
     # signal gain to deliver the 8.5 V_pk drive its 5 V_RMS filament needs.
     buf_fb1   = mc.get("buf_fb1",   6.2e3)
     buf_fb_ap = mc.get("buf_fb_ap", 6.2e3)
+    # === Rail definition: servo in booster mode, fixed VCC otherwise ===
+    # In booster mode, vcc_buf / vee_buf track the envelope of v_osc_drive
+    # and v_ap_drive (the BJT outputs) plus a small headroom, so the BJT
+    # V_CE during peak conduction is always near minimum (high class-AB
+    # efficiency) regardless of tube. A 1.5 V floor keeps the buffer op-
+    # amps biased during cold start before the signal builds up. Peak
+    # detector charges fast through D_pkdet and decays slowly through
+    # R_pk_decay (tau = 4.7 s) so the rails track audio envelope but
+    # don't modulate at f0.
+    if use_booster:
+        rail_definition = """B_envin n_envin 0 V = abs(v(v_osc_drive))
+* Track |v_osc_drive| only; in matched non-inverting topology
+* |v_ap_drive| has the same magnitude so monitoring one suffices and
+* avoids the higher average that max(|...|, |...|) of phase-shifted
+* signals produces. LPF tau = 30 ms gives the moving average of |sine|
+* (= 2A/pi for sine of peak A); multiply by 1.6 to recover peak. Ripple
+* at f0 is filtered (< 0.2%), and tau is well below thermal transients.
+R_envlpf n_envin n_env_lpf 30k
+C_envlpf n_env_lpf 0 1u IC=1
+* Multiplier slightly above peak-recovery 1.57 (= 1/avg(|sin|)) so the rail
+* is just above V_top_pk in steady state -- BJT runs in linear region,
+* class-AB efficiency = pi/4 * V_pk / v_buf approaches the textbook
+* maximum. Negative-offset formulas (vcc_buf = mult*LPF - headroom) would
+* be more efficient but can't bootstrap up from cold start (LPF stays
+* clamped to floor, never exceeds the threshold to escape). Floor 1.5 V
+* keeps the buffer op-amps biased before signal builds up.
+B_vcc_buf vcc_buf 0 V = max(v(n_env_lpf) * 1.6 + 0.0, 1.5)
+B_vee_buf vee_buf 0 V = -max(v(n_env_lpf) * 1.6 + 0.0, 1.5)"""
+    else:
+        rail_definition = f"Vcc_buf vcc_buf 0 {VCC}\nVee_buf vee_buf 0 {VEE}"
+
     booster_lines = ""
     if use_booster:
         booster_lines = f"""
@@ -349,13 +380,10 @@ Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327
 
 Vcc  vcc 0  {VCC}
 Vee  vee 0 {VEE}
-* Separate buffer rail for the class-AB BJT collectors. Sized per tube
-* to V_op_pk + ~1.5V headroom so the BJTs run with V_CE close to V_BE
-* during conduction -- avoids burning P_filament*((VCC/V_op_pk) - 1)
-* Watts in the BJT pair, which is the fundamental class-B inefficiency
-* when V_CC >> V_pk. Falls back to VCC/VEE if not specified.
-Vcc_buf vcc_buf 0  {v_buf:.4g}
-Vee_buf vee_buf 0 -{v_buf:.4g}
+* Buffer rails for the class-AB BJT collectors. Class-H envelope-tracking
+* servo in booster mode (auto-tunes vcc_buf/vee_buf to V_top_pk + 0.3 V),
+* fixed at VCC/VEE in non-booster mode (no buffers to power).
+{rail_definition}
 
 * === Wien bridge oscillator (alpha=0.5) ===
 R1   v_osc  ns   {r1_wien:.6g}
