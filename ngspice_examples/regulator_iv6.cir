@@ -18,25 +18,8 @@ Vee  vee 0 -9.0
 * Buffer rails for the class-AB BJT collectors. Class-H envelope-tracking
 * servo in booster mode (auto-tunes vcc_buf/vee_buf to V_top_pk + 0.3 V),
 * fixed at VCC/VEE in non-booster mode (no buffers to power).
-B_envin n_envin 0 V = abs(v(v_osc_drive))
-* Track |v_osc_drive| only; in matched non-inverting topology
-* |v_ap_drive| has the same magnitude so monitoring one suffices.
-* LPF tau = 30 ms gives the moving average of |sine| (= 2A/pi for sine
-* of peak A); the steady-state servo formula uses multiplier 1.6 with a
-* negative offset to put vcc_buf slightly below V_top_pk so the
-* bootstrap caps engage at peak (BJT enters saturation, V_CE_sat ~0.2 V,
-* high efficiency).
-R_envlpf n_envin n_env_lpf 30k
-C_envlpf n_env_lpf 0 1u IC=1
-* Cold-start hold: vcc_buf = VCC for the first 500 ms so the buffers can
-* swing freely while the Wien builds up amplitude and the loop's integrator
-* finds its operating point. Without this hold, a self-bootstrapping peak
-* detector with negative offset can't escape the floor (signal->rail clip
-* -> measured peak drops -> rail collapses to floor). After 500 ms the
-* loop has settled and the servo takes over, ramping rails down to just
-* below V_top_pk.
-B_vcc_buf vcc_buf 0 V = (time < 0.500) ? 9.0 : max(v(n_env_lpf) * 1.6, 1.5)
-B_vee_buf vee_buf 0 V = (time < 0.500) ? -9.0 : -max(v(n_env_lpf) * 1.6, 1.5)
+Vcc_buf vcc_buf 0 1.4
+Vee_buf vee_buf 0 -1.4
 
 * === Wien bridge oscillator (alpha=0.5) ===
 R1   v_osc  ns   10000

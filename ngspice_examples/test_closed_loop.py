@@ -265,37 +265,12 @@ def make_netlist(data_path: Path,
     # signal gain to deliver the 8.5 V_pk drive its 5 V_RMS filament needs.
     buf_fb1   = mc.get("buf_fb1",   6.2e3)
     buf_fb_ap = mc.get("buf_fb_ap", 6.2e3)
-    # === Rail definition: servo in booster mode, fixed VCC otherwise ===
-    # In booster mode, vcc_buf / vee_buf track the envelope of v_osc_drive
-    # and v_ap_drive (the BJT outputs) plus a small headroom, so the BJT
-    # V_CE during peak conduction is always near minimum (high class-AB
-    # efficiency) regardless of tube. A 1.5 V floor keeps the buffer op-
-    # amps biased during cold start before the signal builds up. Peak
-    # detector charges fast through D_pkdet and decays slowly through
-    # R_pk_decay (tau = 4.7 s) so the rails track audio envelope but
-    # don't modulate at f0.
-    if use_booster:
-        rail_definition = """B_envin n_envin 0 V = abs(v(v_osc_drive))
-* Track |v_osc_drive| only; in matched non-inverting topology
-* |v_ap_drive| has the same magnitude so monitoring one suffices.
-* LPF tau = 30 ms gives the moving average of |sine| (= 2A/pi for sine
-* of peak A); the steady-state servo formula uses multiplier 1.6 with a
-* negative offset to put vcc_buf slightly below V_top_pk so the
-* bootstrap caps engage at peak (BJT enters saturation, V_CE_sat ~0.2 V,
-* high efficiency).
-R_envlpf n_envin n_env_lpf 30k
-C_envlpf n_env_lpf 0 1u IC=1
-* Cold-start hold: vcc_buf = VCC for the first 500 ms so the buffers can
-* swing freely while the Wien builds up amplitude and the loop's integrator
-* finds its operating point. Without this hold, a self-bootstrapping peak
-* detector with negative offset can't escape the floor (signal->rail clip
-* -> measured peak drops -> rail collapses to floor). After 500 ms the
-* loop has settled and the servo takes over, ramping rails down to just
-* below V_top_pk.
-B_vcc_buf vcc_buf 0 V = (time < 0.500) ? 9.0 : max(v(n_env_lpf) * 1.6, 1.5)
-B_vee_buf vee_buf 0 V = (time < 0.500) ? -9.0 : -max(v(n_env_lpf) * 1.6, 1.5)"""
-    else:
-        rail_definition = f"Vcc_buf vcc_buf 0 {VCC}\nVee_buf vee_buf 0 {VEE}"
+    # Buffer rail: fixed per-tube v_buf chosen to clip the buffer op-amp
+    # at slightly below V_top_pk_demand. Op-amp clipping forces the loop
+    # to compensate by pushing the JFET further into pinch-off (raising
+    # |1-H| at op), so V_diff is delivered at a lower V_top swing and
+    # the BJT runs in saturation at peak (V_CE -> V_CE_sat).
+    rail_definition = f"Vcc_buf vcc_buf 0 {v_buf:.4g}\nVee_buf vee_buf 0 -{v_buf:.4g}"
 
     booster_lines = ""
     if use_booster:

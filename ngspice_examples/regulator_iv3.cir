@@ -18,8 +18,8 @@ Vee  vee 0 -9.0
 * Buffer rails for the class-AB BJT collectors. Class-H envelope-tracking
 * servo in booster mode (auto-tunes vcc_buf/vee_buf to V_top_pk + 0.3 V),
 * fixed at VCC/VEE in non-booster mode (no buffers to power).
-Vcc_buf vcc_buf 0 9.0
-Vee_buf vee_buf 0 -9.0
+Vcc_buf vcc_buf 0 9
+Vee_buf vee_buf 0 -9
 
 * === Wien bridge oscillator (alpha=0.5) ===
 R1   v_osc  ns   10000
