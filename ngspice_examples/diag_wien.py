@@ -30,6 +30,7 @@ def main():
     if spec.get("buf_fb1") is not None: mc["buf_fb1"] = spec["buf_fb1"]
     if spec.get("buf_fb_ap") is not None: mc["buf_fb_ap"] = spec["buf_fb_ap"]
     if spec.get("v_buf")   is not None: mc["v_buf"]   = spec["v_buf"]
+    if spec.get("ce_buf"): mc["ce_buf"] = True
     # Optional second arg: 'vos0' to zero the Wien op-amp Vos for diagnostic
     zero_vos = (len(sys.argv) > 2 and sys.argv[2] == "vos0")
     if zero_vos:

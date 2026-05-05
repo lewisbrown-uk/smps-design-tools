@@ -33,6 +33,7 @@ def run_capture(tube_key):
     if spec.get("buf_fb1") is not None: mc["buf_fb1"] = spec["buf_fb1"]
     if spec.get("buf_fb_ap") is not None: mc["buf_fb_ap"] = spec["buf_fb_ap"]
     if spec.get("v_buf")   is not None: mc["v_buf"]   = spec["v_buf"]
+    if spec.get("ce_buf"): mc["ce_buf"] = True
 
     work = m.WORK; work.mkdir(exist_ok=True)
     cir = work / f"buf_chain_{tube_key}.cir"

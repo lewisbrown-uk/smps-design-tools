@@ -36,7 +36,8 @@ TAU_TH = 0.100
 #   R_target = R_sen * R_top_ref / R_bot_ref, with a deliberate 1% offset.
 def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                r_int_scale=0.3, booster=False,
-               wien_alpha=None, c_ap=None, buf_fb1=None, buf_fb_ap=None, v_buf=None):
+               wien_alpha=None, c_ap=None, buf_fb1=None, buf_fb_ap=None,
+               v_buf=None, ce_buf=False):
     # Bridge target R = R_op * R_bot_ref / R_sen, set to give R_filament = R_op
     # at the operating temperature T_op. (An earlier version had a 1% offset
     # for "cold-start kick", but that's unnecessary -- the filament starts at
@@ -52,7 +53,8 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                 r_top_ref=R_top_ref, r_bot_ref=R_bot_ref, r_sense=R_sen,
                 r_int_scale=r_int_scale, booster=booster,
                 wien_alpha=wien_alpha, c_ap=c_ap,
-                buf_fb1=buf_fb1, buf_fb_ap=buf_fb_ap, v_buf=v_buf)
+                buf_fb1=buf_fb1, buf_fb_ap=buf_fb_ap, v_buf=v_buf,
+                ce_buf=ce_buf)
 
 # r_int_scale per tube: option-A's 0.3 was tuned for the IV-3 bridge gain.
 # Bridge sensitivity ~ V_drive*R_sen/(R_op+R_sen)^2 changes per tube, so
@@ -254,7 +256,7 @@ def make_netlist(data_path: Path,
     # Comparator: natural sign(V_osc) for both booster and non-booster paths
     # (Buffer 2 is non-inverting, so V_bot tracks V_ap with the same sign as
     # V_osc; the demod's reference must be in-phase with V_osc).
-    cmp_inputs = "v_osc 0"
+    cmp_inputs = "0 v_osc" if mc.get("ce_buf") else "v_osc 0"
     # When booster is on, the all-pass JFET drain (and R_ap1) tap into
     # v_drv_atten (low-Z attenuated signal). Otherwise they tap into v_osc.
     v_osc_jfet  = "v_drv_atten" if use_booster else "v_osc"
@@ -272,23 +274,62 @@ def make_netlist(data_path: Path,
     # the BJT runs in saturation at peak (V_CE -> V_CE_sat).
     rail_definition = f"Vcc_buf vcc_buf 0 {v_buf:.4g}\nVee_buf vee_buf 0 -{v_buf:.4g}"
 
+    ce_buf = mc.get("ce_buf", False)
     booster_lines = ""
     if use_booster:
-        booster_lines = f"""
-* Buffer 0: passive attenuator on V_osc, then op-amp follower to feed JFET
+        # Buffer 0 is the same regardless of CC/CE choice (it's a follower)
+        buf0_lines = f"""* Buffer 0: passive attenuator on V_osc, then op-amp follower to feed JFET
 * with low-Z attenuated drive. R_atten_top:R_atten_bot = 56k:9.1k -> k_atten
 * ~ 7.15, so V_drv_atten ~= V_osc / 7.15 (peak ~0.5 V at V_osc 3.6 V_pk),
 * keeping V_DS in the JFET's linear region.
 R_atten_top  v_osc          v_atten_input 56k
 R_atten_bot  v_atten_input  0             9.1k
-XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp_buf0}
+XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp_buf0}"""
+        if ce_buf:
+            # Common-emitter complementary push-pull. PNP top + NPN bottom with
+            # collectors as the output. V_out swings to within V_CE_sat (~0.2V)
+            # of each rail -- saves V_BE = 0.6V vs CC emitter follower. Inverting
+            # op-amp config + inverting CE BJT stage gives non-inverting overall
+            # with closed-loop gain = R_fb / R_in.
+            buf12_lines = f"""
+* Buffer 1 (CE complementary push-pull): v_drv_atten -> v_osc_drive
+* Op-amp + and - inputs SWAPPED relative to standard inverting amp because
+* the CE BJT stage is itself inverting -- if we used standard inverting amp
+* (signals into V-), the loop would have positive feedback and latch up.
+* With signals into V+, the BJT inversion provides the second sign flip
+* needed for negative feedback overall.
+XU_buf_osc n_buf_osc_sum 0 vcc_buf vee_buf n_buf_osc_out {opamp_bufo}
+R_buf1_in   v_drv_atten n_buf_osc_sum 1k
+R_buf1_fb   v_osc_drive n_buf_osc_sum {buf_fb1:.6g}
+R_obb_top   vcc_buf      q_o_bp_top    200
+D_obb_top   q_o_bp_top   n_buf_osc_out Dbias
+D_obb_bot   n_buf_osc_out q_o_bn_bot   Dbias
+R_obb_bot   q_o_bn_bot   vee_buf       200
+Q_o_pnp_top v_osc_drive q_o_bp_top vcc_buf QBC327
+Q_o_npn_bot v_osc_drive q_o_bn_bot vee_buf QBC337
 
-* Buffer 1: V_drv_atten -> V_osc_drive (gain k_buf, class-AB BC337/BC327)
-* Bootstrap caps from output to the midpoint of the upper/lower bias resistors
-* lift the bias rail with the signal so the NPN/PNP base can drive past
-* vcc_buf / vee_buf at peak swing. This lets v_buf shrink toward V_pk + ~1 V
-* for class-AB efficiency near pi/4 instead of the textbook (pi/4)*Vpk/Vbuf.
-* Feedback divider R_buf1_fb1:R_buf1_fb2 sets per-tube k_buf
+* Buffer 2 (CE complementary push-pull): v_ap -> v_ap_drive
+* DC-block cap on v_ap to kill the JFET-rectification offset before the
+* gain stage. Inverting op-amp + inverting CE BJT = non-inverting overall.
+C_buf2_dcblock v_ap         n_buf2_ac    100n IC=0
+R_buf2_dcref   n_buf2_ac    0            100k
+* Inverting amp summing junction takes both v_drv_atten (via cap-coupled v_ap)
+* and v_ap_drive feedback. R_buf2_in is from n_buf2_ac (AC-coupled v_ap).
+XU_buf_ap   n_buf_ap_sum 0 vcc_buf vee_buf n_buf_ap_out {opamp_bufa}
+R_buf2_in   n_buf2_ac   n_buf_ap_sum  1k
+R_buf2_fb   v_ap_drive  n_buf_ap_sum  {buf_fb_ap:.6g}
+R_abb_top   vcc_buf      q_a_bp_top    200
+D_abb_top   q_a_bp_top   n_buf_ap_out  Dbias
+D_abb_bot   n_buf_ap_out q_a_bn_bot    Dbias
+R_abb_bot   q_a_bn_bot   vee_buf       200
+Q_a_pnp_top v_ap_drive q_a_bp_top vcc_buf QBC327
+Q_a_pnp_bot v_ap_drive q_a_bn_bot vee_buf QBC337"""
+        else:
+            buf12_lines = f"""
+* Buffer 1 (CC emitter follower): V_drv_atten -> V_osc_drive (gain k_buf,
+* class-AB BC337/BC327). Bootstrap caps from output to bias-chain midpoints
+* lift the bias rail with the signal so the BJT base can drive past vcc_buf
+* / vee_buf at peak swing. Feedback divider R_buf1_fb1:R_buf1_fb2 sets k_buf.
 XU_buf_osc   v_drv_atten n_buf_osc_fb vcc_buf vee_buf n_buf_osc_out {opamp_bufo}
 R_buf1_fb1   v_osc_drive n_buf_osc_fb {buf_fb1:.6g}
 R_buf1_fb2   n_buf_osc_fb 0           1k
@@ -303,18 +344,7 @@ C_obb_bot    mid_obb_bot  v_osc_drive  4.7u IC=0
 Q_o_npn  vcc_buf q_o_bn v_osc_drive QBC337
 Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
 
-* Buffer 2: V_ap -> V_ap_drive (gain k_buf_ap, non-inverting class-AB).
-* V_diff = V_top - V_bot = V_drv_atten*k_buf*(1 - H) where H is the all-pass
-* response. |1-H| is large at high wRC (JFET near pinch-off) -- which is
-* also the regime where R_DS is large at cold start (JFET pinched off until
-* loop opens it), so the cold-start drive is naturally bounded. Keeps the
-* self-protecting startup property of the textbook topology.
-* Bootstrap caps mirror Buffer 1.
-* C_buf2_dcblock blocks the DC offset on v_ap (from JFET-channel rectification
-* at n_ap_plus, ~ -50 mV) so it isn't multiplied by Buffer 2's gain into a
-* large bias on v_ap_drive. R_buf2_dcref provides a DC return path for the
-* op-amp + input; together fc = 1/(2*pi*R*C). Sized 100k * 100n = 10 ms
-* (fc = 16 Hz), well below the 1 kHz carrier.
+* Buffer 2 (CC emitter follower): V_ap -> V_ap_drive (gain k_buf_ap).
 C_buf2_dcblock v_ap         n_buf2_ac    100n IC=0
 R_buf2_dcref   n_buf2_ac    0            100k
 XU_buf_ap    n_buf2_ac   n_buf_ap_fb     vcc_buf vee_buf n_buf_ap_out {opamp_bufa}
@@ -329,13 +359,13 @@ R_abb_bot_b  q_a_bp       mid_abb_bot  150
 R_abb_bot_a  mid_abb_bot  vee_buf      150
 C_abb_bot    mid_abb_bot  v_ap_drive   4.7u IC=0
 Q_a_npn  vcc_buf q_a_bn v_ap_drive QBC337
-Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327
-.model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
+Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327"""
+        models = """.model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
 .model QBC337 NPN(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
 + CJC=11p CJE=20p VAF=100)
 .model QBC327 PNP(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
-+ CJC=11p CJE=20p VAF=100)
-"""
++ CJC=11p CJE=20p VAF=100)"""
+        booster_lines = "\n" + buf0_lines + "\n\n" + buf12_lines.lstrip() + "\n" + models + "\n"
     # Optional pre-heat boost line (added at end of netlist body)
     boost_line = ""
     if p_boost > 0 and t_boost > 0:
@@ -1206,6 +1236,8 @@ def main():
                 mc["c_ap"] = spec["c_ap"]
             if spec.get("v_buf") is not None:
                 mc["v_buf"] = spec["v_buf"]
+            if spec.get("ce_buf"):
+                mc["ce_buf"] = True
             r = run_one(f"tube_{name}", v_preset=v_p, t_ramp=t_r,
                         r_int_scale=spec["r_int_scale"], mc=mc)
             m = metrics(r, target_T=spec["T_op"])
