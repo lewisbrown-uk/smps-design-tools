@@ -91,7 +91,7 @@ TUBES = {
     # loop to settle at higher R_DS to deliver the required V_diff -- pushes
     # the JFET closer to pinch-off where (1-H) is larger and V_top swing is
     # only fractionally bigger than V_diff (efficient class-AB).
-    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=1.0e3, buf_fb_ap=1.0e3, v_buf=1.4),
+    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True),
     "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=4.3),
     "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=1.5e3, buf_fb_ap=1.5e3, v_buf=1.7),
 }
@@ -305,13 +305,17 @@ R_obb_top   vcc_buf      q_o_bp_top    200
 D_obb_top   q_o_bp_top   n_buf_osc_out Dbias
 D_obb_bot   n_buf_osc_out q_o_bn_bot   Dbias
 R_obb_bot   q_o_bn_bot   vee_buf       200
-Q_o_pnp_top v_osc_drive q_o_bp_top vcc_buf QBC327
-Q_o_npn_bot v_osc_drive q_o_bn_bot vee_buf QBC337
+Q_o_pnp v_osc_drive q_o_bp_top vcc_buf QBC327
+Q_o_npn v_osc_drive q_o_bn_bot vee_buf QBC337
 
 * Buffer 2 (CE complementary push-pull): v_ap -> v_ap_drive
 * DC-block cap on v_ap to kill the JFET-rectification offset before the
-* gain stage. Inverting op-amp + inverting CE BJT = non-inverting overall.
-C_buf2_dcblock v_ap         n_buf2_ac    100n IC=0
+* gain stage. C must be sized so the HPF corner against R_buf2_in (1k,
+* the AC load at n_buf2_ac since op-amp summing junction is virtual GND)
+* is well below f0 = 1 kHz. C = 10 uF gives fc = 16 Hz; smaller caps
+* attenuate the carrier (100 nF would have fc = 1.6 kHz, killing 60% of
+* the signal at f0).
+C_buf2_dcblock v_ap         n_buf2_ac    10u IC=0
 R_buf2_dcref   n_buf2_ac    0            100k
 * Inverting amp summing junction takes both v_drv_atten (via cap-coupled v_ap)
 * and v_ap_drive feedback. R_buf2_in is from n_buf2_ac (AC-coupled v_ap).
@@ -322,8 +326,8 @@ R_abb_top   vcc_buf      q_a_bp_top    200
 D_abb_top   q_a_bp_top   n_buf_ap_out  Dbias
 D_abb_bot   n_buf_ap_out q_a_bn_bot    Dbias
 R_abb_bot   q_a_bn_bot   vee_buf       200
-Q_a_pnp_top v_ap_drive q_a_bp_top vcc_buf QBC327
-Q_a_pnp_bot v_ap_drive q_a_bn_bot vee_buf QBC337"""
+Q_a_pnp v_ap_drive q_a_bp_top vcc_buf QBC327
+Q_a_npn v_ap_drive q_a_bn_bot vee_buf QBC337"""
         else:
             buf12_lines = f"""
 * Buffer 1 (CC emitter follower): V_drv_atten -> V_osc_drive (gain k_buf,

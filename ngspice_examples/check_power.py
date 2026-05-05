@@ -25,7 +25,7 @@ import test_closed_loop as m
 
 
 # Components to monitor with (label, ngspice power expression, package rating mW)
-def power_specs(use_booster: bool):
+def power_specs(use_booster: bool, ce_buf: bool = False):
     specs = [
         # Wien limiter BJTs (2N3904, T0-92, 625 mW abs / ~300 mW derated)
         ("Q1_2N3904",  "(v(vcc) - v(fb))         * @Q1[ic]",        300),
@@ -38,17 +38,28 @@ def power_specs(use_booster: bool):
                            else "(v(v_osc) - v(n_ap_plus)) * @J_var[id]", 350),
     ]
     if use_booster:
-        # Buffer 1 BJT pair (BC337/327, T0-92, 625 mW abs / ~300 mW derated).
-        # NB: the BJT collectors connect to vcc_buf / vee_buf (the dedicated
-        # buffer rail), not vcc / vee. Computing V_CE from v(vcc) instead of
-        # v(vcc_buf) inflates dissipation by (V_CC - V_buf) * I_C.
-        specs += [
-            ("Q_o_npn_BC337", "(v(vcc_buf) - v(v_osc_drive)) * @Q_o_npn[ic]", 300),
-            ("Q_o_pnp_BC327", "(v(v_osc_drive) - v(vee_buf)) * (-@Q_o_pnp[ic])", 300),
-            # Buffer 2 BJT pair
-            ("Q_a_npn_BC337", "(v(vcc_buf) - v(v_ap_drive)) * @Q_a_npn[ic]", 300),
-            ("Q_a_pnp_BC327", "(v(v_ap_drive) - v(vee_buf)) * (-@Q_a_pnp[ic])", 300),
-        ]
+        # Buffer 1/2 class-AB BJT pair (BC337/327, TO-92, ~300 mW derated).
+        # CC topology: NPN at top (collector at vcc_buf, V_CE = vcc_buf - v_out),
+        #              PNP at bottom (collector at vee_buf, V_EC = v_out - vee_buf).
+        # CE topology: PNP at top (collector at v_out, emitter at vcc_buf,
+        #                          V_EC = vcc_buf - v_out),
+        #              NPN at bottom (collector at v_out, emitter at vee_buf,
+        #                             V_CE = v_out - vee_buf).
+        # Voltage formulas swap between the two topologies.
+        if ce_buf:
+            specs += [
+                ("Q_o_npn_BC337", "(v(v_osc_drive) - v(vee_buf)) * @Q_o_npn[ic]", 300),
+                ("Q_o_pnp_BC327", "(v(vcc_buf) - v(v_osc_drive)) * (-@Q_o_pnp[ic])", 300),
+                ("Q_a_npn_BC337", "(v(v_ap_drive) - v(vee_buf)) * @Q_a_npn[ic]", 300),
+                ("Q_a_pnp_BC327", "(v(vcc_buf) - v(v_ap_drive)) * (-@Q_a_pnp[ic])", 300),
+            ]
+        else:
+            specs += [
+                ("Q_o_npn_BC337", "(v(vcc_buf) - v(v_osc_drive)) * @Q_o_npn[ic]", 300),
+                ("Q_o_pnp_BC327", "(v(v_osc_drive) - v(vee_buf)) * (-@Q_o_pnp[ic])", 300),
+                ("Q_a_npn_BC337", "(v(vcc_buf) - v(v_ap_drive)) * @Q_a_npn[ic]", 300),
+                ("Q_a_pnp_BC327", "(v(v_ap_drive) - v(vee_buf)) * (-@Q_a_pnp[ic])", 300),
+            ]
     return specs
 
 
@@ -71,7 +82,7 @@ def run_for_power(tube_key: str):
     netlist = m.make_netlist(dat, v_preset=0.0, t_ramp=0.0,
                              r_int_scale=spec["r_int_scale"], mc=mc)
 
-    specs = power_specs(use_booster)
+    specs = power_specs(use_booster, ce_buf=spec.get("ce_buf", False))
     # Build .save and .control blocks. Two subtleties:
     # (1) device-internal parameters (@Q1[ic] etc.) are NOT saved as time-
     #     domain vectors by default -- need explicit .save.
