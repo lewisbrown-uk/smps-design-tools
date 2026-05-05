@@ -18,8 +18,8 @@ Vee  vee 0 -9.0
 * Buffer rails for the class-AB BJT collectors. Class-H envelope-tracking
 * servo in booster mode (auto-tunes vcc_buf/vee_buf to V_top_pk + 0.3 V),
 * fixed at VCC/VEE in non-booster mode (no buffers to power).
-Vcc_buf vcc_buf 0 1.3
-Vee_buf vee_buf 0 -1.3
+Vcc_buf vcc_buf 0 1.2
+Vee_buf vee_buf 0 -1.2
 
 * === Wien bridge oscillator (alpha=0.5) ===
 R1   v_osc  ns   10000
@@ -184,15 +184,15 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten uopamp_lvl2 Avol=1
 * (signals into V-), the loop would have positive feedback and latch up.
 * With signals into V+, the BJT inversion provides the second sign flip
 * needed for negative feedback overall.
-XU_buf_osc n_buf_osc_sum 0 vcc_buf vee_buf n_buf_osc_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+XU_buf_osc n_buf_osc_sum 0 vcc vee n_buf_osc_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 R_buf1_in   v_drv_atten n_buf_osc_sum 1k
 R_buf1_fb   v_osc_drive n_buf_osc_sum 2000
 R_obb_top   vcc_buf      q_o_bp_top    200
 D_obb_top   q_o_bp_top   n_buf_osc_out Dbias
 D_obb_bot   n_buf_osc_out q_o_bn_bot   Dbias
 R_obb_bot   q_o_bn_bot   vee_buf       200
-Q_o_pnp v_osc_drive q_o_bp_top vcc_buf QBC327
-Q_o_npn v_osc_drive q_o_bn_bot vee_buf QBC337
+M_o_pmos v_osc_drive q_o_bp_top vcc_buf vcc_buf PMOS_LL
+M_o_nmos v_osc_drive q_o_bn_bot vee_buf vee_buf NMOS_LL
 
 * Buffer 2 (CE complementary push-pull): v_ap -> v_ap_drive
 * DC-block cap on v_ap to kill the JFET-rectification offset before the
@@ -205,20 +205,24 @@ C_buf2_dcblock v_ap         n_buf2_ac    10u IC=0
 R_buf2_dcref   n_buf2_ac    0            100k
 * Inverting amp summing junction takes both v_drv_atten (via cap-coupled v_ap)
 * and v_ap_drive feedback. R_buf2_in is from n_buf2_ac (AC-coupled v_ap).
-XU_buf_ap   n_buf_ap_sum 0 vcc_buf vee_buf n_buf_ap_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+XU_buf_ap   n_buf_ap_sum 0 vcc vee n_buf_ap_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 R_buf2_in   n_buf2_ac   n_buf_ap_sum  1k
 R_buf2_fb   v_ap_drive  n_buf_ap_sum  2000
 R_abb_top   vcc_buf      q_a_bp_top    200
 D_abb_top   q_a_bp_top   n_buf_ap_out  Dbias
 D_abb_bot   n_buf_ap_out q_a_bn_bot    Dbias
 R_abb_bot   q_a_bn_bot   vee_buf       200
-Q_a_pnp v_ap_drive q_a_bp_top vcc_buf QBC327
-Q_a_npn v_ap_drive q_a_bn_bot vee_buf QBC337
+M_a_pmos v_ap_drive q_a_bp_top vcc_buf vcc_buf PMOS_LL
+M_a_nmos v_ap_drive q_a_bn_bot vee_buf vee_buf NMOS_LL
 .model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
 .model QBC337 NPN(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
 + CJC=11p CJE=20p VAF=100)
 .model QBC327 PNP(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
 + CJC=11p CJE=20p VAF=100)
+* Logic-level complementary MOSFETs (DMP3098L PMOS / DMN3008L NMOS class):
+* V_GS_th = +/- 0.7V, R_DS_on ~ 50 mOhm at V_GS overdrive of 1.8 V.
+.model PMOS_LL PMOS(LEVEL=1 VTO=-0.7 KP=100u L=1u W=55600u LAMBDA=0.01)
+.model NMOS_LL NMOS(LEVEL=1 VTO=+0.7 KP=100u L=1u W=55600u LAMBDA=0.01)
 
 * === 2N3904 ===
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259

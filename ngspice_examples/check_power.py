@@ -25,7 +25,7 @@ import test_closed_loop as m
 
 
 # Components to monitor with (label, ngspice power expression, package rating mW)
-def power_specs(use_booster: bool, ce_buf: bool = False):
+def power_specs(use_booster: bool, ce_buf: bool = False, mos_buf: bool = False):
     specs = [
         # Wien limiter BJTs (2N3904, T0-92, 625 mW abs / ~300 mW derated)
         ("Q1_2N3904",  "(v(vcc) - v(fb))         * @Q1[ic]",        300),
@@ -46,7 +46,18 @@ def power_specs(use_booster: bool, ce_buf: bool = False):
         #              NPN at bottom (collector at v_out, emitter at vee_buf,
         #                             V_CE = v_out - vee_buf).
         # Voltage formulas swap between the two topologies.
-        if ce_buf:
+        if mos_buf:
+            # MOSFET I_D sign convention in ngspice:
+            #   NMOS: I_D > 0 when current flows in at drain (D>S)
+            #   PMOS: I_D > 0 when current flows in at source (S>D, i.e. conducting)
+            # P = V_DS * I_D for NMOS, P = V_SD * I_D for PMOS (both magnitudes positive when conducting).
+            specs += [
+                ("M_o_nmos_DMN3008",  "(v(v_osc_drive) - v(vee_buf)) * @M_o_nmos[id]", 1000),
+                ("M_o_pmos_DMP3098", "(v(vcc_buf) - v(v_osc_drive)) * @M_o_pmos[id]", 1000),
+                ("M_a_nmos_DMN3008",  "(v(v_ap_drive) - v(vee_buf)) * @M_a_nmos[id]", 1000),
+                ("M_a_pmos_DMP3098", "(v(vcc_buf) - v(v_ap_drive)) * @M_a_pmos[id]", 1000),
+            ]
+        elif ce_buf:
             specs += [
                 ("Q_o_npn_BC337", "(v(v_osc_drive) - v(vee_buf)) * @Q_o_npn[ic]", 300),
                 ("Q_o_pnp_BC327", "(v(vcc_buf) - v(v_osc_drive)) * (-@Q_o_pnp[ic])", 300),
@@ -74,6 +85,7 @@ def run_for_power(tube_key: str):
     if spec.get("buf_fb_ap") is not None: mc["buf_fb_ap"] = spec["buf_fb_ap"]
     if spec.get("v_buf") is not None: mc["v_buf"] = spec["v_buf"]
     if spec.get("ce_buf"): mc["ce_buf"] = True
+    if spec.get("mos_buf"): mc["mos_buf"] = True
 
     work = m.WORK
     work.mkdir(exist_ok=True)
@@ -82,7 +94,8 @@ def run_for_power(tube_key: str):
     netlist = m.make_netlist(dat, v_preset=0.0, t_ramp=0.0,
                              r_int_scale=spec["r_int_scale"], mc=mc)
 
-    specs = power_specs(use_booster, ce_buf=spec.get("ce_buf", False))
+    specs = power_specs(use_booster, ce_buf=spec.get("ce_buf", False),
+                        mos_buf=spec.get("mos_buf", False))
     # Build .save and .control blocks. Two subtleties:
     # (1) device-internal parameters (@Q1[ic] etc.) are NOT saved as time-
     #     domain vectors by default -- need explicit .save.

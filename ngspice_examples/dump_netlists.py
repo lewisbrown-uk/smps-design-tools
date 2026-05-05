@@ -21,6 +21,7 @@ def main():
         if spec.get("buf_fb_ap") is not None: mc["buf_fb_ap"] = spec["buf_fb_ap"]
         if spec.get("v_buf") is not None: mc["v_buf"] = spec["v_buf"]
         if spec.get("ce_buf"): mc["ce_buf"] = True
+        if spec.get("mos_buf"): mc["mos_buf"] = True
         if spec.get("wien_alpha") is not None: mc["wien_alpha"] = spec["wien_alpha"]
         # Dummy data path; not actually used since we won't run the sim
         netlist = m.make_netlist(HERE / f"_{tube_key}_unused.data",
