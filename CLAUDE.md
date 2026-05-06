@@ -11,14 +11,37 @@ realisable solutions over elaborate spice tweaks. Examples:
   PCB and real op-amps will produce 10 dB of variation.
 - "Set Vos=0" tells us the loop's noiseless equilibrium, not what the
   built circuit will do. Real op-amps have Vos; account for it.
-- A simulation that converges 50 ms faster but requires extra parts
-  costing £5 isn't an improvement for a hobby/replica build.
+- A simulation that converges 50 ms faster purely because of an
+  ngspice tuning trick (smaller timestep, IC fudges) is not a real
+  improvement -- the built circuit will behave however its physical
+  components dictate, regardless of the simulator's settling speed.
 - ngspice numerical stability issues (e.g. timestep collapse at switch
   edges) are simulator artefacts. Don't optimise for them at the cost
   of the real circuit's behaviour.
 
 When you find yourself solving a problem that wouldn't exist in
 hardware, stop and ask whether the problem is real.
+
+## "Hobby build" means MORE design freedom, not less
+
+Don't justify accepting performance compromises by appealing to "this
+is a hobby build". A hobby build has MORE freedom than a manufactured
+product, not less:
+
+- No BOM cost pressure → can use more components, matched/precision
+  parts, hand-selected transistors, exotic op-amps, etc.
+- No PCB area constraint → can use through-hole, generous spacing,
+  more passive components, dedicated trim circuits.
+- No mass-tuning constraint → can hand-tune per-unit, use trimpots,
+  match component pairs by measurement.
+- No regulatory compliance shortcuts → can use whatever quenches RFI
+  most effectively, even if it costs more or takes more space.
+
+The right mental model is "well-equipped lab prototype with infinite
+component budget" not "off-the-shelf consumer product with £5 BOM
+target". When proposing trade-offs, weigh them against
+*manufacturability of one* (where complexity is essentially free) not
+*manufacturability of thousands*.
 
 ## Always commit the latest versions of generated artifacts after a test
 
