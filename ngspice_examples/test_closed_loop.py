@@ -371,7 +371,7 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp_buf0}"""
 * needed for negative feedback overall.
 XU_buf_osc n_buf_osc_sum 0 {buf_op_rails} n_buf_osc_out {opamp_bufo}
 R_buf1_in   v_drv_atten n_buf_osc_sum 1k
-R_buf1_fb   v_osc_drive n_buf_osc_sum {buf_fb1:.6g}
+R_buf1_fb   {bridge_v_top} n_buf_osc_sum {buf_fb1:.6g}
 R_obb_top   vcc_buf      q_o_bp_top    200
 D_obb_top   q_o_bp_top   n_buf_osc_out {bias_diode}
 D_obb_bot   n_buf_osc_out q_o_bn_bot   {bias_diode}
@@ -391,7 +391,7 @@ R_buf2_dcref   n_buf2_ac    0            100k
 * and v_ap_drive feedback. R_buf2_in is from n_buf2_ac (AC-coupled v_ap).
 XU_buf_ap   n_buf_ap_sum 0 {buf_op_rails} n_buf_ap_out {opamp_bufa}
 R_buf2_in   n_buf2_ac   n_buf_ap_sum  1k
-R_buf2_fb   v_ap_drive  n_buf_ap_sum  {buf_fb_ap:.6g}
+R_buf2_fb   {bridge_v_bot}  n_buf_ap_sum  {buf_fb_ap:.6g}
 R_abb_top   vcc_buf      q_a_bp_top    200
 D_abb_top   q_a_bp_top   n_buf_ap_out  {bias_diode}
 D_abb_bot   n_buf_ap_out q_a_bn_bot    {bias_diode}
@@ -404,7 +404,7 @@ R_abb_bot   q_a_bn_bot   vee_buf       200
 * lift the bias rail with the signal so the BJT base can drive past vcc_buf
 * / vee_buf at peak swing. Feedback divider R_buf1_fb1:R_buf1_fb2 sets k_buf.
 XU_buf_osc   v_drv_atten n_buf_osc_fb vcc_buf vee_buf n_buf_osc_out {opamp_bufo}
-R_buf1_fb1   v_osc_drive n_buf_osc_fb {buf_fb1:.6g}
+R_buf1_fb1   {bridge_v_top} n_buf_osc_fb {buf_fb1:.6g}
 R_buf1_fb2   n_buf_osc_fb 0           1k
 R_obb_top_a  vcc_buf      mid_obb_top  680
 R_obb_top_b  mid_obb_top  q_o_bn       680
@@ -421,7 +421,7 @@ Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
 C_buf2_dcblock v_ap         n_buf2_ac    100n IC=0
 R_buf2_dcref   n_buf2_ac    0            100k
 XU_buf_ap    n_buf2_ac   n_buf_ap_fb     vcc_buf vee_buf n_buf_ap_out {opamp_bufa}
-R_buf2_fb1   v_ap_drive  n_buf_ap_fb     {buf_fb_ap:.6g}
+R_buf2_fb1   {bridge_v_bot}  n_buf_ap_fb     {buf_fb_ap:.6g}
 R_buf2_fb2   n_buf_ap_fb 0               1k
 R_abb_top_a  vcc_buf      mid_abb_top  680
 R_abb_top_b  mid_abb_top  q_a_bn       680
