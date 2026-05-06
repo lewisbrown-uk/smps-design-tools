@@ -41,6 +41,8 @@ def run_hf(tube_key: str):
     if spec.get("tank_l") is not None: mc["tank_l"] = spec["tank_l"]
     if spec.get("tank_c") is not None: mc["tank_c"] = spec["tank_c"]
     if spec.get("bias_diode"): mc["bias_diode"] = spec["bias_diode"]
+    if spec.get("xfmr_n") is not None: mc["xfmr_n"] = spec["xfmr_n"]
+    if spec.get("xfmr_lpri") is not None: mc["xfmr_lpri"] = spec["xfmr_lpri"]
     # HF mode: f0 = 100 kHz, fixed R_fil = R_op
     mc["hf_mode"] = True
     mc["R_op"] = spec["R_op"]

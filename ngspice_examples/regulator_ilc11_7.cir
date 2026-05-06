@@ -18,8 +18,8 @@ Vee  vee 0 -9.0
 * Buffer rails for the class-AB BJT collectors. Class-H envelope-tracking
 * servo in booster mode (auto-tunes vcc_buf/vee_buf to V_top_pk + 0.3 V),
 * fixed at VCC/VEE in non-booster mode (no buffers to power).
-Vcc_buf vcc_buf 0 4.3
-Vee_buf vee_buf 0 -4.3
+Vcc_buf vcc_buf 0 24
+Vee_buf vee_buf 0 -24
 
 * === Wien bridge oscillator (alpha=0.5) ===
 R1   v_osc  ns   10000
@@ -183,7 +183,7 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten uopamp_lvl2 Avol=1
 * lift the bias rail with the signal so the BJT base can drive past vcc_buf
 * / vee_buf at peak swing. Feedback divider R_buf1_fb1:R_buf1_fb2 sets k_buf.
 XU_buf_osc   v_drv_atten n_buf_osc_fb vcc_buf vee_buf n_buf_osc_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-R_buf1_fb1   v_osc_drive n_buf_osc_fb 9100
+R_buf1_fb1   v_osc_drive n_buf_osc_fb 36000
 R_buf1_fb2   n_buf_osc_fb 0           1k
 R_obb_top_a  vcc_buf      mid_obb_top  680
 R_obb_top_b  mid_obb_top  q_o_bn       680
@@ -200,7 +200,7 @@ Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
 C_buf2_dcblock v_ap         n_buf2_ac    100n IC=0
 R_buf2_dcref   n_buf2_ac    0            100k
 XU_buf_ap    n_buf2_ac   n_buf_ap_fb     vcc_buf vee_buf n_buf_ap_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-R_buf2_fb1   v_ap_drive  n_buf_ap_fb     9100
+R_buf2_fb1   v_ap_drive  n_buf_ap_fb     36000
 R_buf2_fb2   n_buf_ap_fb 0               1k
 R_abb_top_a  vcc_buf      mid_abb_top  680
 R_abb_top_b  mid_abb_top  q_a_bn       680

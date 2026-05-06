@@ -38,7 +38,8 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                r_int_scale=0.3, booster=False,
                wien_alpha=None, c_ap=None, buf_fb1=None, buf_fb_ap=None,
                v_buf=None, ce_buf=False, mos_buf=False,
-               tank_l=None, tank_c=None, bias_diode="Dbias"):
+               tank_l=None, tank_c=None, bias_diode="Dbias",
+               xfmr_n=None, xfmr_lpri=None):
     # Bridge target R = R_op * R_bot_ref / R_sen, set to give R_filament = R_op
     # at the operating temperature T_op. (An earlier version had a 1% offset
     # for "cold-start kick", but that's unnecessary -- the filament starts at
@@ -57,7 +58,8 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                 buf_fb1=buf_fb1, buf_fb_ap=buf_fb_ap, v_buf=v_buf,
                 ce_buf=ce_buf, mos_buf=mos_buf,
                 tank_l=tank_l, tank_c=tank_c,
-                bias_diode=bias_diode)
+                bias_diode=bias_diode,
+                xfmr_n=xfmr_n, xfmr_lpri=xfmr_lpri)
 
 # r_int_scale per tube: option-A's 0.3 was tuned for the IV-3 bridge gain.
 # Bridge sensitivity ~ V_drive*R_sen/(R_op+R_sen)^2 changes per tube, so
@@ -95,7 +97,7 @@ TUBES = {
     # the JFET closer to pinch-off where (1-H) is larger and V_top swing is
     # only fractionally bigger than V_diff (efficient class-AB).
     "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=4.3, tank_l=10e-6, tank_c=270e-9),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=36e3, buf_fb_ap=36e3, v_buf=24.0, tank_l=160e-6, tank_c=16e-9, bias_diode="Dschottky", xfmr_n=4, xfmr_lpri=5e-3),
     "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
@@ -267,17 +269,32 @@ def make_netlist(data_path: Path,
     use_booster = mc.get("booster", False)
     v_osc_drive = "v_osc_drive" if use_booster else "v_osc"
     v_ap_drive  = "v_ap_drive"  if use_booster else "v_ap"
+    # Optional step-down transformer between buffer outputs and bridge:
+    # buffer drives v_osc_drive/v_ap_drive (primary), transformer reflects
+    # to v_osc_load/v_ap_load (secondary), bridge sees the secondary. Lets
+    # the BJT pair operate at higher V/lower I (better V_pk/V_supply ratio,
+    # smaller I_C peak) for class-C efficiency. Only meaningful in hf_mode
+    # because at f0=1 kHz the primary X_L is too low to look like a load.
+    xfmr_n = mc.get("xfmr_n")  # turns ratio Np:Ns step-down (e.g., 4)
+    xfmr_lpri = mc.get("xfmr_lpri", 5e-3)  # primary magnetizing inductance
+    use_xfmr = (xfmr_n is not None) and mc.get("hf_mode", False)
+    if use_xfmr:
+        bridge_v_top = "v_osc_load"
+        bridge_v_bot = "v_ap_load"
+    else:
+        bridge_v_top = v_osc_drive
+        bridge_v_bot = v_ap_drive
     # HF steady-state mode: fixed R_op filament (no thermal time constant)
     # so a short sim suffices. T_node and r_fil are still defined (for
     # downstream wrdata/metrics compatibility) via fixed sources.
     if hf_mode:
         R_op_value = mc.get("R_op", 25)
         T_op_value = mc.get("T_op", 800)
-        filament_line = (f"R_fil_fixed {v_osc_drive} node_A {R_op_value:.6g}\n"
+        filament_line = (f"R_fil_fixed {bridge_v_top} node_A {R_op_value:.6g}\n"
                          f"V_T_fake T_node 0 {T_op_value:.6g}\n"
                          f"B_R_fake r_fil 0 V = {R_op_value:.6g}")
     else:
-        filament_line = f"X_filament {v_osc_drive} node_A T_node r_fil filament"
+        filament_line = f"X_filament {bridge_v_top} node_A T_node r_fil filament"
     # Integrator-cap initial condition for HF mode: with R_fil pinned at
     # R_op, the bridge is always balanced -> no demod error -> integrator
     # has no driving signal and stays at IC=0. We pre-load the cap so the
@@ -416,20 +433,41 @@ R_abb_bot_a  mid_abb_bot  vee_buf      680
 C_abb_bot    mid_abb_bot  v_ap_drive   4.7u IC=0
 Q_a_npn  vcc_buf q_a_bn v_ap_drive QBC337
 Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327"""
-        # Optional class-C tank: parallel LC across bridge differential
-        # (between v_osc_drive and v_ap_drive). At f0 the tank presents
-        # high impedance (smoothing pulse-train V_diff to a clean sine);
-        # at harmonics, low impedance (shorting them). Q_loaded set by
-        # the bridge filament arm (~30 ohm in parallel with reference arm).
-        # Only enabled in hf_mode -- at 1 kHz the inductor reactance would
-        # near-short the bridge differential and break operation.
+        # Optional step-down transformer + class-C tank: at hf_mode only.
+        # Buffer outputs (v_osc_drive, v_ap_drive) drive the primary, which
+        # is parallel-LC tuned to f0 (impedance transformation up). The
+        # secondary (v_osc_load, v_ap_load) drives the bridge at lower V /
+        # higher I. Lets the BJT pair sit at high V_supply / low I_pk for
+        # class-C operation, with the tank providing impedance transformation
+        # so V_pk on the primary can exceed v_buf via the LC ringing.
         tank_l = mc.get("tank_l")
         tank_c = mc.get("tank_c")
         tank_lines = ""
         if hf_mode and tank_l is not None and tank_c is not None:
-            tank_lines = (f"\n* Class-C / harmonic-rejection LC tank across bridge differential\n"
-                          f"L_tank v_osc_drive v_ap_drive {tank_l:.6g} IC=0\n"
-                          f"C_tank v_osc_drive v_ap_drive {tank_c:.6e} IC=0")
+            if use_xfmr:
+                # Tank goes on the PRIMARY side (high impedance world)
+                tank_lines = (f"\n* Class-C / harmonic-rejection LC tank on transformer primary\n"
+                              f"L_tank v_osc_drive v_ap_drive {tank_l:.6g} IC=0\n"
+                              f"C_tank v_osc_drive v_ap_drive {tank_c:.6e} IC=0")
+            else:
+                # Tank directly across bridge differential (no impedance
+                # transformation, just harmonic filtering)
+                tank_lines = (f"\n* Harmonic-rejection LC tank across bridge differential\n"
+                              f"L_tank v_osc_drive v_ap_drive {tank_l:.6g} IC=0\n"
+                              f"C_tank v_osc_drive v_ap_drive {tank_c:.6e} IC=0")
+        # Step-down transformer (when use_xfmr): primary on v_osc_drive,v_ap_drive
+        # (high V/low I), secondary on v_osc_load,v_ap_load (low V/high I = filament).
+        # K=0.99 gives ~1% leakage; for ideal coupling K=1.0 but ngspice may
+        # be unhappy. Magnetizing inductance L_pri set per-tube so primary
+        # impedance at f0 is dominated by reflected load, not magnetizing.
+        xfmr_lines = ""
+        if use_xfmr:
+            l_sec = xfmr_lpri / (xfmr_n ** 2)
+            xfmr_lines = (f"\n* Step-down transformer Np:Ns = {xfmr_n}:1\n"
+                          f"* L_pri = {xfmr_lpri:.4g} H, L_sec = {l_sec:.4g} H, k = 0.99\n"
+                          f"L_pri v_osc_drive v_ap_drive {xfmr_lpri:.6g} IC=0\n"
+                          f"L_sec v_osc_load v_ap_load {l_sec:.6g} IC=0\n"
+                          f"K_xfmr L_pri L_sec 0.99")
         models = """.model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
 * Schottky (BAT54-class): V_F ~0.3V at 1mA. Used as bias-chain diode for
 * sub-threshold class-C operation: 2*V_d_schottky = 0.6V offset between
@@ -444,7 +482,7 @@ Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327"""
 * V_GS_th = +/- 0.7V, R_DS_on ~ 50 mOhm at V_GS overdrive of 1.8 V.
 .model PMOS_LL PMOS(LEVEL=1 VTO=-0.7 KP=100u L=1u W=55600u LAMBDA=0.01)
 .model NMOS_LL NMOS(LEVEL=1 VTO=+0.7 KP=100u L=1u W=55600u LAMBDA=0.01)"""
-        booster_lines = "\n" + buf0_lines + "\n\n" + buf12_lines.lstrip() + tank_lines + "\n" + models + "\n"
+        booster_lines = "\n" + buf0_lines + "\n\n" + buf12_lines.lstrip() + tank_lines + xfmr_lines + "\n" + models + "\n"
     # Optional pre-heat boost line (added at end of netlist body)
     boost_line = ""
     if p_boost > 0 and t_boost > 0:
@@ -526,11 +564,11 @@ B_R     r_fil 0     V = R_amb * (V(T_node)/T_amb)^fil_exp
 * === AC Wheatstone bridge ===
 * Filament arm: V_osc -> filament(thermal) -> node_A -> R_sense -> V_ap
 {filament_line}
-R_sen node_A {v_ap_drive} {r_sense_v:.6g}
+R_sen node_A {bridge_v_bot} {r_sense_v:.6g}
 * Reference arm: V_osc -> R_top_ref -> node_B -> R_bot_ref -> V_ap.
 * Bridge balance R_top_ref / R_bot_ref = R_op / R_sen targets R_op exactly.
-R_top_ref {v_osc_drive} node_B {r_top_ref:.6g}
-R_bot_ref node_B {v_ap_drive}  {r_bot_ref:.6g}
+R_top_ref {bridge_v_top} node_B {r_top_ref:.6g}
+R_bot_ref node_B {bridge_v_bot}  {r_bot_ref:.6g}
 
 * === Difference amp (1-op-amp subtractor, gain 1) ===
 R_a1 node_A n_diff_minus {r_a1:.6g}
