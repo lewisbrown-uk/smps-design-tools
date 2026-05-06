@@ -371,7 +371,7 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp_buf0}"""
 * needed for negative feedback overall.
 XU_buf_osc n_buf_osc_sum 0 {buf_op_rails} n_buf_osc_out {opamp_bufo}
 R_buf1_in   v_drv_atten n_buf_osc_sum 1k
-R_buf1_fb   {bridge_v_top} n_buf_osc_sum {buf_fb1:.6g}
+R_buf1_fb   v_osc_drive n_buf_osc_sum {buf_fb1:.6g}
 R_obb_top   vcc_buf      q_o_bp_top    200
 D_obb_top   q_o_bp_top   n_buf_osc_out {bias_diode}
 D_obb_bot   n_buf_osc_out q_o_bn_bot   {bias_diode}
@@ -391,7 +391,7 @@ R_buf2_dcref   n_buf2_ac    0            100k
 * and v_ap_drive feedback. R_buf2_in is from n_buf2_ac (AC-coupled v_ap).
 XU_buf_ap   n_buf_ap_sum 0 {buf_op_rails} n_buf_ap_out {opamp_bufa}
 R_buf2_in   n_buf2_ac   n_buf_ap_sum  1k
-R_buf2_fb   {bridge_v_bot}  n_buf_ap_sum  {buf_fb_ap:.6g}
+R_buf2_fb   v_ap_drive  n_buf_ap_sum  {buf_fb_ap:.6g}
 R_abb_top   vcc_buf      q_a_bp_top    200
 D_abb_top   q_a_bp_top   n_buf_ap_out  {bias_diode}
 D_abb_bot   n_buf_ap_out q_a_bn_bot    {bias_diode}
@@ -404,7 +404,7 @@ R_abb_bot   q_a_bn_bot   vee_buf       200
 * lift the bias rail with the signal so the BJT base can drive past vcc_buf
 * / vee_buf at peak swing. Feedback divider R_buf1_fb1:R_buf1_fb2 sets k_buf.
 XU_buf_osc   v_drv_atten n_buf_osc_fb vcc_buf vee_buf n_buf_osc_out {opamp_bufo}
-R_buf1_fb1   {bridge_v_top} n_buf_osc_fb {buf_fb1:.6g}
+R_buf1_fb1   v_osc_drive n_buf_osc_fb {buf_fb1:.6g}
 R_buf1_fb2   n_buf_osc_fb 0           1k
 R_obb_top_a  vcc_buf      mid_obb_top  680
 R_obb_top_b  mid_obb_top  q_o_bn       680
@@ -421,7 +421,7 @@ Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
 C_buf2_dcblock v_ap         n_buf2_ac    100n IC=0
 R_buf2_dcref   n_buf2_ac    0            100k
 XU_buf_ap    n_buf2_ac   n_buf_ap_fb     vcc_buf vee_buf n_buf_ap_out {opamp_bufa}
-R_buf2_fb1   {bridge_v_bot}  n_buf_ap_fb     {buf_fb_ap:.6g}
+R_buf2_fb1   v_ap_drive  n_buf_ap_fb     {buf_fb_ap:.6g}
 R_buf2_fb2   n_buf_ap_fb 0               1k
 R_abb_top_a  vcc_buf      mid_abb_top  680
 R_abb_top_b  mid_abb_top  q_a_bn       680
@@ -443,18 +443,19 @@ Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327"""
         tank_l = mc.get("tank_l")
         tank_c = mc.get("tank_c")
         tank_lines = ""
+        # When the transformer is in use, both L_tank and L_pri attach to the
+        # DC-blocked node n_pri_top (set up below in xfmr_lines). When there's
+        # no transformer, the tank attaches directly to v_osc_drive.
+        tank_top = "n_pri_top" if use_xfmr else "v_osc_drive"
         if hf_mode and tank_l is not None and tank_c is not None:
             if use_xfmr:
-                # Tank goes on the PRIMARY side (high impedance world)
                 tank_lines = (f"\n* Class-C / harmonic-rejection LC tank on transformer primary\n"
-                              f"L_tank v_osc_drive v_ap_drive {tank_l:.6g} IC=0\n"
-                              f"C_tank v_osc_drive v_ap_drive {tank_c:.6e} IC=0")
+                              f"L_tank {tank_top} v_ap_drive {tank_l:.6g} IC=0\n"
+                              f"C_tank {tank_top} v_ap_drive {tank_c:.6e} IC=0")
             else:
-                # Tank directly across bridge differential (no impedance
-                # transformation, just harmonic filtering)
                 tank_lines = (f"\n* Harmonic-rejection LC tank across bridge differential\n"
-                              f"L_tank v_osc_drive v_ap_drive {tank_l:.6g} IC=0\n"
-                              f"C_tank v_osc_drive v_ap_drive {tank_c:.6e} IC=0")
+                              f"L_tank {tank_top} v_ap_drive {tank_l:.6g} IC=0\n"
+                              f"C_tank {tank_top} v_ap_drive {tank_c:.6e} IC=0")
         # Step-down transformer (when use_xfmr): primary on v_osc_drive,v_ap_drive
         # (high V/low I), secondary on v_osc_load,v_ap_load (low V/high I = filament).
         # K=0.99 gives ~1% leakage; for ideal coupling K=1.0 but ngspice may
@@ -463,9 +464,24 @@ Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327"""
         xfmr_lines = ""
         if use_xfmr:
             l_sec = xfmr_lpri / (xfmr_n ** 2)
-            xfmr_lines = (f"\n* Step-down transformer Np:Ns = {xfmr_n}:1\n"
+            # C_block_pri (1 uF) breaks the DC path through L_pri. Without it,
+            # any small DC offset between the two buffer outputs (Vos mismatch,
+            # JFET-rectification residual, BJT bias asymmetry) drives unbounded
+            # DC current through the ideal-inductor L_pri until BJT-saturation
+            # current limits it -- ~1.7 A at 24 V rails = 40 W of DC dissipation
+            # per BJT. With C_block, the cap charges to whatever DC offset the
+            # buffers settle at and L_pri sees no DC. X_C(1uF) at 100 kHz = 1.6
+            # ohm, negligible vs the ~480 ohm reflected load.
+            xfmr_lines = (f"\n* Step-down transformer Np:Ns = {xfmr_n}:1 (DC-blocked primary)\n"
                           f"* L_pri = {xfmr_lpri:.4g} H, L_sec = {l_sec:.4g} H, k = 0.99\n"
-                          f"L_pri v_osc_drive v_ap_drive {xfmr_lpri:.6g} IC=0\n"
+                          f"* Both L_pri and L_tank attach to n_pri_top so a single C_block_pri\n"
+                          f"* breaks the DC path through either inductor. Without this, any\n"
+                          f"* tiny DC offset between buffer outputs drives unbounded current\n"
+                          f"* through whichever inductor is connected (~1.7 A measured = 40 W\n"
+                          f"* per BJT). X_C(1uF) at 100 kHz = 1.6 ohm, negligible vs reflected\n"
+                          f"* load (~480 ohm at N=4).\n"
+                          f"C_block_pri v_osc_drive n_pri_top 1u IC=0\n"
+                          f"L_pri n_pri_top v_ap_drive {xfmr_lpri:.6g} IC=0\n"
                           f"L_sec v_osc_load v_ap_load {l_sec:.6g} IC=0\n"
                           f"K_xfmr L_pri L_sec 0.99")
         models = """.model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
