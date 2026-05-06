@@ -208,6 +208,17 @@ def make_netlist(data_path: Path,
     r_a1 = 1e6 * g("k_r_a1"); r_a2 = 1e6 * g("k_r_a2")
     r_b1 = 1e6 * g("k_r_b1"); r_b2 = 1e6 * g("k_r_b2")
     c_ap_v = mc.get("c_ap", C_AP * g("k_c_ap"))
+    # HF steady-state mode: f0 bumped to 100 kHz, Wien C and C_AP scaled
+    # accordingly, filament replaced with a fixed R_op resistor (no thermal
+    # dynamics), and v_int_out forced to the per-tube settled value (so the
+    # JFET sits at its OP without the integrator transient). Used to measure
+    # AC power dissipation at high carrier frequency without paying for the
+    # 100x slower simulation that would happen if we tracked thermal warmup.
+    hf_mode = mc.get("hf_mode", False)
+    if hf_mode:
+        c1_wien *= 0.01
+        c2_wien *= 0.01
+        c_ap_v *= 0.01
     # Wien BJT amplitude clamp: alpha sets the V_osc clamp threshold (lower
     # alpha -> higher peak amplitude). Default 0.5 keeps clamp at ~3 V_pk on
     # +/-5 V rails.
@@ -253,6 +264,25 @@ def make_netlist(data_path: Path,
     use_booster = mc.get("booster", False)
     v_osc_drive = "v_osc_drive" if use_booster else "v_osc"
     v_ap_drive  = "v_ap_drive"  if use_booster else "v_ap"
+    # HF steady-state mode: fixed R_op filament (no thermal time constant)
+    # so a short sim suffices. T_node and r_fil are still defined (for
+    # downstream wrdata/metrics compatibility) via fixed sources.
+    if hf_mode:
+        R_op_value = mc.get("R_op", 25)
+        T_op_value = mc.get("T_op", 800)
+        filament_line = (f"R_fil_fixed {v_osc_drive} node_A {R_op_value:.6g}\n"
+                         f"V_T_fake T_node 0 {T_op_value:.6g}\n"
+                         f"B_R_fake r_fil 0 V = {R_op_value:.6g}")
+    else:
+        filament_line = f"X_filament {v_osc_drive} node_A T_node r_fil filament"
+    # Integrator-cap initial condition for HF mode: with R_fil pinned at
+    # R_op, the bridge is always balanced -> no demod error -> integrator
+    # has no driving signal and stays at IC=0. We pre-load the cap so the
+    # loop starts at its known OP. The op-amp's output equals the
+    # difference V(n_int_pidp) - V(n_int_minus) ~ -v_int_out at DC, so
+    # IC on C_intfb (n_int_minus -> n_int_pidp) = -v_int_settled.
+    v_int_settled = mc.get("v_int_settled", 2.0)
+    c_intfb_ic_v = -v_int_settled if hf_mode else 0.0
     # Comparator: natural sign(V_osc) for both booster and non-booster paths
     # (Buffer 2 is non-inverting, so V_bot tracks V_ap with the same sign as
     # V_osc; the demod's reference must be in-phase with V_osc).
@@ -472,7 +502,7 @@ B_R     r_fil 0     V = R_amb * (V(T_node)/T_amb)^fil_exp
 
 * === AC Wheatstone bridge ===
 * Filament arm: V_osc -> filament(thermal) -> node_A -> R_sense -> V_ap
-X_filament {v_osc_drive} node_A T_node r_fil filament
+{filament_line}
 R_sen node_A {v_ap_drive} {r_sense_v:.6g}
 * Reference arm: V_osc -> R_top_ref -> node_B -> R_bot_ref -> V_ap.
 * Bridge balance R_top_ref / R_bot_ref = R_op / R_sen targets R_op exactly.
@@ -522,7 +552,7 @@ R_intfb  n_int_pidp v_int_out {r_pid:.6g}
 * Realistic startup: cap begins uncharged (no IC). Loop self-starts from
 * the intentional 1% bridge mismatch above + Vos drift in the demod and
 * integrator op-amps.
-C_intfb  n_int_minus n_int_pidp {c_int:.6e}  IC=0
+C_intfb  n_int_minus n_int_pidp {c_int:.6e}  IC={c_intfb_ic_v:.4g}
 * HF rolloff cap: in parallel with R_PID to limit HF gain and suppress
 * the f0 ripple from V_demod that the D term would otherwise pump
 * through to V_ctl.
