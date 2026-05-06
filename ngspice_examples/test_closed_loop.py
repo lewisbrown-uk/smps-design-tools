@@ -38,7 +38,7 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                r_int_scale=0.3, booster=False,
                wien_alpha=None, c_ap=None, buf_fb1=None, buf_fb_ap=None,
                v_buf=None, ce_buf=False, mos_buf=False,
-               tank_l=None, tank_c=None):
+               tank_l=None, tank_c=None, bias_diode="Dbias"):
     # Bridge target R = R_op * R_bot_ref / R_sen, set to give R_filament = R_op
     # at the operating temperature T_op. (An earlier version had a 1% offset
     # for "cold-start kick", but that's unnecessary -- the filament starts at
@@ -56,7 +56,8 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                 wien_alpha=wien_alpha, c_ap=c_ap,
                 buf_fb1=buf_fb1, buf_fb_ap=buf_fb_ap, v_buf=v_buf,
                 ce_buf=ce_buf, mos_buf=mos_buf,
-                tank_l=tank_l, tank_c=tank_c)
+                tank_l=tank_l, tank_c=tank_c,
+                bias_diode=bias_diode)
 
 # r_int_scale per tube: option-A's 0.3 was tuned for the IV-3 bridge gain.
 # Bridge sensitivity ~ V_drive*R_sen/(R_op+R_sen)^2 changes per tube, so
@@ -308,6 +309,7 @@ def make_netlist(data_path: Path,
 
     ce_buf = mc.get("ce_buf", False)
     mos_buf = mc.get("mos_buf", False)
+    bias_diode = mc.get("bias_diode", "Dbias")
     # MOSFET CE buffer: same topology as ce_buf but with logic-level
     # complementary MOSFETs in place of the BJT pair, and op-amps on
     # +-VCC instead of +-vcc_buf so the gates can be driven hard enough
@@ -354,8 +356,8 @@ XU_buf_osc n_buf_osc_sum 0 {buf_op_rails} n_buf_osc_out {opamp_bufo}
 R_buf1_in   v_drv_atten n_buf_osc_sum 1k
 R_buf1_fb   v_osc_drive n_buf_osc_sum {buf_fb1:.6g}
 R_obb_top   vcc_buf      q_o_bp_top    200
-D_obb_top   q_o_bp_top   n_buf_osc_out Dbias
-D_obb_bot   n_buf_osc_out q_o_bn_bot   Dbias
+D_obb_top   q_o_bp_top   n_buf_osc_out {bias_diode}
+D_obb_bot   n_buf_osc_out q_o_bn_bot   {bias_diode}
 R_obb_bot   q_o_bn_bot   vee_buf       200
 {bjt_or_fet_top}
 
@@ -374,8 +376,8 @@ XU_buf_ap   n_buf_ap_sum 0 {buf_op_rails} n_buf_ap_out {opamp_bufa}
 R_buf2_in   n_buf2_ac   n_buf_ap_sum  1k
 R_buf2_fb   v_ap_drive  n_buf_ap_sum  {buf_fb_ap:.6g}
 R_abb_top   vcc_buf      q_a_bp_top    200
-D_abb_top   q_a_bp_top   n_buf_ap_out  Dbias
-D_abb_bot   n_buf_ap_out q_a_bn_bot    Dbias
+D_abb_top   q_a_bp_top   n_buf_ap_out  {bias_diode}
+D_abb_bot   n_buf_ap_out q_a_bn_bot    {bias_diode}
 R_abb_bot   q_a_bn_bot   vee_buf       200
 {bjt_or_fet_bot}"""
         else:
@@ -390,8 +392,8 @@ R_buf1_fb2   n_buf_osc_fb 0           1k
 R_obb_top_a  vcc_buf      mid_obb_top  680
 R_obb_top_b  mid_obb_top  q_o_bn       680
 C_obb_top    mid_obb_top  v_osc_drive  4.7u IC=0
-D_obb_top    q_o_bn       n_buf_osc_out Dbias
-D_obb_bot    n_buf_osc_out q_o_bp      Dbias
+D_obb_top    q_o_bn       n_buf_osc_out {bias_diode}
+D_obb_bot    n_buf_osc_out q_o_bp      {bias_diode}
 R_obb_bot_b  q_o_bp       mid_obb_bot  680
 R_obb_bot_a  mid_obb_bot  vee_buf      680
 C_obb_bot    mid_obb_bot  v_osc_drive  4.7u IC=0
@@ -407,8 +409,8 @@ R_buf2_fb2   n_buf_ap_fb 0               1k
 R_abb_top_a  vcc_buf      mid_abb_top  680
 R_abb_top_b  mid_abb_top  q_a_bn       680
 C_abb_top    mid_abb_top  v_ap_drive   4.7u IC=0
-D_abb_top    q_a_bn       n_buf_ap_out Dbias
-D_abb_bot    n_buf_ap_out q_a_bp       Dbias
+D_abb_top    q_a_bn       n_buf_ap_out {bias_diode}
+D_abb_bot    n_buf_ap_out q_a_bp       {bias_diode}
 R_abb_bot_b  q_a_bp       mid_abb_bot  680
 R_abb_bot_a  mid_abb_bot  vee_buf      680
 C_abb_bot    mid_abb_bot  v_ap_drive   4.7u IC=0
@@ -429,6 +431,11 @@ Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327"""
                           f"L_tank v_osc_drive v_ap_drive {tank_l:.6g} IC=0\n"
                           f"C_tank v_osc_drive v_ap_drive {tank_c:.6e} IC=0")
         models = """.model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
+* Schottky (BAT54-class): V_F ~0.3V at 1mA. Used as bias-chain diode for
+* sub-threshold class-C operation: 2*V_d_schottky = 0.6V offset between
+* BJT bases puts V_BE_quiescent ~0.3V (below 0.6V on threshold), so the
+* BJTs only pulse-conduct at AC peaks.
+.model Dschottky D(IS=10n N=1.0 RS=0.1 BV=20 IBV=0.1m CJO=10p)
 .model QBC337 NPN(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
 + CJC=11p CJE=20p VAF=100)
 .model QBC327 PNP(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8

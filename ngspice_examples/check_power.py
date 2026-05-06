@@ -86,6 +86,9 @@ def run_for_power(tube_key: str):
     if spec.get("v_buf") is not None: mc["v_buf"] = spec["v_buf"]
     if spec.get("ce_buf"): mc["ce_buf"] = True
     if spec.get("mos_buf"): mc["mos_buf"] = True
+    if spec.get("tank_l") is not None: mc["tank_l"] = spec["tank_l"]
+    if spec.get("tank_c") is not None: mc["tank_c"] = spec["tank_c"]
+    if spec.get("bias_diode"): mc["bias_diode"] = spec["bias_diode"]
 
     work = m.WORK
     work.mkdir(exist_ok=True)

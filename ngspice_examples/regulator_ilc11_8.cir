@@ -215,6 +215,11 @@ R_abb_bot   q_a_bn_bot   vee_buf       200
 M_a_pmos v_ap_drive q_a_bp_top vcc_buf vcc_buf PMOS_LL
 M_a_nmos v_ap_drive q_a_bn_bot vee_buf vee_buf NMOS_LL
 .model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
+* Schottky (BAT54-class): V_F ~0.3V at 1mA. Used as bias-chain diode for
+* sub-threshold class-C operation: 2*V_d_schottky = 0.6V offset between
+* BJT bases puts V_BE_quiescent ~0.3V (below 0.6V on threshold), so the
+* BJTs only pulse-conduct at AC peaks.
+.model Dschottky D(IS=10n N=1.0 RS=0.1 BV=20 IBV=0.1m CJO=10p)
 .model QBC337 NPN(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
 + CJC=11p CJE=20p VAF=100)
 .model QBC327 PNP(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
