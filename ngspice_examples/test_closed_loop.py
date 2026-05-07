@@ -562,8 +562,10 @@ Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327"""
 + CJC=11p CJE=20p VAF=100)
 .model QBC327 PNP(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
 + CJC=11p CJE=20p VAF=100)
-* Logic-level complementary MOSFETs (DMP3098L PMOS / DMN3008L NMOS class):
-* V_GS_th = +/- 0.7V, R_DS_on ~ 50 mOhm at V_GS overdrive of 1.8 V.
+* Logic-level complementary MOSFET pair: DMP3098L (PMOS) / DMN3404L (NMOS),
+* Diodes Inc., SOT-23. V_GS_th = +/- 0.7V, R_DS_on ~ 50 mOhm at V_GS overdrive
+* of 1.8V. The Level 1 model below is a generic stand-in -- replace with the
+* manufacturer PSpice models for accurate SOA / switching-loss analysis.
 .model PMOS_LL PMOS(LEVEL=1 VTO=-0.7 KP=100u L=1u W=55600u LAMBDA=0.01)
 .model NMOS_LL NMOS(LEVEL=1 VTO=+0.7 KP=100u L=1u W=55600u LAMBDA=0.01)"""
         booster_lines = "\n" + buf0_lines + "\n\n" + buf12_lines.lstrip() + tank_lines + xfmr_lines + "\n" + models + "\n"

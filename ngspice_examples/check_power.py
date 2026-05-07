@@ -51,13 +51,14 @@ def power_specs(use_booster: bool, ce_buf: bool = False, mos_buf: bool = False):
             #   NMOS: I_D > 0 when current flows in at drain (D>S)
             #   PMOS: I_D > 0 when current flows in at source (S>D, i.e. conducting)
             # P = V_DS * I_D for NMOS, P = V_SD * I_D for PMOS (both magnitudes positive when conducting).
-            # DMN3008LK6 / DMP3098L logic-level FETs in SOT-23, ~1.4 W abs /
-            # ~700 mW derated (well above what the buffer ever needs).
+            # DMN3404L (NMOS) / DMP3098L (PMOS), Diodes Inc., SOT-23.
+            # ~1 W abs at TA=25 C, ~640 mW derated at TA=70 C; both confirmed
+            # in single-pulse SOA for the 30 W / 1 us startup spike.
             specs += [
-                ("M_o_nmos_DMN3008",  "(v(v_osc_drive) - v(vee_buf)) * @M_o_nmos[id]", 700),
-                ("M_o_pmos_DMP3098", "(v(vcc_buf) - v(v_osc_drive)) * @M_o_pmos[id]", 700),
-                ("M_a_nmos_DMN3008",  "(v(v_ap_drive) - v(vee_buf)) * @M_a_nmos[id]", 700),
-                ("M_a_pmos_DMP3098", "(v(vcc_buf) - v(v_ap_drive)) * @M_a_pmos[id]", 700),
+                ("M_o_nmos_DMN3404L",  "(v(v_osc_drive) - v(vee_buf)) * @M_o_nmos[id]", 640),
+                ("M_o_pmos_DMP3098L", "(v(vcc_buf) - v(v_osc_drive)) * @M_o_pmos[id]", 640),
+                ("M_a_nmos_DMN3404L",  "(v(v_ap_drive) - v(vee_buf)) * @M_a_nmos[id]", 640),
+                ("M_a_pmos_DMP3098L", "(v(vcc_buf) - v(v_ap_drive)) * @M_a_pmos[id]", 640),
             ]
         elif ce_buf:
             specs += [
