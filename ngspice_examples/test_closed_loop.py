@@ -39,7 +39,7 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                wien_alpha=None, c_ap=None, buf_fb1=None, buf_fb_ap=None,
                v_buf=None, ce_buf=False, mos_buf=False,
                tank_l=None, tank_c=None, bias_diode="Dbias",
-               xfmr_n=None, xfmr_lpri=None):
+               xfmr_n=None, xfmr_lpri=None, bias_zener_v=None):
     # Bridge target R = R_op * R_bot_ref / R_sen, set to give R_filament = R_op
     # at the operating temperature T_op. (An earlier version had a 1% offset
     # for "cold-start kick", but that's unnecessary -- the filament starts at
@@ -59,7 +59,8 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                 ce_buf=ce_buf, mos_buf=mos_buf,
                 tank_l=tank_l, tank_c=tank_c,
                 bias_diode=bias_diode,
-                xfmr_n=xfmr_n, xfmr_lpri=xfmr_lpri)
+                xfmr_n=xfmr_n, xfmr_lpri=xfmr_lpri,
+                bias_zener_v=bias_zener_v)
 
 # r_int_scale per tube: option-A's 0.3 was tuned for the IV-3 bridge gain.
 # Bridge sensitivity ~ V_drive*R_sen/(R_op+R_sen)^2 changes per tube, so
@@ -97,7 +98,7 @@ TUBES = {
     # the JFET closer to pinch-off where (1-H) is larger and V_top swing is
     # only fractionally bigger than V_diff (efficient class-AB).
     "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=4.3),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=8.0, ce_buf=True, mos_buf=True, bias_zener_v=7.5),
     "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
@@ -362,6 +363,44 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp_buf0}"""
             # of each rail -- saves V_BE = 0.6V vs CC emitter follower. Inverting
             # op-amp config + inverting CE BJT stage gives non-inverting overall
             # with closed-loop gain = R_fb / R_in.
+            #
+            # Two bias-chain options:
+            #   forward diode (bias_zener_v=None): R + Dbias forward + Dbias
+            #     forward + R. Total chain V drop = 2*v_buf, of which 2*V_F is
+            #     in the diodes. Works only when v_buf ~ V_F + V_GS_th (1.0-
+            #     1.5 V), the regime IV-6 and ILC1-1/8 use. At higher v_buf
+            #     the chain forces V_R = v_buf - V_F, shoving V_GS far past
+            #     threshold and causing shoot-through.
+            #   Zener (bias_zener_v=value): R + Zener_reverse + Zener_reverse +
+            #     R. Each Zener clamps at V_Z, soaking up the rail headroom so
+            #     V_R can be small. Sized so V_GS_q sits just below or near
+            #     V_th for class-B / shallow-class-AB push-pull. Used by
+            #     ILC1-1/7 at v_buf=8 V (V_op=5 V_RMS / 30 ohm = 1 W out).
+            bias_zener_v = mc.get("bias_zener_v")
+            if bias_zener_v is not None:
+                v_buf_v = mc.get("v_buf", 4.3)
+                # Symmetric bias chain: 2*v_buf = 2*V_R + 2*V_Z, so V_R is
+                # forced to (v_buf - V_Z). Pick R to limit chain current to
+                # ~0.5 mA (negligible quiescent dissipation).
+                v_r = max(0.05, v_buf_v - bias_zener_v)
+                r_obb = max(100.0, v_r / 5e-4)
+                bias_top_top = f"R_obb_top   vcc_buf       q_o_bp_top    {r_obb:.6g}"
+                bias_top_mid = f"D_obb_top   n_buf_osc_out q_o_bp_top    Dzen_obb"
+                bias_top_lower = f"D_obb_bot   q_o_bn_bot    n_buf_osc_out Dzen_obb"
+                bias_top_bot = f"R_obb_bot   q_o_bn_bot    vee_buf       {r_obb:.6g}"
+                bias_ap_top = f"R_abb_top   vcc_buf       q_a_bp_top    {r_obb:.6g}"
+                bias_ap_mid = f"D_abb_top   n_buf_ap_out  q_a_bp_top    Dzen_obb"
+                bias_ap_lower = f"D_abb_bot   q_a_bn_bot    n_buf_ap_out  Dzen_obb"
+                bias_ap_bot = f"R_abb_bot   q_a_bn_bot    vee_buf       {r_obb:.6g}"
+            else:
+                bias_top_top = "R_obb_top   vcc_buf       q_o_bp_top    200"
+                bias_top_mid = f"D_obb_top   q_o_bp_top    n_buf_osc_out {bias_diode}"
+                bias_top_lower = f"D_obb_bot   n_buf_osc_out q_o_bn_bot   {bias_diode}"
+                bias_top_bot = "R_obb_bot   q_o_bn_bot    vee_buf       200"
+                bias_ap_top = "R_abb_top   vcc_buf       q_a_bp_top    200"
+                bias_ap_mid = f"D_abb_top   q_a_bp_top    n_buf_ap_out  {bias_diode}"
+                bias_ap_lower = f"D_abb_bot   n_buf_ap_out q_a_bn_bot    {bias_diode}"
+                bias_ap_bot = "R_abb_bot   q_a_bn_bot    vee_buf       200"
             buf12_lines = f"""
 * Buffer 1 (CE complementary push-pull): v_drv_atten -> v_osc_drive
 * Op-amp + and - inputs SWAPPED relative to standard inverting amp because
@@ -372,10 +411,10 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp_buf0}"""
 XU_buf_osc n_buf_osc_sum 0 {buf_op_rails} n_buf_osc_out {opamp_bufo}
 R_buf1_in   v_drv_atten n_buf_osc_sum 1k
 R_buf1_fb   v_osc_drive n_buf_osc_sum {buf_fb1:.6g}
-R_obb_top   vcc_buf      q_o_bp_top    200
-D_obb_top   q_o_bp_top   n_buf_osc_out {bias_diode}
-D_obb_bot   n_buf_osc_out q_o_bn_bot   {bias_diode}
-R_obb_bot   q_o_bn_bot   vee_buf       200
+{bias_top_top}
+{bias_top_mid}
+{bias_top_lower}
+{bias_top_bot}
 {bjt_or_fet_top}
 
 * Buffer 2 (CE complementary push-pull): v_ap -> v_ap_drive
@@ -392,10 +431,10 @@ R_buf2_dcref   n_buf2_ac    0            100k
 XU_buf_ap   n_buf_ap_sum 0 {buf_op_rails} n_buf_ap_out {opamp_bufa}
 R_buf2_in   n_buf2_ac   n_buf_ap_sum  1k
 R_buf2_fb   v_ap_drive  n_buf_ap_sum  {buf_fb_ap:.6g}
-R_abb_top   vcc_buf      q_a_bp_top    200
-D_abb_top   q_a_bp_top   n_buf_ap_out  {bias_diode}
-D_abb_bot   n_buf_ap_out q_a_bn_bot    {bias_diode}
-R_abb_bot   q_a_bn_bot   vee_buf       200
+{bias_ap_top}
+{bias_ap_mid}
+{bias_ap_lower}
+{bias_ap_bot}
 {bjt_or_fet_bot}"""
         else:
             buf12_lines = f"""
@@ -484,7 +523,18 @@ Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327"""
                           f"L_pri n_pri_top v_ap_drive {xfmr_lpri:.6g} IC=0\n"
                           f"L_sec v_osc_load v_ap_load {l_sec:.6g} IC=0\n"
                           f"K_xfmr L_pri L_sec 0.99")
-        models = """.model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
+        bias_zener_v = mc.get("bias_zener_v")
+        if bias_zener_v is not None:
+            # Zener (BZX84-class) wired in reverse breakdown to absorb v_buf
+            # rail headroom in the CE-MOSFET bias chain. Used by ILC1-1/7 at
+            # v_buf=8 V; pick BZX84-C7V5 for V_Z = 7.5 V, leaving V_R = 0.5 V
+            # per side -> V_GS_q = 0.5 V (sub-threshold class-B; op-amp loop
+            # corrects the crossover at f0=1-100 kHz easily).
+            zener_model = (f"\n.model Dzen_obb D(IS=10n N=1.0 RS=1 "
+                           f"BV={bias_zener_v} IBV=100m CJO=80p TT=10n)")
+        else:
+            zener_model = ""
+        models = f""".model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p){zener_model}
 * Schottky (BAT54-class): V_F ~0.3V at 1mA. Used as bias-chain diode for
 * sub-threshold class-C operation: 2*V_d_schottky = 0.6V offset between
 * BJT bases puts V_BE_quiescent ~0.3V (below 0.6V on threshold), so the

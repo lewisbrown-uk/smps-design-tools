@@ -187,10 +187,10 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten uopamp_lvl2 Avol=1
 XU_buf_osc n_buf_osc_sum 0 vcc vee n_buf_osc_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 R_buf1_in   v_drv_atten n_buf_osc_sum 1k
 R_buf1_fb   v_osc_drive n_buf_osc_sum 2500
-R_obb_top   vcc_buf      q_o_bp_top    200
-D_obb_top   q_o_bp_top   n_buf_osc_out Dbias
+R_obb_top   vcc_buf       q_o_bp_top    200
+D_obb_top   q_o_bp_top    n_buf_osc_out Dbias
 D_obb_bot   n_buf_osc_out q_o_bn_bot   Dbias
-R_obb_bot   q_o_bn_bot   vee_buf       200
+R_obb_bot   q_o_bn_bot    vee_buf       200
 M_o_pmos v_osc_drive q_o_bp_top vcc_buf vcc_buf PMOS_LL
 M_o_nmos v_osc_drive q_o_bn_bot vee_buf vee_buf NMOS_LL
 
@@ -208,10 +208,10 @@ R_buf2_dcref   n_buf2_ac    0            100k
 XU_buf_ap   n_buf_ap_sum 0 vcc vee n_buf_ap_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 R_buf2_in   n_buf2_ac   n_buf_ap_sum  1k
 R_buf2_fb   v_ap_drive  n_buf_ap_sum  2500
-R_abb_top   vcc_buf      q_a_bp_top    200
-D_abb_top   q_a_bp_top   n_buf_ap_out  Dbias
+R_abb_top   vcc_buf       q_a_bp_top    200
+D_abb_top   q_a_bp_top    n_buf_ap_out  Dbias
 D_abb_bot   n_buf_ap_out q_a_bn_bot    Dbias
-R_abb_bot   q_a_bn_bot   vee_buf       200
+R_abb_bot   q_a_bn_bot    vee_buf       200
 M_a_pmos v_ap_drive q_a_bp_top vcc_buf vcc_buf PMOS_LL
 M_a_nmos v_ap_drive q_a_bn_bot vee_buf vee_buf NMOS_LL
 .model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
