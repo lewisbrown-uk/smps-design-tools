@@ -67,11 +67,16 @@ def power_specs(use_booster: bool, ce_buf: bool = False, mos_buf: bool = False):
                 ("Q_a_pnp_BC807", "(v(vcc_buf) - v(v_ap_drive)) * (-@Q_a_pnp[ic])", 120),
             ]
         else:
+            # CC class-AB pair: the only tube using this is ILC1-1/7 (V_op = 5
+            # V_RMS / 30 ohm = 1 W out, ss_avg ~ 100 mW per BJT). SOT-23 BC817/
+            # BC807 (~120 mW derated) puts ss_avg at ~85% of rating with
+            # half-watt sub-millisecond peaks; tight enough that we promote the
+            # CC pair to SOT-89 BC868/BC868PA (~750 mW derated).
             specs += [
-                ("Q_o_npn_BC817", "(v(vcc_buf) - v(v_osc_drive)) * @Q_o_npn[ic]", 120),
-                ("Q_o_pnp_BC807", "(v(v_osc_drive) - v(vee_buf)) * (-@Q_o_pnp[ic])", 120),
-                ("Q_a_npn_BC817", "(v(vcc_buf) - v(v_ap_drive)) * @Q_a_npn[ic]", 120),
-                ("Q_a_pnp_BC807", "(v(v_ap_drive) - v(vee_buf)) * (-@Q_a_pnp[ic])", 120),
+                ("Q_o_npn_BC868",   "(v(vcc_buf) - v(v_osc_drive)) * @Q_o_npn[ic]", 750),
+                ("Q_o_pnp_BC868PA", "(v(v_osc_drive) - v(vee_buf)) * (-@Q_o_pnp[ic])", 750),
+                ("Q_a_npn_BC868",   "(v(vcc_buf) - v(v_ap_drive)) * @Q_a_npn[ic]", 750),
+                ("Q_a_pnp_BC868PA", "(v(v_ap_drive) - v(vee_buf)) * (-@Q_a_pnp[ic])", 750),
             ]
     return specs
 
