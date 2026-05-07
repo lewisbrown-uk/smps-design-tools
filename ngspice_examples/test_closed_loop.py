@@ -360,10 +360,22 @@ def make_netlist(data_path: Path,
         ce_buf = True   # MOSFET buffer is always CE-style
     buf_op_rails = "vcc vee" if mos_buf else "vcc_buf vee_buf"
     if mos_buf:
-        bjt_or_fet_top = ("M_o_pmos v_osc_drive q_o_bp_top vcc_buf vcc_buf PMOS_LL\n"
-                           "M_o_nmos v_osc_drive q_o_bn_bot vee_buf vee_buf NMOS_LL")
-        bjt_or_fet_bot = ("M_a_pmos v_ap_drive q_a_bp_top vcc_buf vcc_buf PMOS_LL\n"
-                          "M_a_nmos v_ap_drive q_a_bn_bot vee_buf vee_buf NMOS_LL")
+        # 0-V current-sense sources in series with each MOSFET source. The
+        # manufacturer subcircuit doesn't expose its internal MOSFET to
+        # @xname.m1[id] hierarchical accessors in this ngspice build, so we
+        # measure I_D externally via i(V_imN) which always works.
+        bjt_or_fet_top = (
+            "V_im_o_pmos vcc_buf vcc_buf_o_pmos 0\n"
+            "XM_o_pmos v_osc_drive q_o_bp_top vcc_buf_o_pmos DMP3098L\n"
+            "V_im_o_nmos vee_buf_o_nmos vee_buf 0\n"
+            "XM_o_nmos v_osc_drive q_o_bn_bot vee_buf_o_nmos DMN3404L"
+        )
+        bjt_or_fet_bot = (
+            "V_im_a_pmos vcc_buf vcc_buf_a_pmos 0\n"
+            "XM_a_pmos v_ap_drive q_a_bp_top vcc_buf_a_pmos DMP3098L\n"
+            "V_im_a_nmos vee_buf_a_nmos vee_buf 0\n"
+            "XM_a_nmos v_ap_drive q_a_bn_bot vee_buf_a_nmos DMN3404L"
+        )
     else:
         bjt_or_fet_top = ("Q_o_pnp v_osc_drive q_o_bp_top vcc_buf QBC327\n"
                            "Q_o_npn v_osc_drive q_o_bn_bot vee_buf QBC337")
@@ -571,6 +583,11 @@ Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327"""
                            f"BV={bias_zener_v} IBV=100m CJO=80p TT=10n)")
         else:
             zener_model = ""
+        # Absolute paths to the manufacturer MOSFET subcircuit models. Need
+        # absolute paths because ngspice runs from the WORK subdirectory, so
+        # any relative include path would resolve from there.
+        pmos_path = (HERE / "spice_models" / "DMP3098L.spice.txt").as_posix()
+        nmos_path = (HERE / "spice_models" / "DMN3404L.spice.txt").as_posix()
         models = f""".model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p){zener_model}
 * Schottky (BAT54-class): V_F ~0.3V at 1mA. Used as bias-chain diode for
 * sub-threshold class-C operation: 2*V_d_schottky = 0.6V offset between
@@ -582,11 +599,11 @@ Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327"""
 .model QBC327 PNP(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
 + CJC=11p CJE=20p VAF=100)
 * Logic-level complementary MOSFET pair: DMP3098L (PMOS) / DMN3404L (NMOS),
-* Diodes Inc., SOT-23. V_GS_th = +/- 0.7V, R_DS_on ~ 50 mOhm at V_GS overdrive
-* of 1.8V. The Level 1 model below is a generic stand-in -- replace with the
-* manufacturer PSpice models for accurate SOA / switching-loss analysis.
-.model PMOS_LL PMOS(LEVEL=1 VTO=-0.7 KP=100u L=1u W=55600u LAMBDA=0.01)
-.model NMOS_LL NMOS(LEVEL=1 VTO=+0.7 KP=100u L=1u W=55600u LAMBDA=0.01)"""
+* Diodes Inc., SOT-23. Manufacturer subcircuit models (LEVEL=3 internal,
+* with junction caps + body diodes) loaded from spice_models/. Terminals
+* are 3-pin: drain, gate, source (no external body).
+.include {pmos_path}
+.include {nmos_path}"""
         booster_lines = "\n" + buf0_lines + "\n\n" + buf12_lines.lstrip() + tank_lines + xfmr_lines + "\n" + models + "\n"
     # Optional pre-heat boost line (added at end of netlist body)
     boost_line = ""

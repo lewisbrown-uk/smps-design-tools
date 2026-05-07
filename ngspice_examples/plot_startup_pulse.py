@@ -44,15 +44,18 @@ def main():
                              r_int_scale=spec["r_int_scale"], mc=mc)
     # Override .tran for tight resolution at startup. 5 ns timestep, run for
     # 5 ms total (covers startup + a few ms of settled operation).
+    # 100 ns initial step is fine for visualising the rail ramp & V_GS-through-
+    # threshold transition (both ~us scales). The manufacturer subcircuit has
+    # fast junction caps that would make 5 ns step prohibitively slow.
     netlist = re.sub(r"\.tran\s+\S+\s+\S+",
-                     ".tran 5n 5m", netlist, count=1)
-    new_control = """.save @M_o_nmos[id] @M_o_pmos[id] @M_a_nmos[id] @M_a_pmos[id] V(v_osc_drive) V(v_ap_drive) V(vcc_buf) V(vee_buf) V(n_buf_osc_out)
+                     ".tran 100n 5m", netlist, count=1)
+    new_control = """.save V(v_osc_drive) V(v_ap_drive) V(vcc_buf) V(vee_buf) V(n_buf_osc_out) i(V_im_o_nmos) i(V_im_o_pmos) i(V_im_a_nmos) i(V_im_a_pmos)
 .control
 run
-let i_o_n   = @M_o_nmos[id]
-let i_o_p   = @M_o_pmos[id]
-let i_a_n   = @M_a_nmos[id]
-let i_a_p   = @M_a_pmos[id]
+let i_o_n   = i(V_im_o_nmos)
+let i_o_p   = i(V_im_o_pmos)
+let i_a_n   = i(V_im_a_nmos)
+let i_a_p   = i(V_im_a_pmos)
 let v_o_drv = v(v_osc_drive)
 let v_a_drv = v(v_ap_drive)
 let v_cc    = v(vcc_buf)
@@ -65,7 +68,7 @@ wrdata """ + str(dat.as_posix()) + """ i_o_n i_o_p i_a_n i_a_p v_o_drv v_a_drv v
     cir.write_text(netlist)
     print("Running startup capture (5 ms with 5 ns timestep, may take a few minutes)...")
     res = subprocess.run(["ngspice", "-b", cir.name], cwd=work,
-                         capture_output=True, text=True, timeout=1200)
+                         capture_output=True, text=True, timeout=1800)
     if res.returncode != 0:
         print(res.stderr[-1500:]); raise SystemExit(1)
     d = np.loadtxt(dat)

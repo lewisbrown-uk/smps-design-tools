@@ -54,11 +54,15 @@ def power_specs(use_booster: bool, ce_buf: bool = False, mos_buf: bool = False):
             # DMN3404L (NMOS) / DMP3098L (PMOS), Diodes Inc., SOT-23.
             # ~1 W abs at TA=25 C, ~640 mW derated at TA=70 C; both confirmed
             # in single-pulse SOA for the 30 W / 1 us startup spike.
+            # MOSFET drain currents come from current-sense V sources placed
+            # in series with each device's source (the manufacturer subcircuit
+            # doesn't expose internal device parameters to @xname.m1[id] in
+            # this ngspice build, so we sense externally).
             specs += [
-                ("M_o_nmos_DMN3404L",  "(v(v_osc_drive) - v(vee_buf)) * @M_o_nmos[id]", 640),
-                ("M_o_pmos_DMP3098L", "(v(vcc_buf) - v(v_osc_drive)) * @M_o_pmos[id]", 640),
-                ("M_a_nmos_DMN3404L",  "(v(v_ap_drive) - v(vee_buf)) * @M_a_nmos[id]", 640),
-                ("M_a_pmos_DMP3098L", "(v(vcc_buf) - v(v_ap_drive)) * @M_a_pmos[id]", 640),
+                ("M_o_nmos_DMN3404L",  "(v(v_osc_drive) - v(vee_buf)) * i(V_im_o_nmos)", 640),
+                ("M_o_pmos_DMP3098L", "(v(vcc_buf) - v(v_osc_drive)) * i(V_im_o_pmos)", 640),
+                ("M_a_nmos_DMN3404L",  "(v(v_ap_drive) - v(vee_buf)) * i(V_im_a_nmos)", 640),
+                ("M_a_pmos_DMP3098L", "(v(vcc_buf) - v(v_ap_drive)) * i(V_im_a_pmos)", 640),
             ]
         elif ce_buf:
             specs += [
@@ -119,12 +123,19 @@ def run_for_power(tube_key: str):
     #     let first (`let ic_q1 = @Q1[ic]`) and reference that let in the
     #     power expression.
     save_tokens = set()
-    at_token_to_let = {}   # @Q1[ic] -> ic_q1
+    at_token_to_let = {}   # @Q1[ic] -> ic_q1, also i(Vname) -> i_vname
     for _name, expr, _ in specs:
         for tok in re.findall(r"@\w+\[\w+\]", expr):
             save_tokens.add(tok)
             # Build a safe let-name from the @-token (strip @, [], make underscore)
             let_name = "x_" + tok.replace("@", "").replace("[", "_").replace("]", "")
+            at_token_to_let[tok] = let_name
+        for tok in re.findall(r"i\(\w+\)", expr):
+            # Current through a V source: must be explicitly .saved AND bound
+            # to a let to avoid scalar collapse in arithmetic. Without .save,
+            # ngspice in batch mode reports the vector has zero length.
+            save_tokens.add(tok)
+            let_name = "x_" + tok.replace("i(", "i_").replace(")", "")
             at_token_to_let[tok] = let_name
         for tok in re.findall(r"v\(\w+\)", expr):
             save_tokens.add(tok)
@@ -132,7 +143,7 @@ def run_for_power(tube_key: str):
                            for tok, let_name in sorted(at_token_to_let.items()))
     let_lines_list = []
     for name, expr, _rating in specs:
-        # Substitute each @-token with its bound let-name
+        # Substitute each @-token / i(...) with its bound let-name
         e = expr
         for tok, let_name in at_token_to_let.items():
             e = e.replace(tok, let_name)
