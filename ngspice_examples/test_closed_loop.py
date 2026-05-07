@@ -39,7 +39,8 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                wien_alpha=None, c_ap=None, buf_fb1=None, buf_fb_ap=None,
                v_buf=None, ce_buf=False, mos_buf=False,
                tank_l=None, tank_c=None, bias_diode="Dbias",
-               xfmr_n=None, xfmr_lpri=None, bias_zener_v=None):
+               xfmr_n=None, xfmr_lpri=None, bias_zener_v=None,
+               buf_comp_pf=None):
     # Bridge target R = R_op * R_bot_ref / R_sen, set to give R_filament = R_op
     # at the operating temperature T_op. (An earlier version had a 1% offset
     # for "cold-start kick", but that's unnecessary -- the filament starts at
@@ -60,7 +61,8 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                 tank_l=tank_l, tank_c=tank_c,
                 bias_diode=bias_diode,
                 xfmr_n=xfmr_n, xfmr_lpri=xfmr_lpri,
-                bias_zener_v=bias_zener_v)
+                bias_zener_v=bias_zener_v,
+                buf_comp_pf=buf_comp_pf)
 
 # r_int_scale per tube: option-A's 0.3 was tuned for the IV-3 bridge gain.
 # Bridge sensitivity ~ V_drive*R_sen/(R_op+R_sen)^2 changes per tube, so
@@ -98,7 +100,7 @@ TUBES = {
     # the JFET closer to pinch-off where (1-H) is larger and V_top swing is
     # only fractionally bigger than V_diff (efficient class-AB).
     "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=4.3),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=5.0, ce_buf=True, mos_buf=True, bias_zener_v=4.3, buf_comp_pf=2200),
     "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
@@ -323,7 +325,8 @@ def make_netlist(data_path: Path,
     # to compensate by pushing the JFET further into pinch-off (raising
     # |1-H| at op), so V_diff is delivered at a lower V_top swing and
     # the BJT runs in saturation at peak (V_CE -> V_CE_sat).
-    rail_definition = f"Vcc_buf vcc_buf 0 {v_buf:.4g}\nVee_buf vee_buf 0 -{v_buf:.4g}"
+    rail_definition = (f"Vcc_buf vcc_buf 0 {v_buf:.4g}\n"
+                       f"Vee_buf vee_buf 0 -{v_buf:.4g}")
 
     ce_buf = mc.get("ce_buf", False)
     mos_buf = mc.get("mos_buf", False)
@@ -376,6 +379,21 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp_buf0}"""
             #     V_R can be small. Sized so V_GS_q sits just below or near
             #     V_th for class-B / shallow-class-AB push-pull. Used by
             #     ILC1-1/7 at v_buf=8 V (V_op=5 V_RMS / 30 ohm = 1 W out).
+            # Optional Miller-style frequency compensation across the buffer's
+            # feedback resistor. Real CE class-AB amps need this when the
+            # output stage is operating near the rail / saturation-triode
+            # boundary -- the BJT/MOSFET small-signal gain shifts dramatically
+            # in that region, eroding the local loop's phase margin and
+            # causing oscillation. A small cap (~100 pF) across R_fb rolls
+            # off the loop gain at HF (>= 1 MHz) so the gain crosses unity
+            # before the output-stage phase shift accumulates.
+            buf_comp_pf = mc.get("buf_comp_pf")
+            if buf_comp_pf is not None:
+                buf_comp_top = f"C_buf1_comp v_osc_drive n_buf_osc_sum {buf_comp_pf:.4g}p\n"
+                buf_comp_ap  = f"C_buf2_comp v_ap_drive  n_buf_ap_sum  {buf_comp_pf:.4g}p\n"
+            else:
+                buf_comp_top = ""
+                buf_comp_ap  = ""
             bias_zener_v = mc.get("bias_zener_v")
             if bias_zener_v is not None:
                 v_buf_v = mc.get("v_buf", 4.3)
@@ -411,7 +429,7 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp_buf0}"""
 XU_buf_osc n_buf_osc_sum 0 {buf_op_rails} n_buf_osc_out {opamp_bufo}
 R_buf1_in   v_drv_atten n_buf_osc_sum 1k
 R_buf1_fb   v_osc_drive n_buf_osc_sum {buf_fb1:.6g}
-{bias_top_top}
+{buf_comp_top}{bias_top_top}
 {bias_top_mid}
 {bias_top_lower}
 {bias_top_bot}
@@ -431,7 +449,7 @@ R_buf2_dcref   n_buf2_ac    0            100k
 XU_buf_ap   n_buf_ap_sum 0 {buf_op_rails} n_buf_ap_out {opamp_bufa}
 R_buf2_in   n_buf2_ac   n_buf_ap_sum  1k
 R_buf2_fb   v_ap_drive  n_buf_ap_sum  {buf_fb_ap:.6g}
-{bias_ap_top}
+{buf_comp_ap}{bias_ap_top}
 {bias_ap_mid}
 {bias_ap_lower}
 {bias_ap_bot}

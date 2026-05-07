@@ -18,8 +18,8 @@ Vee  vee 0 -9.0
 * Buffer rails for the class-AB BJT collectors. Class-H envelope-tracking
 * servo in booster mode (auto-tunes vcc_buf/vee_buf to V_top_pk + 0.3 V),
 * fixed at VCC/VEE in non-booster mode (no buffers to power).
-Vcc_buf vcc_buf 0 4.3
-Vee_buf vee_buf 0 -4.3
+Vcc_buf vcc_buf 0 5
+Vee_buf vee_buf 0 -5
 
 * === Wien bridge oscillator (alpha=0.5) ===
 R1   v_osc  ns   10000
@@ -98,7 +98,7 @@ XU_diff n_diff_plus n_diff_minus vcc vee n_diff uopamp_lvl2 Avol=10meg GBW=4.5me
 * Without the booster (IV-3), Buffer 2 doesn't exist and Buffer-1's
 * non-inverting output preserves the old polarity, so the comparator
 * must stay unswapped.
-XU_cmp v_osc 0 vcc vee n_cmp uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+XU_cmp 0 v_osc vcc vee n_cmp uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 
 * === Polarity-switching demodulator ===
 .model swMod SW(VT=0 VH=0.1 RON=10 ROFF=1G)
@@ -178,41 +178,46 @@ R_atten_top  v_osc          v_atten_input 56k
 R_atten_bot  v_atten_input  0             9.1k
 XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
 
-* Buffer 1 (CC emitter follower): V_drv_atten -> V_osc_drive (gain k_buf,
-* class-AB BC337/BC327). Bootstrap caps from output to bias-chain midpoints
-* lift the bias rail with the signal so the BJT base can drive past vcc_buf
-* / vee_buf at peak swing. Feedback divider R_buf1_fb1:R_buf1_fb2 sets k_buf.
-XU_buf_osc   v_drv_atten n_buf_osc_fb vcc_buf vee_buf n_buf_osc_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-R_buf1_fb1   v_osc_drive n_buf_osc_fb 9100
-R_buf1_fb2   n_buf_osc_fb 0           1k
-R_obb_top_a  vcc_buf      mid_obb_top  680
-R_obb_top_b  mid_obb_top  q_o_bn       680
-C_obb_top    mid_obb_top  v_osc_drive  4.7u IC=0
-D_obb_top    q_o_bn       n_buf_osc_out Dbias
-D_obb_bot    n_buf_osc_out q_o_bp      Dbias
-R_obb_bot_b  q_o_bp       mid_obb_bot  680
-R_obb_bot_a  mid_obb_bot  vee_buf      680
-C_obb_bot    mid_obb_bot  v_osc_drive  4.7u IC=0
-Q_o_npn  vcc_buf q_o_bn v_osc_drive QBC337
-Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
+* Buffer 1 (CE complementary push-pull): v_drv_atten -> v_osc_drive
+* Op-amp + and - inputs SWAPPED relative to standard inverting amp because
+* the CE BJT stage is itself inverting -- if we used standard inverting amp
+* (signals into V-), the loop would have positive feedback and latch up.
+* With signals into V+, the BJT inversion provides the second sign flip
+* needed for negative feedback overall.
+XU_buf_osc n_buf_osc_sum 0 vcc vee n_buf_osc_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+R_buf1_in   v_drv_atten n_buf_osc_sum 1k
+R_buf1_fb   v_osc_drive n_buf_osc_sum 9100
+C_buf1_comp v_osc_drive n_buf_osc_sum 2200p
+R_obb_top   vcc_buf       q_o_bp_top    1400
+D_obb_top   n_buf_osc_out q_o_bp_top    Dzen_obb
+D_obb_bot   q_o_bn_bot    n_buf_osc_out Dzen_obb
+R_obb_bot   q_o_bn_bot    vee_buf       1400
+M_o_pmos v_osc_drive q_o_bp_top vcc_buf vcc_buf PMOS_LL
+M_o_nmos v_osc_drive q_o_bn_bot vee_buf vee_buf NMOS_LL
 
-* Buffer 2 (CC emitter follower): V_ap -> V_ap_drive (gain k_buf_ap).
-C_buf2_dcblock v_ap         n_buf2_ac    100n IC=0
+* Buffer 2 (CE complementary push-pull): v_ap -> v_ap_drive
+* DC-block cap on v_ap to kill the JFET-rectification offset before the
+* gain stage. C must be sized so the HPF corner against R_buf2_in (1k,
+* the AC load at n_buf2_ac since op-amp summing junction is virtual GND)
+* is well below f0 = 1 kHz. C = 10 uF gives fc = 16 Hz; smaller caps
+* attenuate the carrier (100 nF would have fc = 1.6 kHz, killing 60% of
+* the signal at f0).
+C_buf2_dcblock v_ap         n_buf2_ac    10u IC=0
 R_buf2_dcref   n_buf2_ac    0            100k
-XU_buf_ap    n_buf2_ac   n_buf_ap_fb     vcc_buf vee_buf n_buf_ap_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-R_buf2_fb1   v_ap_drive  n_buf_ap_fb     9100
-R_buf2_fb2   n_buf_ap_fb 0               1k
-R_abb_top_a  vcc_buf      mid_abb_top  680
-R_abb_top_b  mid_abb_top  q_a_bn       680
-C_abb_top    mid_abb_top  v_ap_drive   4.7u IC=0
-D_abb_top    q_a_bn       n_buf_ap_out Dbias
-D_abb_bot    n_buf_ap_out q_a_bp       Dbias
-R_abb_bot_b  q_a_bp       mid_abb_bot  680
-R_abb_bot_a  mid_abb_bot  vee_buf      680
-C_abb_bot    mid_abb_bot  v_ap_drive   4.7u IC=0
-Q_a_npn  vcc_buf q_a_bn v_ap_drive QBC337
-Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327
+* Inverting amp summing junction takes both v_drv_atten (via cap-coupled v_ap)
+* and v_ap_drive feedback. R_buf2_in is from n_buf2_ac (AC-coupled v_ap).
+XU_buf_ap   n_buf_ap_sum 0 vcc vee n_buf_ap_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+R_buf2_in   n_buf2_ac   n_buf_ap_sum  1k
+R_buf2_fb   v_ap_drive  n_buf_ap_sum  9100
+C_buf2_comp v_ap_drive  n_buf_ap_sum  2200p
+R_abb_top   vcc_buf       q_a_bp_top    1400
+D_abb_top   n_buf_ap_out  q_a_bp_top    Dzen_obb
+D_abb_bot   q_a_bn_bot    n_buf_ap_out  Dzen_obb
+R_abb_bot   q_a_bn_bot    vee_buf       1400
+M_a_pmos v_ap_drive q_a_bp_top vcc_buf vcc_buf PMOS_LL
+M_a_nmos v_ap_drive q_a_bn_bot vee_buf vee_buf NMOS_LL
 .model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
+.model Dzen_obb D(IS=10n N=1.0 RS=1 BV=4.3 IBV=100m CJO=80p TT=10n)
 * Schottky (BAT54-class): V_F ~0.3V at 1mA. Used as bias-chain diode for
 * sub-threshold class-C operation: 2*V_d_schottky = 0.6V offset between
 * BJT bases puts V_BE_quiescent ~0.3V (below 0.6V on threshold), so the

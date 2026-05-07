@@ -25,6 +25,7 @@ def main():
         if spec.get("wien_alpha") is not None: mc["wien_alpha"] = spec["wien_alpha"]
         if spec.get("bias_diode"): mc["bias_diode"] = spec["bias_diode"]
         if spec.get("bias_zener_v") is not None: mc["bias_zener_v"] = spec["bias_zener_v"]
+        if spec.get("buf_comp_pf") is not None: mc["buf_comp_pf"] = spec["buf_comp_pf"]
         # Dummy data path; not actually used since we won't run the sim
         netlist = m.make_netlist(HERE / f"_{tube_key}_unused.data",
                                  v_preset=0.55, t_ramp=0.1,
