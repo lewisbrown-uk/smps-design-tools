@@ -40,7 +40,7 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                v_buf=None, ce_buf=False, mos_buf=False,
                tank_l=None, tank_c=None, bias_diode="Dbias",
                xfmr_n=None, xfmr_lpri=None, bias_zener_v=None,
-               buf_comp_pf=None):
+               buf_comp_pf=None, t_rail_ramp=None):
     # Bridge target R = R_op * R_bot_ref / R_sen, set to give R_filament = R_op
     # at the operating temperature T_op. (An earlier version had a 1% offset
     # for "cold-start kick", but that's unnecessary -- the filament starts at
@@ -62,7 +62,8 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                 bias_diode=bias_diode,
                 xfmr_n=xfmr_n, xfmr_lpri=xfmr_lpri,
                 bias_zener_v=bias_zener_v,
-                buf_comp_pf=buf_comp_pf)
+                buf_comp_pf=buf_comp_pf,
+                t_rail_ramp=t_rail_ramp)
 
 # r_int_scale per tube: option-A's 0.3 was tuned for the IV-3 bridge gain.
 # Bridge sensitivity ~ V_drive*R_sen/(R_op+R_sen)^2 changes per tube, so
@@ -100,7 +101,7 @@ TUBES = {
     # the JFET closer to pinch-off where (1-H) is larger and V_top swing is
     # only fractionally bigger than V_diff (efficient class-AB).
     "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=5.0, ce_buf=True, mos_buf=True, bias_zener_v=4.3, buf_comp_pf=2200),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=5.0, ce_buf=True, mos_buf=True, bias_zener_v=4.3, buf_comp_pf=2200, t_rail_ramp=100e-6),
     "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
@@ -325,8 +326,26 @@ def make_netlist(data_path: Path,
     # to compensate by pushing the JFET further into pinch-off (raising
     # |1-H| at op), so V_diff is delivered at a lower V_top swing and
     # the BJT runs in saturation at peak (V_CE -> V_CE_sat).
-    rail_definition = (f"Vcc_buf vcc_buf 0 {v_buf:.4g}\n"
-                       f"Vee_buf vee_buf 0 -{v_buf:.4g}")
+    #
+    # Optional rail soft-start: ramp vcc_buf and vee_buf from 0 to v_buf
+    # over t_rail_ramp seconds rather than stepping instantaneously. Real
+    # PSUs always do this (output cap charges through a finite-current
+    # regulator). Without it, ngspice applies the rail step in a single
+    # timestep and the MOSFET model sees infinite-dV/dt at startup,
+    # producing a multi-hundred-W single-timestep spike that's a sim
+    # artifact rather than a real-circuit pulse. PWL is held flat past
+    # the ramp via an explicit terminal point so the rails don't drift
+    # via end-of-PWL extrapolation.
+    t_rail_ramp = mc.get("t_rail_ramp", 0)
+    if t_rail_ramp > 0:
+        # PWL: 0V at t=0, full v_buf at t=t_rail_ramp, held there to t=100s.
+        rail_definition = (
+            f"Vcc_buf vcc_buf 0 PWL(0 0 {t_rail_ramp:.6g} {v_buf:.4g} 100 {v_buf:.4g})\n"
+            f"Vee_buf vee_buf 0 PWL(0 0 {t_rail_ramp:.6g} -{v_buf:.4g} 100 -{v_buf:.4g})"
+        )
+    else:
+        rail_definition = (f"Vcc_buf vcc_buf 0 {v_buf:.4g}\n"
+                           f"Vee_buf vee_buf 0 -{v_buf:.4g}")
 
     ce_buf = mc.get("ce_buf", False)
     mos_buf = mc.get("mos_buf", False)
