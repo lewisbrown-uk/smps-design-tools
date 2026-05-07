@@ -27,18 +27,18 @@ import test_closed_loop as m
 # Components to monitor with (label, ngspice power expression, package rating mW)
 def power_specs(use_booster: bool, ce_buf: bool = False, mos_buf: bool = False):
     specs = [
-        # Wien limiter BJTs (2N3904, T0-92, 625 mW abs / ~300 mW derated)
-        ("Q1_2N3904",  "(v(vcc) - v(fb))         * @Q1[ic]",        300),
-        ("Q2_2N3904",  "(v(vcc) - v(v_osc))      * @Q2[ic]",        300),
-        # Anti-windup diodes (1N4148, 500 mW abs)
-        ("D_aw_hi_1N4148",  "(v(v_int_out) - v(v_clamp_hi)) * @D_aw_hi[id]",  500),
-        ("D_aw_lo_1N4148",  "(v(v_clamp_lo) - v(v_int_out)) * @D_aw_lo[id]",  500),
-        # JFET (2N5457, TO-92, 350 mW)
-        ("J_var_2N5457",   "(v(v_drv_atten) - v(n_ap_plus)) * @J_var[id]" if use_booster
-                           else "(v(v_osc) - v(n_ap_plus)) * @J_var[id]", 350),
+        # Wien limiter BJTs (MMBT3904, SOT-23, 225 mW abs / ~110 mW derated at 70 C)
+        ("Q1_MMBT3904",  "(v(vcc) - v(fb))         * @Q1[ic]",        110),
+        ("Q2_MMBT3904",  "(v(vcc) - v(v_osc))      * @Q2[ic]",        110),
+        # Anti-windup diodes (1N4148W, SOD-123, 200 mW abs / ~100 mW derated)
+        ("D_aw_hi_1N4148W",  "(v(v_int_out) - v(v_clamp_hi)) * @D_aw_hi[id]",  100),
+        ("D_aw_lo_1N4148W",  "(v(v_clamp_lo) - v(v_int_out)) * @D_aw_lo[id]",  100),
+        # JFET (MMBF5457, SOT-23, 225 mW abs / ~110 mW derated)
+        ("J_var_MMBF5457",   "(v(v_drv_atten) - v(n_ap_plus)) * @J_var[id]" if use_booster
+                             else "(v(v_osc) - v(n_ap_plus)) * @J_var[id]", 110),
     ]
     if use_booster:
-        # Buffer 1/2 class-AB BJT pair (BC337/327, TO-92, ~300 mW derated).
+        # Buffer 1/2 class-AB BJT pair (BC817/BC807, SOT-23, ~120 mW derated).
         # CC topology: NPN at top (collector at vcc_buf, V_CE = vcc_buf - v_out),
         #              PNP at bottom (collector at vee_buf, V_EC = v_out - vee_buf).
         # CE topology: PNP at top (collector at v_out, emitter at vcc_buf,
@@ -51,25 +51,27 @@ def power_specs(use_booster: bool, ce_buf: bool = False, mos_buf: bool = False):
             #   NMOS: I_D > 0 when current flows in at drain (D>S)
             #   PMOS: I_D > 0 when current flows in at source (S>D, i.e. conducting)
             # P = V_DS * I_D for NMOS, P = V_SD * I_D for PMOS (both magnitudes positive when conducting).
+            # DMN3008LK6 / DMP3098L logic-level FETs in SOT-23, ~1.4 W abs /
+            # ~700 mW derated (well above what the buffer ever needs).
             specs += [
-                ("M_o_nmos_DMN3008",  "(v(v_osc_drive) - v(vee_buf)) * @M_o_nmos[id]", 1000),
-                ("M_o_pmos_DMP3098", "(v(vcc_buf) - v(v_osc_drive)) * @M_o_pmos[id]", 1000),
-                ("M_a_nmos_DMN3008",  "(v(v_ap_drive) - v(vee_buf)) * @M_a_nmos[id]", 1000),
-                ("M_a_pmos_DMP3098", "(v(vcc_buf) - v(v_ap_drive)) * @M_a_pmos[id]", 1000),
+                ("M_o_nmos_DMN3008",  "(v(v_osc_drive) - v(vee_buf)) * @M_o_nmos[id]", 700),
+                ("M_o_pmos_DMP3098", "(v(vcc_buf) - v(v_osc_drive)) * @M_o_pmos[id]", 700),
+                ("M_a_nmos_DMN3008",  "(v(v_ap_drive) - v(vee_buf)) * @M_a_nmos[id]", 700),
+                ("M_a_pmos_DMP3098", "(v(vcc_buf) - v(v_ap_drive)) * @M_a_pmos[id]", 700),
             ]
         elif ce_buf:
             specs += [
-                ("Q_o_npn_BC337", "(v(v_osc_drive) - v(vee_buf)) * @Q_o_npn[ic]", 300),
-                ("Q_o_pnp_BC327", "(v(vcc_buf) - v(v_osc_drive)) * (-@Q_o_pnp[ic])", 300),
-                ("Q_a_npn_BC337", "(v(v_ap_drive) - v(vee_buf)) * @Q_a_npn[ic]", 300),
-                ("Q_a_pnp_BC327", "(v(vcc_buf) - v(v_ap_drive)) * (-@Q_a_pnp[ic])", 300),
+                ("Q_o_npn_BC817", "(v(v_osc_drive) - v(vee_buf)) * @Q_o_npn[ic]", 120),
+                ("Q_o_pnp_BC807", "(v(vcc_buf) - v(v_osc_drive)) * (-@Q_o_pnp[ic])", 120),
+                ("Q_a_npn_BC817", "(v(v_ap_drive) - v(vee_buf)) * @Q_a_npn[ic]", 120),
+                ("Q_a_pnp_BC807", "(v(vcc_buf) - v(v_ap_drive)) * (-@Q_a_pnp[ic])", 120),
             ]
         else:
             specs += [
-                ("Q_o_npn_BC337", "(v(vcc_buf) - v(v_osc_drive)) * @Q_o_npn[ic]", 300),
-                ("Q_o_pnp_BC327", "(v(v_osc_drive) - v(vee_buf)) * (-@Q_o_pnp[ic])", 300),
-                ("Q_a_npn_BC337", "(v(vcc_buf) - v(v_ap_drive)) * @Q_a_npn[ic]", 300),
-                ("Q_a_pnp_BC327", "(v(v_ap_drive) - v(vee_buf)) * (-@Q_a_pnp[ic])", 300),
+                ("Q_o_npn_BC817", "(v(vcc_buf) - v(v_osc_drive)) * @Q_o_npn[ic]", 120),
+                ("Q_o_pnp_BC807", "(v(v_osc_drive) - v(vee_buf)) * (-@Q_o_pnp[ic])", 120),
+                ("Q_a_npn_BC817", "(v(vcc_buf) - v(v_ap_drive)) * @Q_a_npn[ic]", 120),
+                ("Q_a_pnp_BC807", "(v(v_ap_drive) - v(vee_buf)) * (-@Q_a_pnp[ic])", 120),
             ]
     return specs
 
