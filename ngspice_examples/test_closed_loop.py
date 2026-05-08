@@ -40,7 +40,9 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                v_buf=None, ce_buf=False, mos_buf=False,
                tank_l=None, tank_c=None, bias_diode="Dbias",
                xfmr_n=None, xfmr_lpri=None, bias_zener_v=None,
-               buf_comp_pf=None, t_rail_ramp=None):
+               buf_comp_pf=None, t_rail_ramp=None,
+               servo_bias=False, servo_iq_target=10e-3,
+               servo_r_sense=0.5):
     # Bridge target R = R_op * R_bot_ref / R_sen, set to give R_filament = R_op
     # at the operating temperature T_op. (An earlier version had a 1% offset
     # for "cold-start kick", but that's unnecessary -- the filament starts at
@@ -63,7 +65,10 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                 xfmr_n=xfmr_n, xfmr_lpri=xfmr_lpri,
                 bias_zener_v=bias_zener_v,
                 buf_comp_pf=buf_comp_pf,
-                t_rail_ramp=t_rail_ramp)
+                t_rail_ramp=t_rail_ramp,
+                servo_bias=servo_bias,
+                servo_iq_target=servo_iq_target,
+                servo_r_sense=servo_r_sense)
 
 # r_int_scale per tube: option-A's 0.3 was tuned for the IV-3 bridge gain.
 # Bridge sensitivity ~ V_drive*R_sen/(R_op+R_sen)^2 changes per tube, so
@@ -101,7 +106,7 @@ TUBES = {
     # the JFET closer to pinch-off where (1-H) is larger and V_top swing is
     # only fractionally bigger than V_diff (efficient class-AB).
     "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=4.3, mos_buf=True, t_rail_ramp=100e-6),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=6.0, mos_buf=True, t_rail_ramp=100e-6, servo_bias=True),
     "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
@@ -513,34 +518,134 @@ R_buf2_fb   v_ap_drive  n_buf_ap_sum  {buf_fb_ap:.6g}
 {bjt_or_fet_bot}"""
         else:
             # CC topology: BJT emitter follower or MOSFET source follower.
-            # Same bias chain (R-D-D-R with bootstrap caps) for both. With
+            # Default bias chain is the static R-D-D-R + bootstrap caps. With
             # MOSFETs, V_GS_th (~1 V for DMN3404L/DMP3098L) is higher than the
             # silicon V_F (0.65 V) the diodes drop, so quiescent V_GS sits
             # below threshold => sub-threshold class-B with op-amp loop
             # closing the crossover. 0-V V_im_* sources sense MOSFET drain
             # current for check_power.
+            #
+            # Optional servo bias (servo_bias=True, MOSFET CC only): replaces
+            # the diode chain with a B-source-driven floating bias controlled
+            # by an LM358 integrator that senses I_NMOS+I_PMOS via small
+            # source resistors and adjusts to maintain target quiescent
+            # current regardless of V_th variation. The B-sources are SPICE
+            # idealisations of the real-circuit V_BE multiplier with
+            # servo-modulated divider; the discrete implementation uses
+            # 1 BJT + 1 JFET + 3 R per buffer arm.
+            servo_bias = mc.get("servo_bias", False) and mos_buf
+            servo_iq = mc.get("servo_iq_target", 10e-3)
+            servo_r = mc.get("servo_r_sense", 0.5)
             if mos_buf:
-                cc_dev_o_top = (
-                    "V_im_o_nmos vcc_buf vcc_buf_o_nmos 0\n"
-                    "XM_o_nmos vcc_buf_o_nmos q_o_bn v_osc_drive DMN3404L"
-                )
-                cc_dev_o_bot = (
-                    "V_im_o_pmos vee_buf_o_pmos vee_buf 0\n"
-                    "XM_o_pmos vee_buf_o_pmos q_o_bp v_osc_drive DMP3098L"
-                )
-                cc_dev_a_top = (
-                    "V_im_a_nmos vcc_buf vcc_buf_a_nmos 0\n"
-                    "XM_a_nmos vcc_buf_a_nmos q_a_bn v_ap_drive DMN3404L"
-                )
-                cc_dev_a_bot = (
-                    "V_im_a_pmos vee_buf_a_pmos vee_buf 0\n"
-                    "XM_a_pmos vee_buf_a_pmos q_a_bp v_ap_drive DMP3098L"
-                )
+                if servo_bias:
+                    # Insert R_sense_n / R_sense_p in the source path between
+                    # MOSFET source and v_osc_drive (output to bridge load).
+                    cc_dev_o_top = (
+                        "V_im_o_nmos vcc_buf vcc_buf_o_nmos 0\n"
+                        "XM_o_nmos vcc_buf_o_nmos q_o_bn n_o_nmos_src DMN3404L\n"
+                        f"R_sense_o_n n_o_nmos_src v_osc_drive {servo_r:.4g}"
+                    )
+                    cc_dev_o_bot = (
+                        "V_im_o_pmos vee_buf_o_pmos vee_buf 0\n"
+                        "XM_o_pmos vee_buf_o_pmos q_o_bp n_o_pmos_src DMP3098L\n"
+                        f"R_sense_o_p v_osc_drive n_o_pmos_src {servo_r:.4g}"
+                    )
+                    cc_dev_a_top = (
+                        "V_im_a_nmos vcc_buf vcc_buf_a_nmos 0\n"
+                        "XM_a_nmos vcc_buf_a_nmos q_a_bn n_a_nmos_src DMN3404L\n"
+                        f"R_sense_a_n n_a_nmos_src v_ap_drive {servo_r:.4g}"
+                    )
+                    cc_dev_a_bot = (
+                        "V_im_a_pmos vee_buf_a_pmos vee_buf 0\n"
+                        "XM_a_pmos vee_buf_a_pmos q_a_bp n_a_pmos_src DMP3098L\n"
+                        f"R_sense_a_p v_ap_drive n_a_pmos_src {servo_r:.4g}"
+                    )
+                else:
+                    cc_dev_o_top = (
+                        "V_im_o_nmos vcc_buf vcc_buf_o_nmos 0\n"
+                        "XM_o_nmos vcc_buf_o_nmos q_o_bn v_osc_drive DMN3404L"
+                    )
+                    cc_dev_o_bot = (
+                        "V_im_o_pmos vee_buf_o_pmos vee_buf 0\n"
+                        "XM_o_pmos vee_buf_o_pmos q_o_bp v_osc_drive DMP3098L"
+                    )
+                    cc_dev_a_top = (
+                        "V_im_a_nmos vcc_buf vcc_buf_a_nmos 0\n"
+                        "XM_a_nmos vcc_buf_a_nmos q_a_bn v_ap_drive DMN3404L"
+                    )
+                    cc_dev_a_bot = (
+                        "V_im_a_pmos vee_buf_a_pmos vee_buf 0\n"
+                        "XM_a_pmos vee_buf_a_pmos q_a_bp v_ap_drive DMP3098L"
+                    )
             else:
                 cc_dev_o_top = "Q_o_npn  vcc_buf q_o_bn v_osc_drive QBC337"
                 cc_dev_o_bot = "Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327"
                 cc_dev_a_top = "Q_a_npn  vcc_buf q_a_bn v_ap_drive QBC337"
                 cc_dev_a_bot = "Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327"
+            # Bias block: either the static R-D-D-R + bootstrap caps OR the
+            # servo-controlled B-source chain. When servo_bias=True, the
+            # bootstrap caps and bias diodes are replaced with an op-amp
+            # integrator that holds the bias current at servo_iq_target.
+            if servo_bias:
+                # Sense V_ref: target = (2*Iq + (2/pi)*Ipk) * R_sense.
+                # Ipk is signal-dependent (varies with V_op and bridge load).
+                # For ILC1-1/7: Ipk ~ 235 mA at V_op = 5 V_RMS, so
+                # V_ref = (2*0.01 + 0.637*0.235) * 0.5 = 0.085 V at Iq=10 mA.
+                # If Ipk changes (different tube), recompute V_ref.
+                # For other tubes, this would need recalibration.
+                # Approximate I_pk from V_op and bridge total R = R_op+R_sen:
+                v_op_v = mc.get("V_op", 5.0)  # default if not in mc
+                r_load = mc.get("r_top_ref", 5e3) / mc.get("r_bot_ref", 1e3) * mc.get("r_sense", 5)
+                # Actually use V_op from spec via passthrough; r_load is filament + sense
+                r_total = mc.get("R_op", 25.0) + mc.get("r_sense", 5)
+                i_pk_est = v_op_v * 1.414 / r_total  # peak load current estimate
+                v_ref = (2 * servo_iq + (2/3.14159) * i_pk_est) * servo_r
+                bias_block_o = f"""* Servo bias for buffer 1 (osc).  R_sense already in source path.
+* Sum sense voltages via B-source: V(n_o_sense_inst) = V(NMOS_src) - V(PMOS_src).
+B_sense_o n_o_sense_inst 0 V = V(n_o_nmos_src) - V(n_o_pmos_src)
+* Low-pass filter: corner ~ 16 Hz (1.6 ms time constant).
+R_lp_o n_o_sense_inst n_o_sense_avg 100k
+C_lp_o n_o_sense_avg 0 100n IC=0
+* V_ref source: target average sense voltage at design operating point.
+V_ref_o n_o_vref 0 {v_ref:.4g}
+* LM358 servo (modeled with uopamp_lvl2): inverting integrator.
+* + input = V_ref, - input via R_in from sense; C_int from output to - input.
+XU_servo_o n_o_vref n_o_servo_minus vcc vee n_o_servo_out uopamp_lvl2 Avol=10meg GBW=1meg Rin=100g Rout=10 Iq=70u Ilimit=20m Vrail=100m Vmax=12 Vos=2.5e-3
+R_servo_o_in n_o_sense_avg n_o_servo_minus 100k
+C_servo_o_int n_o_servo_out n_o_servo_minus 100n IC=0
+* Initial servo output: pre-load to give ~1.5 V V_GS bias at t=0.
+.ic V(n_o_servo_out)=1.5
+* B-sources: q_top - n_buf_osc_out = V_servo, n_buf_osc_out - q_bot = V_servo.
+B_bias_o_top q_o_bn n_buf_osc_out V = V(n_o_servo_out)
+B_bias_o_bot n_buf_osc_out q_o_bp V = V(n_o_servo_out)"""
+                bias_block_a = f"""* Servo bias for buffer 2 (ap).
+B_sense_a n_a_sense_inst 0 V = V(n_a_nmos_src) - V(n_a_pmos_src)
+R_lp_a n_a_sense_inst n_a_sense_avg 100k
+C_lp_a n_a_sense_avg 0 100n IC=0
+V_ref_a n_a_vref 0 {v_ref:.4g}
+XU_servo_a n_a_vref n_a_servo_minus vcc vee n_a_servo_out uopamp_lvl2 Avol=10meg GBW=1meg Rin=100g Rout=10 Iq=70u Ilimit=20m Vrail=100m Vmax=12 Vos=2.5e-3
+R_servo_a_in n_a_sense_avg n_a_servo_minus 100k
+C_servo_a_int n_a_servo_out n_a_servo_minus 100n IC=0
+.ic V(n_a_servo_out)=1.5
+B_bias_a_top q_a_bn n_buf_ap_out V = V(n_a_servo_out)
+B_bias_a_bot n_buf_ap_out q_a_bp V = V(n_a_servo_out)"""
+            else:
+                bias_block_o = f"""R_obb_top_a  vcc_buf      mid_obb_top  680
+R_obb_top_b  mid_obb_top  q_o_bn       680
+C_obb_top    mid_obb_top  v_osc_drive  4.7u IC=0
+D_obb_top    q_o_bn       n_buf_osc_out {bias_diode}
+D_obb_bot    n_buf_osc_out q_o_bp      {bias_diode}
+R_obb_bot_b  q_o_bp       mid_obb_bot  680
+R_obb_bot_a  mid_obb_bot  vee_buf      680
+C_obb_bot    mid_obb_bot  v_osc_drive  4.7u IC=0"""
+                bias_block_a = f"""R_abb_top_a  vcc_buf      mid_abb_top  680
+R_abb_top_b  mid_abb_top  q_a_bn       680
+C_abb_top    mid_abb_top  v_ap_drive   4.7u IC=0
+D_abb_top    q_a_bn       n_buf_ap_out {bias_diode}
+D_abb_bot    n_buf_ap_out q_a_bp       {bias_diode}
+R_abb_bot_b  q_a_bp       mid_abb_bot  680
+R_abb_bot_a  mid_abb_bot  vee_buf      680
+C_abb_bot    mid_abb_bot  v_ap_drive   4.7u IC=0"""
             buf12_lines = f"""
 * Buffer 1 (CC emitter follower): V_drv_atten -> V_osc_drive (gain k_buf,
 * class-AB BC337/BC327). Bootstrap caps from output to bias-chain midpoints
@@ -549,14 +654,7 @@ R_buf2_fb   v_ap_drive  n_buf_ap_sum  {buf_fb_ap:.6g}
 XU_buf_osc   v_drv_atten n_buf_osc_fb vcc_buf vee_buf n_buf_osc_out {opamp_bufo}
 R_buf1_fb1   v_osc_drive n_buf_osc_fb {buf_fb1:.6g}
 R_buf1_fb2   n_buf_osc_fb 0           1k
-R_obb_top_a  vcc_buf      mid_obb_top  680
-R_obb_top_b  mid_obb_top  q_o_bn       680
-C_obb_top    mid_obb_top  v_osc_drive  4.7u IC=0
-D_obb_top    q_o_bn       n_buf_osc_out {bias_diode}
-D_obb_bot    n_buf_osc_out q_o_bp      {bias_diode}
-R_obb_bot_b  q_o_bp       mid_obb_bot  680
-R_obb_bot_a  mid_obb_bot  vee_buf      680
-C_obb_bot    mid_obb_bot  v_osc_drive  4.7u IC=0
+{bias_block_o}
 {cc_dev_o_top}
 {cc_dev_o_bot}
 
@@ -566,14 +664,7 @@ R_buf2_dcref   n_buf2_ac    0            100k
 XU_buf_ap    n_buf2_ac   n_buf_ap_fb     vcc_buf vee_buf n_buf_ap_out {opamp_bufa}
 R_buf2_fb1   v_ap_drive  n_buf_ap_fb     {buf_fb_ap:.6g}
 R_buf2_fb2   n_buf_ap_fb 0               1k
-R_abb_top_a  vcc_buf      mid_abb_top  680
-R_abb_top_b  mid_abb_top  q_a_bn       680
-C_abb_top    mid_abb_top  v_ap_drive   4.7u IC=0
-D_abb_top    q_a_bn       n_buf_ap_out {bias_diode}
-D_abb_bot    n_buf_ap_out q_a_bp       {bias_diode}
-R_abb_bot_b  q_a_bp       mid_abb_bot  680
-R_abb_bot_a  mid_abb_bot  vee_buf      680
-C_abb_bot    mid_abb_bot  v_ap_drive   4.7u IC=0
+{bias_block_a}
 {cc_dev_a_top}
 {cc_dev_a_bot}"""
         # Optional step-down transformer + class-C tank: at hf_mode only.

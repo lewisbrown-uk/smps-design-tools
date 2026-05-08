@@ -191,8 +191,12 @@ R_obb_top   vcc_buf       q_o_bp_top    200
 D_obb_top   q_o_bp_top    n_buf_osc_out Dbias
 D_obb_bot   n_buf_osc_out q_o_bn_bot   Dbias
 R_obb_bot   q_o_bn_bot    vee_buf       200
-M_o_pmos v_osc_drive q_o_bp_top vcc_buf vcc_buf PMOS_LL
-M_o_nmos v_osc_drive q_o_bn_bot vee_buf vee_buf NMOS_LL
+V_im_o_pmos vcc_buf vcc_buf_o_pmos 0
+R_gd_o_pmos q_o_bp_top g_o_pmos 1k
+XM_o_pmos v_osc_drive g_o_pmos vcc_buf_o_pmos DMP3098L
+V_im_o_nmos vee_buf_o_nmos vee_buf 0
+R_gd_o_nmos q_o_bn_bot g_o_nmos 1k
+XM_o_nmos v_osc_drive g_o_nmos vee_buf_o_nmos DMN3404L
 
 * Buffer 2 (CE complementary push-pull): v_ap -> v_ap_drive
 * DC-block cap on v_ap to kill the JFET-rectification offset before the
@@ -212,8 +216,12 @@ R_abb_top   vcc_buf       q_a_bp_top    200
 D_abb_top   q_a_bp_top    n_buf_ap_out  Dbias
 D_abb_bot   n_buf_ap_out q_a_bn_bot    Dbias
 R_abb_bot   q_a_bn_bot    vee_buf       200
-M_a_pmos v_ap_drive q_a_bp_top vcc_buf vcc_buf PMOS_LL
-M_a_nmos v_ap_drive q_a_bn_bot vee_buf vee_buf NMOS_LL
+V_im_a_pmos vcc_buf vcc_buf_a_pmos 0
+R_gd_a_pmos q_a_bp_top g_a_pmos 1k
+XM_a_pmos v_ap_drive g_a_pmos vcc_buf_a_pmos DMP3098L
+V_im_a_nmos vee_buf_a_nmos vee_buf 0
+R_gd_a_nmos q_a_bn_bot g_a_nmos 1k
+XM_a_nmos v_ap_drive g_a_nmos vee_buf_a_nmos DMN3404L
 .model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
 * Schottky (BAT54-class): V_F ~0.3V at 1mA. Used as bias-chain diode for
 * sub-threshold class-C operation: 2*V_d_schottky = 0.6V offset between
@@ -225,11 +233,11 @@ M_a_nmos v_ap_drive q_a_bn_bot vee_buf vee_buf NMOS_LL
 .model QBC327 PNP(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
 + CJC=11p CJE=20p VAF=100)
 * Logic-level complementary MOSFET pair: DMP3098L (PMOS) / DMN3404L (NMOS),
-* Diodes Inc., SOT-23. V_GS_th = +/- 0.7V, R_DS_on ~ 50 mOhm at V_GS overdrive
-* of 1.8V. The Level 1 model below is a generic stand-in -- replace with the
-* manufacturer PSpice models for accurate SOA / switching-loss analysis.
-.model PMOS_LL PMOS(LEVEL=1 VTO=-0.7 KP=100u L=1u W=55600u LAMBDA=0.01)
-.model NMOS_LL NMOS(LEVEL=1 VTO=+0.7 KP=100u L=1u W=55600u LAMBDA=0.01)
+* Diodes Inc., SOT-23. Manufacturer subcircuit models (LEVEL=3 internal,
+* with junction caps + body diodes) loaded from spice_models/. Terminals
+* are 3-pin: drain, gate, source (no external body).
+.include /home/user/smps-design-tools/ngspice_examples/spice_models/DMP3098L.spice.txt
+.include /home/user/smps-design-tools/ngspice_examples/spice_models/DMN3404L.spice.txt
 
 * === 2N3904 ===
 .model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259

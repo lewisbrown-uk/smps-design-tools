@@ -27,6 +27,11 @@ def main():
         if spec.get("bias_zener_v") is not None: mc["bias_zener_v"] = spec["bias_zener_v"]
         if spec.get("buf_comp_pf") is not None: mc["buf_comp_pf"] = spec["buf_comp_pf"]
         if spec.get("t_rail_ramp") is not None: mc["t_rail_ramp"] = spec["t_rail_ramp"]
+        if spec.get("servo_bias"): mc["servo_bias"] = True
+        if spec.get("servo_iq_target") is not None: mc["servo_iq_target"] = spec["servo_iq_target"]
+        if spec.get("servo_r_sense") is not None: mc["servo_r_sense"] = spec["servo_r_sense"]
+        mc["R_op"] = spec["R_op"]
+        mc["V_op"] = spec["V_op"]
         # Dummy data path; not actually used since we won't run the sim
         netlist = m.make_netlist(HERE / f"_{tube_key}_unused.data",
                                  v_preset=0.55, t_ramp=0.1,
