@@ -101,7 +101,7 @@ TUBES = {
     # the JFET closer to pinch-off where (1-H) is larger and V_top swing is
     # only fractionally bigger than V_diff (efficient class-AB).
     "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=5.0, ce_buf=True, mos_buf=True, bias_zener_v=4.3, buf_comp_pf=22000, t_rail_ramp=100e-6),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=4.3, mos_buf=True, t_rail_ramp=100e-6),
     "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
@@ -356,8 +356,15 @@ def make_netlist(data_path: Path,
     # to fully turn on the FET (V_GS >= 2.5 V overdrive needed). Loses
     # the V_BE drop entirely -- V_DS at peak is just I*R_DS_on, ~5 mV
     # for typical low-V/low-I tubes.
-    if mos_buf and not ce_buf:
-        ce_buf = True   # MOSFET buffer is always CE-style
+    # mos_buf + ce_buf=True  -> MOSFET common-source push-pull (output at drain).
+    #                          Saves ~1 V of swing vs source follower but the
+    #                          loop has a high-Q resonance at conducting OPs
+    #                          (Cgd Miller + bias-chain pole) that's hard to
+    #                          stabilise without massive bandwidth loss.
+    # mos_buf + ce_buf=False -> MOSFET source follower (output at source).
+    #                          Inherently stable (100% local feedback, no
+    #                          Miller effect), at the cost of V_GS of swing
+    #                          (bootstrap caps lift gate past v_buf to recover).
     buf_op_rails = "vcc vee" if mos_buf else "vcc_buf vee_buf"
     if mos_buf:
         # 0-V current-sense sources in series with each MOSFET source. The
@@ -505,6 +512,35 @@ R_buf2_fb   v_ap_drive  n_buf_ap_sum  {buf_fb_ap:.6g}
 {bias_ap_bot}
 {bjt_or_fet_bot}"""
         else:
+            # CC topology: BJT emitter follower or MOSFET source follower.
+            # Same bias chain (R-D-D-R with bootstrap caps) for both. With
+            # MOSFETs, V_GS_th (~1 V for DMN3404L/DMP3098L) is higher than the
+            # silicon V_F (0.65 V) the diodes drop, so quiescent V_GS sits
+            # below threshold => sub-threshold class-B with op-amp loop
+            # closing the crossover. 0-V V_im_* sources sense MOSFET drain
+            # current for check_power.
+            if mos_buf:
+                cc_dev_o_top = (
+                    "V_im_o_nmos vcc_buf vcc_buf_o_nmos 0\n"
+                    "XM_o_nmos vcc_buf_o_nmos q_o_bn v_osc_drive DMN3404L"
+                )
+                cc_dev_o_bot = (
+                    "V_im_o_pmos vee_buf_o_pmos vee_buf 0\n"
+                    "XM_o_pmos vee_buf_o_pmos q_o_bp v_osc_drive DMP3098L"
+                )
+                cc_dev_a_top = (
+                    "V_im_a_nmos vcc_buf vcc_buf_a_nmos 0\n"
+                    "XM_a_nmos vcc_buf_a_nmos q_a_bn v_ap_drive DMN3404L"
+                )
+                cc_dev_a_bot = (
+                    "V_im_a_pmos vee_buf_a_pmos vee_buf 0\n"
+                    "XM_a_pmos vee_buf_a_pmos q_a_bp v_ap_drive DMP3098L"
+                )
+            else:
+                cc_dev_o_top = "Q_o_npn  vcc_buf q_o_bn v_osc_drive QBC337"
+                cc_dev_o_bot = "Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327"
+                cc_dev_a_top = "Q_a_npn  vcc_buf q_a_bn v_ap_drive QBC337"
+                cc_dev_a_bot = "Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327"
             buf12_lines = f"""
 * Buffer 1 (CC emitter follower): V_drv_atten -> V_osc_drive (gain k_buf,
 * class-AB BC337/BC327). Bootstrap caps from output to bias-chain midpoints
@@ -521,8 +557,8 @@ D_obb_bot    n_buf_osc_out q_o_bp      {bias_diode}
 R_obb_bot_b  q_o_bp       mid_obb_bot  680
 R_obb_bot_a  mid_obb_bot  vee_buf      680
 C_obb_bot    mid_obb_bot  v_osc_drive  4.7u IC=0
-Q_o_npn  vcc_buf q_o_bn v_osc_drive QBC337
-Q_o_pnp  vee_buf q_o_bp v_osc_drive QBC327
+{cc_dev_o_top}
+{cc_dev_o_bot}
 
 * Buffer 2 (CC emitter follower): V_ap -> V_ap_drive (gain k_buf_ap).
 C_buf2_dcblock v_ap         n_buf2_ac    100n IC=0
@@ -538,8 +574,8 @@ D_abb_bot    n_buf_ap_out q_a_bp       {bias_diode}
 R_abb_bot_b  q_a_bp       mid_abb_bot  680
 R_abb_bot_a  mid_abb_bot  vee_buf      680
 C_abb_bot    mid_abb_bot  v_ap_drive   4.7u IC=0
-Q_a_npn  vcc_buf q_a_bn v_ap_drive QBC337
-Q_a_pnp  vee_buf q_a_bp v_ap_drive QBC327"""
+{cc_dev_a_top}
+{cc_dev_a_bot}"""
         # Optional step-down transformer + class-C tank: at hf_mode only.
         # Buffer outputs (v_osc_drive, v_ap_drive) drive the primary, which
         # is parallel-LC tuned to f0 (impedance transformation up). The

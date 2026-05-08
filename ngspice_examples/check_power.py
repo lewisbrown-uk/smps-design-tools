@@ -161,7 +161,7 @@ wrdata {dat.as_posix()} {wrdata_args}
     cir.write_text(netlist)
 
     res = subprocess.run(["ngspice", "-b", cir.name], cwd=work,
-                         capture_output=True, text=True, timeout=600)
+                         capture_output=True, text=True, timeout=2400)
     if res.returncode != 0:
         print(res.stderr[-2000:])
         raise RuntimeError(f"ngspice failed for {tube_key}")

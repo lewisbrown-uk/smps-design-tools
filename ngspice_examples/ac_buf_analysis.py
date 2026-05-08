@@ -32,7 +32,8 @@ def build_netlist(comp_pf: float, r_obb: float, r_gate: float,
                   comp_zero_r: float = 0,
                   drain_snub_r: float = 0,
                   drain_snub_c: float = 0,
-                  v_drv_dc: float = 0.0) -> str:
+                  v_drv_dc: float = 0.0,
+                  topology: str = "ce") -> str:
     pmos_path = (HERE / "spice_models" / "DMP3098L.spice.txt").as_posix()
     nmos_path = (HERE / "spice_models" / "DMN3404L.spice.txt").as_posix()
     opamp_lib = (HERE / "uopamp.lib").as_posix()
@@ -48,6 +49,26 @@ def build_netlist(comp_pf: float, r_obb: float, r_gate: float,
     else:
         snub_block = (f"R_drain_snub v_osc_drive n_drain_snub {drain_snub_r:.4g}\n"
                       f"C_drain_snub n_drain_snub 0 {drain_snub_c:.4g}")
+    if topology == "ce":
+        # Common source: PMOS source at vcc_buf, drain at output (top);
+        #                NMOS source at vee_buf, drain at output (bottom).
+        mosfet_block = (
+            "* MOSFETs (CE / common source) - drain at v_osc_drive\n"
+            "XM_top     v_osc_drive g_top vcc_buf DMP3098L\n"
+            "XM_bot     v_osc_drive g_bot vee_buf DMN3404L"
+        )
+    elif topology == "cc":
+        # Source follower: NMOS drain at vcc_buf, source at output (top);
+        #                  PMOS drain at vee_buf, source at output (bottom).
+        # Note swap of NMOS/PMOS positions vs CE topology: in CC, the NMOS
+        # is on top because its source follows the gate (positive output).
+        mosfet_block = (
+            "* MOSFETs (CC / source follower) - source at v_osc_drive\n"
+            "XM_top     vcc_buf g_top v_osc_drive DMN3404L\n"
+            "XM_bot     vee_buf g_bot v_osc_drive DMP3098L"
+        )
+    else:
+        raise ValueError(f"Unknown topology: {topology}")
     return f"""* Buffer 1 isolated AC small-signal testbench
 .include {opamp_lib}
 .include {pmos_path}
@@ -78,12 +99,10 @@ R_obb_top   vcc_buf         q_o_bp_top    {r_obb:.6g}
 D_obb_top   n_buf_osc_out   q_o_bp_top    Dzen_obb
 D_obb_bot   q_o_bn_bot      n_buf_osc_out Dzen_obb
 R_obb_bot   q_o_bn_bot      vee_buf       {r_obb:.6g}
-* Gate damping
-R_gd_pmos   q_o_bp_top      g_pmos        {r_gate:.6g}
-R_gd_nmos   q_o_bn_bot      g_nmos        {r_gate:.6g}
-* MOSFETs - drain at v_osc_drive (the real output node)
-XM_pmos     v_osc_drive g_pmos vcc_buf DMP3098L
-XM_nmos     v_osc_drive g_nmos vee_buf DMN3404L
+* Gate damping (g_top is gate of top device, g_bot of bottom)
+R_gd_top    q_o_bp_top      g_top         {r_gate:.6g}
+R_gd_bot    q_o_bn_bot      g_bot         {r_gate:.6g}
+{mosfet_block}
 * Output load: bridge thevenin (R_op + R_sense in parallel with reference arm)
 R_load      v_osc_drive 0 30
 .model Dzen_obb D(IS=10n N=1.0 RS=1 BV={v_z:.3g} IBV=100m CJO=80p TT=10n)
@@ -101,9 +120,11 @@ def run_and_load(comp_pf: float, r_obb: float, r_gate: float,
                  v_buf: float, v_z: float, buf_fb: float,
                  comp_zero_r: float = 0,
                  drain_snub_r: float = 0, drain_snub_c: float = 0,
-                 v_drv_dc: float = 0.0):
+                 v_drv_dc: float = 0.0,
+                 topology: str = "ce"):
     netlist = build_netlist(comp_pf, r_obb, r_gate, v_buf, v_z, buf_fb,
-                            comp_zero_r, drain_snub_r, drain_snub_c, v_drv_dc)
+                            comp_zero_r, drain_snub_r, drain_snub_c, v_drv_dc,
+                            topology)
     cir = WORK / "ac_buf.cir"
     cir.write_text(netlist)
     res = subprocess.run(["ngspice", "-b", cir.name], cwd=WORK,
@@ -134,17 +155,16 @@ def plot_bode(f, T, label, ax_mag, ax_phase, color):
 
 def main():
     # Sweep over a few comp / damping combinations.
-    # Sweep candidate compensations at the worst-case operating point
-    # (MOSFET conducting hard, where g_m is highest).
-    op_test = dict(v_drv_dc=+0.4)  # NMOS conducting hard
+    # Compare CE (common source) vs CC (source follower) topologies at
+    # quiescent and conducting operating points. Source follower should be
+    # inherently stable (no Miller, gain ~ 1) where common-source is not.
     sweeps = [
-        ("R_g=100",   dict(comp_pf=2200, r_gate=100,   **op_test)),
-        ("R_g=470",   dict(comp_pf=2200, r_gate=470,   **op_test)),
-        ("R_g=1k",    dict(comp_pf=2200, r_gate=1000,  **op_test)),
-        ("R_g=2.2k",  dict(comp_pf=2200, r_gate=2200,  **op_test)),
-        ("R_g=4.7k",  dict(comp_pf=2200, r_gate=4700,  **op_test)),
-        ("R_g=10k",   dict(comp_pf=2200, r_gate=10000, **op_test)),
-        ("R_g=22k",   dict(comp_pf=2200, r_gate=22000, **op_test)),
+        ("CE quiescent",          dict(comp_pf=2200, r_gate=100, v_drv_dc=0.0,  topology="ce")),
+        ("CE NMOS conducting",    dict(comp_pf=2200, r_gate=100, v_drv_dc=+0.4, topology="ce")),
+        ("CE PMOS conducting",    dict(comp_pf=2200, r_gate=100, v_drv_dc=-0.4, topology="ce")),
+        ("CC quiescent",          dict(comp_pf=0,    r_gate=100, v_drv_dc=0.0,  topology="cc")),
+        ("CC NMOS conducting",    dict(comp_pf=0,    r_gate=100, v_drv_dc=+0.4, topology="cc")),
+        ("CC PMOS conducting",    dict(comp_pf=0,    r_gate=100, v_drv_dc=-0.4, topology="cc")),
     ]
     fig, (ax_mag, ax_phase) = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
     for i, (label, kw) in enumerate(sweeps):
@@ -155,7 +175,8 @@ def main():
                                comp_zero_r=kw.get("comp_zero_r", 0),
                                drain_snub_r=kw.get("drain_snub_r", 0),
                                drain_snub_c=kw.get("drain_snub_c", 0),
-                               v_drv_dc=kw.get("v_drv_dc", 0.0))
+                               v_drv_dc=kw.get("v_drv_dc", 0.0),
+                               topology=kw.get("topology", "ce"))
         plot_bode(f, T, label, ax_mag, ax_phase, f"C{i}")
         # Find unity-gain crossover
         mag_db = 20 * np.log10(np.abs(T))
