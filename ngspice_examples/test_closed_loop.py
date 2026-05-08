@@ -101,7 +101,7 @@ TUBES = {
     # the JFET closer to pinch-off where (1-H) is larger and V_top swing is
     # only fractionally bigger than V_diff (efficient class-AB).
     "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=5.0, ce_buf=True, mos_buf=True, bias_zener_v=4.3, buf_comp_pf=2200, t_rail_ramp=100e-6),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=5.0, ce_buf=True, mos_buf=True, bias_zener_v=4.3, buf_comp_pf=22000, t_rail_ramp=100e-6),
     "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
@@ -364,17 +364,29 @@ def make_netlist(data_path: Path,
         # manufacturer subcircuit doesn't expose its internal MOSFET to
         # @xname.m1[id] hierarchical accessors in this ngspice build, so we
         # measure I_D externally via i(V_imN) which always works.
+        #
+        # Gate damping resistors (R_gd_*, 100 ohm) form a low-pass with the
+        # MOSFET's own C_GS (320-500 pF). Standard remedy for the buffer's
+        # local-loop oscillation that appears when realistic gate caps load
+        # the CE output stage -- the gate-node pole gets damped so it can no
+        # longer pair with the op-amp's GBW pole to form a high-Q resonance.
+        # Pole frequency ~ 1/(2*pi*100*400p) = 4 MHz, well above any signal
+        # band, so the resistor contributes only damping, not bandwidth loss.
         bjt_or_fet_top = (
             "V_im_o_pmos vcc_buf vcc_buf_o_pmos 0\n"
-            "XM_o_pmos v_osc_drive q_o_bp_top vcc_buf_o_pmos DMP3098L\n"
+            "R_gd_o_pmos q_o_bp_top g_o_pmos 1k\n"
+            "XM_o_pmos v_osc_drive g_o_pmos vcc_buf_o_pmos DMP3098L\n"
             "V_im_o_nmos vee_buf_o_nmos vee_buf 0\n"
-            "XM_o_nmos v_osc_drive q_o_bn_bot vee_buf_o_nmos DMN3404L"
+            "R_gd_o_nmos q_o_bn_bot g_o_nmos 1k\n"
+            "XM_o_nmos v_osc_drive g_o_nmos vee_buf_o_nmos DMN3404L"
         )
         bjt_or_fet_bot = (
             "V_im_a_pmos vcc_buf vcc_buf_a_pmos 0\n"
-            "XM_a_pmos v_ap_drive q_a_bp_top vcc_buf_a_pmos DMP3098L\n"
+            "R_gd_a_pmos q_a_bp_top g_a_pmos 1k\n"
+            "XM_a_pmos v_ap_drive g_a_pmos vcc_buf_a_pmos DMP3098L\n"
             "V_im_a_nmos vee_buf_a_nmos vee_buf 0\n"
-            "XM_a_nmos v_ap_drive q_a_bn_bot vee_buf_a_nmos DMN3404L"
+            "R_gd_a_nmos q_a_bn_bot g_a_nmos 1k\n"
+            "XM_a_nmos v_ap_drive g_a_nmos vee_buf_a_nmos DMN3404L"
         )
     else:
         bjt_or_fet_top = ("Q_o_pnp v_osc_drive q_o_bp_top vcc_buf QBC327\n"
@@ -429,8 +441,15 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten {opamp_buf0}"""
             if bias_zener_v is not None:
                 v_buf_v = mc.get("v_buf", 4.3)
                 # Symmetric bias chain: 2*v_buf = 2*V_R + 2*V_Z, so V_R is
-                # forced to (v_buf - V_Z). Pick R to limit chain current to
-                # ~0.5 mA (negligible quiescent dissipation).
+                # forced to (v_buf - V_Z). Pick R for ~5 mA chain current --
+                # small enough to be negligible thermally (~50 mW total chain
+                # dissipation), but low enough that the bias chain's output
+                # impedance (~R_obb) doesn't pair with the MOSFET's Miller-
+                # multiplied gate cap (~80 nF effective at the gate at peak
+                # conduction) to form a sub-kHz pole that destabilises the
+                # buffer's local loop. At 5 mA, R_obb = 130 ohm for v_buf=5V,
+                # giving a gate-node pole at ~15 kHz, which the comp cap can
+                # cleanly roll the loop gain past.
                 v_r = max(0.05, v_buf_v - bias_zener_v)
                 r_obb = max(100.0, v_r / 5e-4)
                 bias_top_top = f"R_obb_top   vcc_buf       q_o_bp_top    {r_obb:.6g}"
