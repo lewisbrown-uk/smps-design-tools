@@ -22,26 +22,41 @@ realisable solutions over elaborate spice tweaks. Examples:
 When you find yourself solving a problem that wouldn't exist in
 hardware, stop and ask whether the problem is real.
 
-## "Hobby build" means MORE design freedom, not less
+## "Hobby build" means MORE design freedom, not less, but it isn't unlimited
 
 Don't justify accepting performance compromises by appealing to "this
 is a hobby build". A hobby build has MORE freedom than a manufactured
-product, not less:
+product:
 
-- No BOM cost pressure → can use more components, matched/precision
-  parts, hand-selected transistors, exotic op-amps, etc.
+- BOM cost pressure is loose, not absent — target ~$20/tube. Can use
+  more components, modestly priced precision parts, etc., but not
+  exotic op-amps or precision resistor arrays at $30 each.
 - No PCB area constraint → can use through-hole, generous spacing,
-  more passive components, dedicated trim circuits.
-- No mass-tuning constraint → can hand-tune per-unit, use trimpots,
-  match component pairs by measurement.
+  more passive components.
 - No regulatory compliance shortcuts → can use whatever quenches RFI
-  most effectively, even if it costs more or takes more space.
+  most effectively.
 
-The right mental model is "well-equipped lab prototype with infinite
-component budget" not "off-the-shelf consumer product with £5 BOM
-target". When proposing trade-offs, weigh them against
-*manufacturability of one* (where complexity is essentially free) not
-*manufacturability of thousands*.
+But two practical constraints DO apply:
+
+- **No build-time trimming.** The design is intended to be published
+  on a forum, where people will build it without access to the rare
+  filaments themselves. Bench testing trim pots on real filaments is
+  risky — particularly for ILC1-1/7 where the displays are scarce and
+  irreplaceable. Prefer self-biasing topologies, matched-pair tracking
+  (e.g., V_BE multiplier with thermal coupling, diode-connected MOSFET
+  bias), or robust passive bias that works across worst-case part
+  variation. Trim-free is a hard requirement.
+- **Buildability matters.** The design should be something a forum
+  reader would realistically attempt — not "well-equipped lab
+  prototype". Avoid: SMT-only assemblies smaller than 0805 / SOT-23,
+  parts that require hot air, exotic transformers that need winding
+  by hand, microcontroller code where analog would do.
+
+The right mental model is "publishable forum project, ~$20/tube, no
+trimming required, drop-in for builders". When proposing trade-offs,
+weigh them against *will a stranger be able to build this and have
+it work*, not *manufacturability of thousands* (commercial) and not
+*manufacturability of one with full lab access* (lab prototype).
 
 ## Always commit the latest versions of generated artifacts after a test
 
