@@ -105,8 +105,43 @@ TUBES = {
     # loop to settle at higher R_DS to deliver the required V_diff -- pushes
     # the JFET closer to pinch-off where (1-H) is larger and V_top swing is
     # only fractionally bigger than V_diff (efficient class-AB).
+    #
+    # Per-tube buffer-output topology:
+    #   IV-6, ILC1-1/8: MOSFET common-source push-pull (ce_buf+mos_buf),
+    #     using DMP3098L+DMN3404L. The low rails (v_buf ~ 1.2-1.4 V, just
+    #     above V_pk) put the MOSFETs near triode at peaks, so dissipation
+    #     is dominated by I^2*R_DS_on rather than V_DS*I_D linear-region
+    #     loss. Forward-diode bias chain works because v_buf ~ V_F + V_GS_th.
+    #   ILC1-1/7: BJT common-collector emitter follower (default), using
+    #     BC868/BC868PA (SOT-89). Considered the MOSFET path several ways
+    #     (CS with Zener bias + comp cap; CC with diode bias; CC with
+    #     LM358 servo bias) but none beat BJT CC for this load. Reasons
+    #     summarised at the bottom of this comment.
+    #
+    # Why BJT CC + SOT-89 wins for ILC1-1/7 (V_op=5 V_RMS / 30 ohm = 1 W out):
+    #   - BJT V_BE ~ 0.65 V +/- 50 mV across BC868 production: tight
+    #     enough that the fixed silicon-diode bias chain gives consistent
+    #     class-AB across parts. Trim-free by construction (CLAUDE.md
+    #     hard requirement).
+    #   - MOSFET V_GS_th = 0.5-1.5 V (3x spread): fixed bias chain can't
+    #     handle the variation; needs trimming or a servo to compensate.
+    #   - MOSFET CS at any rail oscillates (high-Q resonance at 3-7 MHz
+    #     when conducting); compensation costs bandwidth or BOM.
+    #   - MOSFET CC with diode bias works but ss_avg ~ 500 mW per FET
+    #     (78% of SOT-23 derated rating); BJT CC at SOT-89 gets the same
+    #     work done at 100 mW (13% of derated rating) -- 5x more margin.
+    #   - LM358 servo bias closes the V_th-variation problem at the cost
+    #     of 1 op-amp + 2 sense Rs + filter per buffer arm; works in
+    #     simulation but offers ~10% dissipation reduction vs diode bias
+    #     at the same rail. Doesn't justify the BOM and complexity.
+    #
+    # The MOSFET options remain in make_netlist() (set ce_buf, mos_buf,
+    # bias_zener_v, buf_comp_pf, servo_bias on a tube spec to enable) for
+    # any future tube whose load characteristics tip the trade-off the
+    # other way -- e.g., a higher-current tube where I^2*R_DS_on advantage
+    # of MOSFETs becomes significant.
     "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=6.0, mos_buf=True, t_rail_ramp=100e-6),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=4.3),
     "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
