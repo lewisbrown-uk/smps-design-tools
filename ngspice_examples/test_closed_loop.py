@@ -932,16 +932,16 @@ XU_int 0 n_int_minus vcc vee v_int_out {opamp_int}
 * the +1.8V reference) or goes below -0.3 V (Vf ~0.7V under the +0.3V
 * reference). In production the precision references would be Zeners +
 * dividers off the +/-9 V rails, or band-gap parts (TL431, REF03 etc.).
-* Anti-windup clamp rails. Set wide ([-1, +6] V) so the clamp is only
-* a true safety net during fault conditions and doesn't bottleneck the
-* loop's normal operating point. The original tight range [+0.3, +1.8]
-* held v_int to ~+2.1 V via the Schottky V_F, which limited ILC1-1/7's
-* maximum operating point and caused the loop to fail with high-|V_p|
-* JFETs (V_p < -3 V on a 2N5457). Cold-start integrator excursion is
-* small (peaks at +0.6 V in 100 ms per diag_clamp_activity.py), so a
-* wider clamp doesn't introduce new windup behaviour.
+* Anti-windup clamp rails. The lower rail (+0.3 V) is asymmetric --
+* biases v_int to operate in the positive region and prevents the
+* integrator from overshooting negative during the long cold-start
+* thermal transient. The upper rail was originally +1.8 V which
+* limited ILC1-1/7's high-|V_p| operating point; widened to +6 V
+* so the loop can pinch off worst-case 2N5457 JFETs (V_p = -6 V)
+* without bottlenecking. See diag_clamp_activity.py for measurements
+* of the clamp's actual activation behaviour.
 V_clamp_hi v_clamp_hi 0  6.0
-V_clamp_lo v_clamp_lo 0  -1.0
+V_clamp_lo v_clamp_lo 0  0.3
 D_aw_hi    v_int_out  v_clamp_hi Dclamp
 D_aw_lo    v_clamp_lo v_int_out  Dclamp
 .model Dclamp D(Is=2.52n Rs=0.568 N=1.752 Cjo=4p M=0.4 tt=20n)
