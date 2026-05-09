@@ -932,15 +932,31 @@ XU_int 0 n_int_minus vcc vee v_int_out {opamp_int}
 * the +1.8V reference) or goes below -0.3 V (Vf ~0.7V under the +0.3V
 * reference). In production the precision references would be Zeners +
 * dividers off the +/-9 V rails, or band-gap parts (TL431, REF03 etc.).
-* Anti-windup clamp rails. The lower rail (+0.3 V) is asymmetric --
-* biases v_int to operate in the positive region and prevents the
-* integrator from overshooting negative during the long cold-start
-* thermal transient. The upper rail was originally +1.8 V which
-* limited ILC1-1/7's high-|V_p| operating point; widened to +6 V
-* so the loop can pinch off worst-case 2N5457 JFETs (V_p = -6 V)
-* without bottlenecking. See diag_clamp_activity.py for measurements
-* of the clamp's actual activation behaviour.
-V_clamp_hi v_clamp_hi 0  6.0
+* Anti-windup clamp rails. The asymmetric range [+0.3, +1.8] V also
+* acts implicitly as the integrator's overshoot limiter during the
+* slow thermal cold-start (~1-2 s for ILC1-1/7's 1 W filament). The
+* range bounds the loop's accessible v_int operating points, which
+* in turn bounds the JFET V_p range the loop can handle:
+*
+*   V_p too low (e.g., -6 V): loop wants v_int > +1.8 V to pinch off
+*     the JFET, but clamp prevents it -> V_op underdelivered.
+*   V_p OK (-0.5 to -2.5 V): loop settles within the clamp range,
+*     V_op delivered to within 0.2%.
+*
+* Widening the upper clamp (tested at +6 V) doesn't help: the
+* integrator then overshoots during cold-start to +6 V and gets
+* stuck (small steady-state error -> slow recovery from rail).
+*
+* The clean fix would be back-calculation anti-windup (an extra
+* op-amp + resistor network so the integrator's gain drops near
+* the rails), which is a real circuit redesign. Without that, the
+* practical solution is to specify a JFET whose V_p range fits the
+* clamp: MMBFJ113 (Diodes Inc.) datasheet V_p = -0.5 to -3 V is a
+* better match than 2N5457 (-0.5 to -6 V).
+*
+* See diag_clamp_activity.py and sweep_jfet_vp.py for the data this
+* analysis is based on.
+V_clamp_hi v_clamp_hi 0  1.8
 V_clamp_lo v_clamp_lo 0  0.3
 D_aw_hi    v_int_out  v_clamp_hi Dclamp
 D_aw_lo    v_clamp_lo v_int_out  Dclamp
