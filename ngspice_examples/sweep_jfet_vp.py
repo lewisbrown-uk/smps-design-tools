@@ -53,9 +53,11 @@ def build_mc(spec, jfet_vp):
     return mc
 
 
-def run_short(tube_key, jfet_vp, t_end=2.0):
+def run_short(tube_key, jfet_vp, t_end=5.0):
     """Run a short closed-loop sim with the given JFET V_p. Returns dict
-    of trajectories or None on convergence failure."""
+    of trajectories or None on convergence failure. 5 s default matches
+    the standard test_closed_loop run length needed for ILC1-1/7's
+    1 W filament thermal to fully settle."""
     spec = m.TUBES[tube_key]
     mc = build_mc(spec, jfet_vp)
     work = m.WORK; work.mkdir(exist_ok=True)
@@ -114,7 +116,7 @@ def sweep_tube(tube_key):
     print(f"  {'V_p [V]':>8s} {'V_fil [V]':>10s} {'err [%]':>9s} "
           f"{'v_int [V]':>10s} {'T [K]':>9s} {'T_err':>8s}  status")
     for vp in VP_GRID:
-        r = run_short(tube_key, vp, t_end=2.0)
+        r = run_short(tube_key, vp, t_end=5.0)
         meas = measure(r, spec)
         if meas is None:
             print(f"  {vp:8.2f}                                                          *** FAILED to converge ***")
