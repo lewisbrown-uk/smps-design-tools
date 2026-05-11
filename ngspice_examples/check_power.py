@@ -33,8 +33,11 @@ def power_specs(use_booster: bool, ce_buf: bool = False, mos_buf: bool = False):
         # Anti-windup diodes (1N4148W, SOD-123, 200 mW abs / ~100 mW derated)
         ("D_aw_hi_1N4148W",  "(v(v_int_out) - v(v_clamp_hi)) * @D_aw_hi[id]",  100),
         ("D_aw_lo_1N4148W",  "(v(v_clamp_lo) - v(v_int_out)) * @D_aw_lo[id]",  100),
-        # JFET (MMBF5457, SOT-23, 225 mW abs / ~110 mW derated)
-        ("J_var_MMBF5457",   "(v(v_drv_atten) - v(n_ap_plus)) * @J_var[id]" if use_booster
+        # JFET (MMBFJ113, SOT-23, 225 mW abs / ~110 mW derated). Picked
+        # over MMBF5457 because its tighter V_GS(off) range (-0.5 to -3 V
+        # vs -0.5 to -6 V) fits inside the loop's clamp-bounded operating
+        # range without trim-time binning.
+        ("J_var_MMBFJ113",   "(v(v_drv_atten) - v(n_ap_plus)) * @J_var[id]" if use_booster
                              else "(v(v_osc) - v(n_ap_plus)) * @J_var[id]", 110),
     ]
     if use_booster:

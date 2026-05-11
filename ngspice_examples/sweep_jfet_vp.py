@@ -29,8 +29,8 @@ sys.path.insert(0, str(HERE))
 import test_closed_loop as m
 
 
-VP_GRID = [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -4.0, -6.0]
-I_DSS_TARGET = 3e-3   # 2N5457 typical
+VP_GRID = [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0]
+I_DSS_TARGET = 5e-3   # MMBFJ113 typical (datasheet I_DSS = 2 to 20 mA, typ ~5)
 
 
 def build_mc(spec, jfet_vp):

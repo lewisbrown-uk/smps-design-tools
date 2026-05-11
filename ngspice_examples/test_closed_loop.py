@@ -281,8 +281,14 @@ def make_netlist(data_path: Path,
     # budget; with TLV9154-grade 2.5 mV Vos here the residual T error
     # is ~30 K, vs ~5 K with chopper.
     vos_chopper = mc.get("vos_chopper", 5e-6)
-    jfet_vp = mc.get("jfet_vp", -2.5)
-    jfet_beta = mc.get("jfet_beta", 1.0e-3)
+    # JFET defaults: MMBFJ113 (Diodes Inc., SOT-23), datasheet V_GS(off)
+    # = -0.5 to -3 V (typ ~ -1.5 V), I_DSS = 2 to 20 mA (typ ~ 5 mA).
+    # Picked over 2N5457 (V_p spread -0.5 to -6 V) because the loop's
+    # +1.8 V integrator clamp can only pinch off JFETs with |V_p| <= 2.5
+    # V; J113's tighter V_p range fits inside that without trimming.
+    # Beta = I_DSS / V_p^2 = 5e-3 / 1.5^2 = 2.2e-3 at typical params.
+    jfet_vp = mc.get("jfet_vp", -1.5)
+    jfet_beta = mc.get("jfet_beta", 2.2e-3)
     # Per-tube buffer rail, defaults to VCC for backward compatibility.
     v_buf = mc.get("v_buf", VCC)
     def _opamp(key, default=None):
@@ -841,10 +847,10 @@ R_ap2 v_ap  n_ap_minus {R_AP:.6g}
 * the inverter's output stage with no DC offset on V_GS. The bootstrap AC
 * signal is summed into the inverter's non-inverting input -- see the
 * inverter section below.
-J_var {v_osc_jfet} v_ctl n_ap_plus J2N5457
+J_var {v_osc_jfet} v_ctl n_ap_plus JMMBFJ113
 C_ap n_ap_plus 0 {c_ap_v:.6e}    IC=0
 XU_ap n_ap_plus n_ap_minus vcc vee v_ap {opamp_ap}
-.model J2N5457 NJF(Vto={jfet_vp:.4f} Beta={jfet_beta:.4e} Lambda=0)
+.model JMMBFJ113 NJF(Vto={jfet_vp:.4f} Beta={jfet_beta:.4e} Lambda=0)
 
 * === Tube filament thermal-electrical macromodel ===
 * The filament behaves as a non-linear resistor R(T) = R_amb*(T/T_amb)^fil_exp
