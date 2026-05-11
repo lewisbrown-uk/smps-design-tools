@@ -962,7 +962,7 @@ XU_int 0 n_int_minus vcc vee v_int_out {opamp_int}
 *
 * See diag_clamp_activity.py and sweep_jfet_vp.py for the data this
 * analysis is based on.
-V_clamp_hi v_clamp_hi 0  1.8
+V_clamp_hi v_clamp_hi 0  2.5
 V_clamp_lo v_clamp_lo 0  0.3
 D_aw_hi    v_int_out  v_clamp_hi Dclamp
 D_aw_lo    v_clamp_lo v_int_out  Dclamp
