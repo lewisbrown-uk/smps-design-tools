@@ -137,8 +137,11 @@ def main():
     for r in R_FILS:
         t, v_dc, v_diff, v_A, v_B = run_one(r)
         sel = t > T_END - 0.050
-        v_dc_settled = float(np.mean(v_dc[sel]))
-        v_diff_amp = float(np.std(v_diff[sel]) * np.sqrt(2))   # peak from RMS
+        # Time-weighted mean -- np.mean is biased on ngspice variable-timestep data.
+        ts_sel = t[sel]; dur_sel = ts_sel[-1] - ts_sel[0]
+        v_dc_settled = float(np.trapezoid(v_dc[sel], ts_sel) / dur_sel)
+        v_diff_rms = float(np.sqrt(np.trapezoid(v_diff[sel]**2, ts_sel) / dur_sel))
+        v_diff_amp = v_diff_rms * np.sqrt(2)   # peak from RMS
         # Predicted: bridge midpoint difference at balance is 0; off balance,
         # V_diff_peak = V_drive_diff * (R_sense/(R+R_sense) - R_sense/(R_T+R_sense))
         # where V_drive_diff = 2 * V_DRIVE (differential)
