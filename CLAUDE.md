@@ -103,3 +103,47 @@ For any waveform claim, the workflow is:
 
 The same applies to "the waveform looks clean" — that means nothing
 without measuring THD or comparing peak/RMS to a fitted sine.
+
+## MOSFET model choice: Level 1 placeholder vs manufacturer subcircuit
+
+`test_closed_loop.make_netlist` includes manufacturer SPICE models
+for DMN3404L (NMOS) and DMP3098L (PMOS) loaded from
+`spice_models/*.spice.txt`. These are full LEVEL=3 subcircuits with
+junction caps, gate resistance, body diode, substrate diode, and
+source inductance. They're the model you should use for any work
+where the MOSFET's real switching / SOA behaviour matters (startup
+spike SOA, EMI, switching loss).
+
+The Level 1 placeholder `PMOS_LL`/`NMOS_LL` that's still in the file
+as historical scaffolding is a generic model with no parasitic
+network. It's **pessimistic on dissipation by 30-50%** compared to
+the manufacturer model for both IV-6 and ILC1-1/8:
+
+  Tube      MOSFET ss_avg (Level 1)    MOSFET ss_avg (manuf)
+  IV-6      ~14 mW                     5-6 mW           (-60%)
+  ILC1-1/8  ~32-49 mW                  20-27 mW         (-30%)
+
+Reason: the manufacturer parts have lower R_DS_on at moderate V_GS
+than the generic Level 1 KP/(W/L) parameters predict. So results
+quoted from the placeholder are conservative -- safe for design
+margin but not accurate for the real circuit.
+
+Two further practical notes:
+
+- **Runtime**: the manufacturer subcircuit is dramatically slower
+  than Level 1 (~30 s of wall-clock per **millisecond** of simulated
+  time on IV-6/ILC1-1/8). Cold-start uses small adaptive timesteps;
+  steady-state is much faster (~20x). A 500 ms IV-6 run finished in
+  ~25-30 min wall clock when it converged.
+- **RAM**: IV-6's transient simulation with the manufacturer model
+  exhausts 16 GB RAM at around 480 ms of simulated time (~13M
+  data rows) -- ngspice keeps the full transient in memory until
+  the final `wrdata` call. For routine work on IV-6/ILC1-1/8, limit
+  the manufacturer-model sim to **<= 150 ms** (past cold-start,
+  captures steady-state). ILC1-1/8 fits a full 500 ms in ~1.5 GB.
+
+For routine sweeps (JFET tolerance, parameter scans), the Level 1
+model's pessimism is the right default -- if a design passes with
+Level 1 it'll pass with the manufacturer model. The manufacturer
+model is for one-off SOA / accurate-dissipation verification.
+
