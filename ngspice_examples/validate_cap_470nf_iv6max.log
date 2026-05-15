@@ -1,0 +1,2 @@
+  FAIL  IV-6      V_p=-3.0V  V_ctl_OP=-2.64V  V_ctl_pk=+2.82V  t_settle_5K=1456ms  R_final=20.00/20Ω  T_final=800/800K  R_pk=20.0Ω  (321.7 min)
+Wrote /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/cap_470nf_iv6max_results.csv; total wall 321.8 min

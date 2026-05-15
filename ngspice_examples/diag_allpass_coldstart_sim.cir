@@ -1,0 +1,97 @@
+* Cold-start demod measurement: fixed V_ctl, filament held at R_amb.
+* No thermal evolution, no integrator. Just measure n_demout DC vs V_ctl.
+* Booster wiring (IV-6): v_osc -> attenuator -> v_drv_atten -> all-pass -> v_ap
+*                       Buffer1: v_drv_atten -> v_osc_drive (inv gain -2)
+*                       Buffer2: v_ap        -> v_ap_drive  (inv gain -2)
+*                       Bridge: R_fil=R_amb (fixed) || R_sen vs R_top_ref || R_bot_ref
+*                       Diff amp -> demod (sync, ref=sign(v_osc))
+* Buffers replaced with ideal voltage-controlled sources (no BJT/MOSFET) for
+* clean topology check.
+
+.include /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/uopamp.lib
+
+* === Supplies ===
+Vcc  vcc 0  +9.0
+Vee  vee 0  -9.0
+
+* === Wien bridge oscillator (matches test_closed_loop.py) ===
+R1   v_osc  ns   10000
+C1   ns     np   1.591500e-08  IC=0
+R2   np     0    10000
+C2   np     0    1.591500e-08  IC=10m
+Rg   nn     0    10k
+Rfa  nn     fb   10k
+Rfb  fb     v_osc  12k
+Q1   fb     b1    v_osc Q2N3904
+Q2   v_osc  b2    fb    Q2N3904
+Rtop1 fb    b1    120000
+Rbot1 b1    v_osc 120000
+Rtop2 v_osc b2    120000
+Rbot2 b2    fb    120000
+XU_osc np nn vcc vee v_osc uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.5e-3
+
+* === Passive attenuator + ideal follower for v_drv_atten ===
+* k_atten = (56k+9.1k)/9.1k = 7.154
+R_atten_top v_osc        v_atten_input 56k
+R_atten_bot v_atten_input 0            9.1k
+E_buf0      v_drv_atten 0 v_atten_input 0 1   ; ideal follower
+
+* === JFET all-pass ===
+R_ap1 v_drv_atten n_ap_minus 1590
+R_ap2 v_ap        n_ap_minus 1590
+J_var v_drv_atten v_ctl      n_ap_plus JMMBFJ113
+C_ap  n_ap_plus 0  100n  IC=0
+XU_ap n_ap_plus n_ap_minus vcc vee v_ap uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.5e-3
+.model JMMBFJ113 NJF(Vto=-1.5 Beta=2.2e-3 Lambda=0)
+
+* === V_ctl: external DC source for this characterisation ===
+V_ctl v_ctl 0 PARAM_VCTL
+
+* === Buffer 1: ideal inverting amp, gain -K_buf ===
+* For IV-6: K_buf = 2.0
+E_buf1 v_osc_drive 0 v_drv_atten 0 -2.0
+* === Buffer 2: ideal inverting amp on v_ap ===
+E_buf2 v_ap_drive 0 v_ap 0 -2.0
+
+* === Bridge with fixed cold filament resistance (IV-6: R_amb = 6.164 ohm) ===
+R_fil_fixed v_osc_drive node_A 6.164
+R_sen       node_A      v_ap_drive 5.0
+R_top_ref   v_osc_drive node_B 2000
+R_bot_ref   node_B      v_ap_drive 500
+
+* === Diff amp (gain 1, matched 1Meg) ===
+R_a1 node_A n_diff_minus 1Meg
+R_a2 n_diff_minus n_diff 1Meg
+R_b1 node_B n_diff_plus 1Meg
+R_b2 n_diff_plus 0      1Meg
+XU_diff n_diff_plus n_diff_minus vcc vee n_diff uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.5e-3
+
+* === Comparator: sign(v_osc) -> n_cmp ===
+XU_cmp v_osc 0 vcc vee n_cmp uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.5e-3
+
+* === Synchronous demodulator ===
+.model swMod SW(VT=0 VH=0.1 RON=10 ROFF=1G)
+S1 n_diff vplus n_cmp 0 swMod
+S2 0      vplus 0     n_cmp swMod
+R_bias vplus 0 1Meg
+R_din  n_diff   n_dem_minus 10k
+R_dfb  n_demout n_dem_minus 10k
+XU_dem vplus n_dem_minus vcc vee n_demout uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=5e-6
+
+* === 2N3904 model (for the Wien bridge JFET-clamp BJT pair) ===
+.model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
++ ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
++ CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p MJE=.2593 VJE=.75
++ TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
+
+.options reltol=1e-4 abstol=1p chgtol=1f
+.tran 10u 0.1 UIC
+.control
+run
+* Mean of n_demout over the last 50 ms (carrier well past startup transient)
+meas tran ndem_mean   avg v(n_demout)  from=0.05 to=0.1
+meas tran vd_pkpk     pp  v(v_osc_drive)-v(v_ap_drive) from=0.05 to=0.1
+meas tran ndiff_pkpk  pp  v(n_diff)    from=0.05 to=0.1
+print ndem_mean vd_pkpk ndiff_pkpk
+.endcontrol
+.end

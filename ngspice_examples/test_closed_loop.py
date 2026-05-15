@@ -997,6 +997,11 @@ XU_inv n_inv_plus  n_inv_minus vcc vee v_ctl {opamp}
 + TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
 
 .options reltol=1e-4 abstol=1p chgtol=1f
+* Limit stored vectors to just the ones we wrdata -- without this,
+* ngspice keeps every external + internal subcircuit node in RAM for the
+* full transient. With manufacturer MOSFET subcircuits (DMP3098L/DMN3404L)
+* this exhausts host memory at ~1.5 s of sim time.
+.save v({v_osc_drive}) v({v_ap_drive}) v(node_A) v(node_B) v(n_diff) v(n_demout) v(v_ctl) v(v_int_out) v(T_node) v(r_fil)
 .tran 10u {T_END} UIC
 
 .control
