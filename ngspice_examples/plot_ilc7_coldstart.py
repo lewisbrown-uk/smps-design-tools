@@ -1,10 +1,10 @@
 """Plot the cold-start behaviour of ILC1-1/7 at C_AP=470nF, both V_p variants
 overlaid. Highlights the three distinct phases:
-    1. Slew    (0 -> ~15 ms): integrator ramps from 0 toward +2.5 V clamp
-    2. Pinned  (~15 -> 25-80 ms): V_int_out pinned at +3.34 V by clamp diode,
-                                 filament heating at maximum drive
-    3. Release (release_t -> settle): diode comes out of conduction, V_int
-                                       drifts to OP, bridge balances
+    1. Slew    (0 -> ~12-23 ms): integrator ramps from 0 toward +2.5 V clamp
+    2. Pinned  (~12-23 -> ~470-490 ms): V_int_out pinned at +3.34 V by clamp
+                                       diode, filament heating at maximum
+    3. Release / settle (~470-490 ms onward): diode comes out of conduction,
+                                              V_int drifts to OP, bridge balances
 Reads the .npz files saved by diag_ilc7_peak.py.
 """
 import sys
@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 
 CLAMP_HI = 2.5
 CLAMP_LO = 0.3
-T_END_ZOOM = 0.250   # cold-start window: 0-250 ms
+T_END_ZOOM = 2.000   # cover slew + pinned + release + settle (full cold-start arc)
 
 cases = [("typ", -1.5, "C0"), ("max", -3.0, "C3")]
 runs = {}
