@@ -1,0 +1,2 @@
+tube,vp_label,vp_value,ok,clamp_ok,bridge_ok,v_ctl_OP,v_ctl_peak,t_settle_5K,t_settle_10K,t_target_95,T_peak,T_final,T_target,R_fil_peak,R_fil_final,R_fil_target,V_fil_rms,wall_s
+IV-6,max,-3.0,False,False,True,-2.6402013931242676,2.81969722,1.45648794,1.32407854,1.18331086,800.022847,800.006958,800,20.0006875,20.0002108,20,1.0001315847880405,19300.462911605835

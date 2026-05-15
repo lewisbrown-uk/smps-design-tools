@@ -1,0 +1,33 @@
+Running ILC1-1/7 V_p sweep with extra clamp signals
+  V_p=-1.5V  wall=4.3 min  V_ctl_pk=+0.023V at t=1.47ms
+  V_p=-3.0V  wall=4.3 min  V_ctl_pk=+0.028V at t=1.47ms
+
+Plot: /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/diag_ilc7_peak.png
+
+=== Peak analysis ===
+
+  V_p=-1.5 V:
+    Cold-start kick (V_ctl most negative):
+      V_ctl_min = -3.468 V  at t=81.91 ms
+      V_int_out @ that t = +3.343 V  (clamp_hi=+2.5V)
+      I_clamp_hi @ that t = +93.140 mA
+    Peak clamp_hi current:
+      I_clamp_hi_max = +94.029 mA  at t=15.37 ms
+      V_int_out @ peak = +3.343 V
+    Steady-state (last 50 ms mean):
+      V_ctl_OP = -1.389 V,  V_int_out_OP = +1.392 V
+      I_clamp_hi_OP = -0.0000 mA  (>0 = diode conducting in steady state)
+    Saved diag_ilc7_peak_vptyp.npz
+
+  V_p=-3.0 V:
+    Cold-start kick (V_ctl most negative):
+      V_ctl_min = -3.480 V  at t=24.73 ms
+      V_int_out @ that t = +3.343 V  (clamp_hi=+2.5V)
+      I_clamp_hi @ that t = +93.767 mA
+    Peak clamp_hi current:
+      I_clamp_hi_max = +94.028 mA  at t=24.90 ms
+      V_int_out @ peak = +3.343 V
+    Steady-state (last 50 ms mean):
+      V_ctl_OP = -2.889 V,  V_int_out_OP = +2.893 V
+      I_clamp_hi_OP = +0.0148 mA  (>0 = diode conducting in steady state)
+    Saved diag_ilc7_peak_vpmax.npz

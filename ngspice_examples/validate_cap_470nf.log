@@ -1,0 +1,89 @@
+Running 3 cases in parallel (C_AP=470nF, no soft-start, .save enabled)
+Warning: Model issue on line 47 :
+  .model xm_o_pmos:pmod1 pmos (level=3 vto=-2.1 tox=6e-8 nsub=5e+16 kp=9 n ...
+unrecognized parameter (n) - ignored
+
+Warning: Model issue on line 47 :
+  .model xm_o_nmos:nmod1 nmos (level=3 vto=2 tox=6.4e-8 nsub=5e+16 kp=33 n ...
+unrecognized parameter (n) - ignored
+
+Warning: Model issue on line 47 :
+  .model xm_a_pmos:pmod1 pmos (level=3 vto=-2.1 tox=6e-8 nsub=5e+16 kp=9 n ...
+unrecognized parameter (n) - ignored
+
+Warning: Model issue on line 47 :
+  .model xm_a_nmos:nmod1 nmos (level=3 vto=2 tox=6.4e-8 nsub=5e+16 kp=33 n ...
+unrecognized parameter (n) - ignored
+
+
+ :  3.10499e-01
+ Reference value :  3.10642e-01
+ Reference value :  3.10657e-01
+ Reference value :  3.10670e-01
+ Reference value :  3.10684e-01
+ Reference value :  3.10700e-01
+ Reference value :  3.10722e-01
+ Reference value :  3.10836e-01
+ Reference value :  3.11168e-01
+ Reference value :  3.11184e-01
+ Reference value :  3.11202e-01
+ Reference value :  3.11220e-01
+ Reference value :  3.11254e-01
+ Reference value :  3.11309e-01
+ Reference value :  3.11369e-01
+ Reference value :  3.11455e-01
+ Reference value :  3.11596e-01
+ Reference value :  3.11655e-01
+ Reference value :  3.11668e-01
+ Reference value :  3.11682e-01
+ Reference value :  3.11698e-01
+ Reference value :  3.11715e-01
+ Reference value :  3.11782e-01
+ Reference value :  3.12164e-01
+ Reference value :  3.12180e-01
+ Reference value :  3.12198e-01
+ Reference value :  3.12214e-01
+ Reference value :  3.12239e-01
+ Reference value :  3.12291e-01
+ Reference value :  3.12345e-01
+ Reference value :  3.12416e-01
+ Reference value :  3.12560e-01
+ Reference value :  3.12664e-01
+ Reference value :  3.12678e-01
+ Reference value :  3.12692e-01
+ Reference value :  3.12708e-01
+ Reference value :  3.12734e-01
+ Reference value :  3.12857e-01
+ Reference value :  3.13177e-01
+ Reference value :  3.13192e-01
+ Reference value :  3.13209e-01
+ Reference value :  3.13228e-01
+ Reference value :  3.13265e-01
+ Reference value :  3.13320e-01
+ Reference value :  3.13380e-01
+ Reference value :  3.13477e-01
+ Reference value :  3.13660e-01
+ Reference value :  3.13673e-01
+ Reference value :  3.13687e-01
+ Reference value :  3.13702e-01
+ Reference value :  3.13719e-01
+ Reference value :  3.13772e-01
+ Reference value :  3.14007e-01
+ Reference value :  3.14186e-01
+ Reference value :  3.14203e-01
+ Reference value :  3.14220e-01
+ Reference value :  3.14244e-01
+ Reference value :  3.14295e-01
+ Reference value :  3.14349e-01
+ Reference value :  3.14420e-01
+ Reference value :  3.14563e-01
+ Reference value :  3.14670e-01
+ Reference value :  3.14684e-01
+
+  FAIL  iv6 vp=max(-3.0): ngspice failed for cap470_iv6_vpmax
+  FAIL  ILC1-1/8  V_p=-3.0V  V_ctl_OP=-2.57V  V_ctl_pk=+3.28V  t_settle_5K=917ms  R_final=8.00/8Ω  T_final=800/800K  R_pk=8.0Ω  (194.4 min)
+  OK   ILC1-1/8  V_p=-1.5V  V_ctl_OP=-1.07V  V_ctl_pk=+3.46V  t_settle_5K=1104ms  R_final=8.00/8Ω  T_final=800/800K  R_pk=8.8Ω  (218.0 min)
+
+Total wall time: 218.1 min
+Wrote /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/cap_470nf_results.csv
+Verdict: 1/2 cases OK

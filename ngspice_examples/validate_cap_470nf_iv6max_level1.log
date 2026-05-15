@@ -1,0 +1,14 @@
+Netlist patched: /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/_closedloop_test/closedloop_cap470_iv6_vpmax_level1.cir
+ngspice done in 4.29 min
+
+Level 1 result (IV-6 V_p=-3.0V, C_AP=470nF):
+  V_ctl_OP     = -2.644 V    (manuf: -2.640 V)
+  V_ctl_peak   = +2.823 V    (manuf: +2.820 V)
+  t_settle_5K  = 1465 ms    (manuf: 1456 ms)
+  t_settle_10K = 1337 ms
+  T_final      = 799.7 K    (manuf: 800.0 K, target 800 K)
+  T_peak       = 800.0 K
+  R_fil_final  = 19.992 Ω    (manuf: 20.000 Ω, target 20 Ω)
+  R_fil_peak   = 20.001 Ω    (manuf: 20.0 Ω)
+  wall         = 4.29 min   (manuf: 321.7 min)
+Wrote /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/cap_470nf_iv6max_level1_results.csv
