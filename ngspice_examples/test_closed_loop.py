@@ -79,7 +79,10 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
 #   ILC1-1/7: 7.3    ->  scale 0.30 × 6.6 = 1.98
 #   ILC1-1/8: 26.4   ->  scale 0.30 × 24  = 7.20
 TUBES = {
-    "iv3":     _make_tube("IV-3",     R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100,  r_int_scale=0.3),
+    # IV-3 unified onto the booster+mos_buf topology used by IV-6 / ILC1-1/8.
+    # K_buf = 2.6 (buf_fb1 = 1.6k) sizes the buffer for V_d_pk = 1.555 V_pk
+    # at OP with x_OP ~ 0.7 (just below peak sensitivity).
+    "iv3":     _make_tube("IV-3",     R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100,  r_int_scale=0.3, booster=True, buf_fb1=1.6e3, buf_fb_ap=1.6e3, v_buf=1.4, ce_buf=True, mos_buf=True),
     # Per-tube buf_fb1 sets buffer gain via R_fb1:R_fb2(=1k):
     #   buf_fb1 = 6.2k -> k_buf = 7.2 (matches k_atten=7.15, unity overall gain)
     #   buf_fb1 = 9.1k -> k_buf = 10.1 (1.41x net gain, for ILC1-1/7)
@@ -140,8 +143,20 @@ TUBES = {
     # any future tube whose load characteristics tip the trade-off the
     # other way -- e.g., a higher-current tube where I^2*R_DS_on advantage
     # of MOSFETs becomes significant.
+    # r_int_scale reset to 0.3 for all tubes pending re-tune for the
+    # J201/220nF combination. Previous per-tube scales (0.7/1.5/0.7) were
+    # tuned against J113 dynamics; J201's higher R_DS_on changes the loop's
+    # small-signal gain so the scales need to be re-derived empirically.
     "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True),
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=9.1e3, buf_fb_ap=9.1e3, v_buf=4.3),
+    # ILC1-1/7 K_buf raised from 10.1 to 14 (buf_fb1: 9.1k -> 13k E24).
+    # The old 10.1 put V_d_max = 8.47 V_pk vs V_d_required = 8.485 V_pk --
+    # zero headroom, loop pinned at the asymptote of (1-H_ap), couldn't
+    # throttle drive when T crossed T_op -> persistent +15 K overshoot
+    # regardless of JFET / C_AP / r_int_scale. New K_buf=14 gives V_d_max
+    # = 11.76 V_pk (39% headroom over required), letting the loop operate
+    # comfortably below the asymptote with real V_d-vs-x sensitivity.
+    # v_buf raised 4.3 -> 6.5 V to cover the larger V_top_pk swing.
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=13e3, buf_fb_ap=13e3, v_buf=6.5),
     "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
@@ -164,7 +179,11 @@ RBOT_BJT = ALPHA * R_TOT_BJT
 
 # All-pass: corner near f0 mid-bias
 R_AP = 1.59e3
-C_AP = 100e-9
+# C_AP = 1 uF sized for JMMBFJ112's R_DS_on ~ 50 ohm. With x_cold = 0.314
+# at V_GS=0 and x_OP ~ 1 reached at R_DS ~ 159 ohm (V_GS ~ -2 V, well
+# inside the J112 V_p range of -1 to -5). Through-hole PP film (e.g. WIMA
+# MKS2 1uF, 9x7 mm, ~$0.50).
+C_AP = 1e-6
 
 # Loop integrator (~5 Hz integrator zero frequency at default scale)
 # These are baselines; sweep_a scales R_INT and R_PID together (Kp constant)
@@ -281,14 +300,19 @@ def make_netlist(data_path: Path,
     # budget; with TLV9154-grade 2.5 mV Vos here the residual T error
     # is ~30 K, vs ~5 K with chopper.
     vos_chopper = mc.get("vos_chopper", 5e-6)
-    # JFET defaults: MMBFJ113 (Diodes Inc., SOT-23), datasheet V_GS(off)
-    # = -0.5 to -3 V (typ ~ -1.5 V), I_DSS = 2 to 20 mA (typ ~ 5 mA).
-    # Picked over 2N5457 (V_p spread -0.5 to -6 V) because the loop's
-    # +1.8 V integrator clamp can only pinch off JFETs with |V_p| <= 2.5
-    # V; J113's tighter V_p range fits inside that without trimming.
-    # Beta = I_DSS / V_p^2 = 5e-3 / 1.5^2 = 2.2e-3 at typical params.
-    jfet_vp = mc.get("jfet_vp", -1.5)
-    jfet_beta = mc.get("jfet_beta", 2.2e-3)
+    # JFET defaults: MMBFJ112 (onsemi, SOT-23):
+    #   V_GS(off): -1.0 to -5.0 V
+    #   R_DS_on:   ~50 ohm (much lower than J201's 750 ohm, gives more
+    #              x-headroom at low pinch-off)
+    # Wider V_p range than J201 means clamp must extend to ~ -5 V (handled
+    # by raising V_clamp_hi to +6 V below). The cold-start kick drives the
+    # integrator against the clamp, JFET goes into cutoff (V_ctl << V_p),
+    # x -> infinity, |V_d| -> V_d_max -- max heating during slew phase.
+    # Once the bridge balances, V_int_out releases from the clamp and the
+    # JFET operates in its linear region around V_ctl_OP.
+    # Typical (middle of spec): V_p ~ -3, I_DSS ~ 30 mA -> beta ~ 3.3 mA/V^2.
+    jfet_vp = mc.get("jfet_vp", -3.0)
+    jfet_beta = mc.get("jfet_beta", 3.3e-3)
     # Per-tube buffer rail, defaults to VCC for backward compatibility.
     v_buf = mc.get("v_buf", VCC)
     def _opamp(key, default=None):
@@ -301,6 +325,7 @@ def make_netlist(data_path: Path,
     opamp_diff = _opamp("vos_diff")
     opamp_dem  = _opamp("vos_dem", default=vos_chopper)
     opamp_int  = _opamp("vos_int", default=vos_chopper)
+    opamp_aw   = _opamp("vos_aw", default=vos_chopper)
     opamp_cmp  = _opamp("vos_cmp")
     opamp_buf0 = _opamp("vos_buf0")
     opamp_bufo = _opamp("vos_buf_osc")
@@ -847,10 +872,10 @@ R_ap2 v_ap  n_ap_minus {R_AP:.6g}
 * the inverter's output stage with no DC offset on V_GS. The bootstrap AC
 * signal is summed into the inverter's non-inverting input -- see the
 * inverter section below.
-J_var {v_osc_jfet} v_ctl n_ap_plus JMMBFJ113
+J_var {v_osc_jfet} v_ctl n_ap_plus JMMBFJ112
 C_ap n_ap_plus 0 {c_ap_v:.6e}    IC=0
 XU_ap n_ap_plus n_ap_minus vcc vee v_ap {opamp_ap}
-.model JMMBFJ113 NJF(Vto={jfet_vp:.4f} Beta={jfet_beta:.4e} Lambda=0)
+.model JMMBFJ112 NJF(Vto={jfet_vp:.4f} Beta={jfet_beta:.4e} Lambda=0)
 
 * === Tube filament thermal-electrical macromodel ===
 * The filament behaves as a non-linear resistor R(T) = R_amb*(T/T_amb)^fil_exp
@@ -863,11 +888,19 @@ XU_ap n_ap_plus n_ap_minus vcc vee v_ap {opamp_ap}
 * All physical parameters are global .params (R_amb, sigma_eps_A, C_th,
 * T_amb, fil_exp) so a single instantiation is enough.
 .subckt filament v_top v_bot T_node r_fil
-B_fil   v_top v_bot I = (V(v_top) - V(v_bot)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
-B_pelec 0 T_node    I = (V(v_top)-V(v_bot))*(V(v_top)-V(v_bot)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
-B_prad  T_node 0    I = sigma_eps_A * (V(T_node)^4 - T_amb^4)
+* T_node is clamped via max(T, T_amb) in every formula. Physically the
+* filament can't sit below ambient (no negative-temperature regime), so
+* this clamp doesn't alter behaviour in the operating regime (T >= T_amb
+* always). It exists purely as a numerical safety: without it, the
+* adaptive solver can occasionally take a bad step where T_node dips
+* below 0, at which point the T^4 cooling term explodes in sign and
+* drives T_node to -inf in a few rejected timesteps. With the clamp,
+* the worst case T_node briefly equals T_amb and the model just sits.
+B_fil   v_top v_bot I = (V(v_top) - V(v_bot)) / (R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp)
+B_pelec 0 T_node    I = (V(v_top)-V(v_bot))*(V(v_top)-V(v_bot)) / (R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp)
+B_prad  T_node 0    I = sigma_eps_A * (max(V(T_node),T_amb)^4 - T_amb^4)
 C_th    T_node 0    {{C_th}} IC={T_AMB}
-B_R     r_fil 0     V = R_amb * (V(T_node)/T_amb)^fil_exp
+B_R     r_fil 0     V = R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp
 .ends filament
 
 * === AC Wheatstone bridge ===
@@ -918,7 +951,7 @@ XU_dem vplus n_dem_minus vcc vee n_demout {opamp_dem}
 *   Kd = R_PID * C_PID             derivative (HF, fights overshoot)
 R_intin  n_demout n_int_minus {r_int:.6g}
 C_intin  n_demout n_int_minus {c_pid:.6e}
-R_intfb  n_int_pidp v_int_out {r_pid:.6g}
+R_intfb  n_int_pidp v_int_raw {r_pid:.6g}
 * Realistic startup: cap begins uncharged (no IC). Loop self-starts from
 * the intentional 1% bridge mismatch above + Vos drift in the demod and
 * integrator op-amps.
@@ -926,47 +959,75 @@ C_intfb  n_int_minus n_int_pidp {c_int:.6e}  IC={c_intfb_ic_v:.4g}
 * HF rolloff cap: in parallel with R_PID to limit HF gain and suppress
 * the f0 ripple from V_demod that the D term would otherwise pump
 * through to V_ctl.
-C_hf     n_int_pidp v_int_out {c_hf:.6e}     IC=0
-XU_int 0 n_int_minus vcc vee v_int_out {opamp_int}
+C_hf     n_int_pidp v_int_raw {c_hf:.6e}     IC=0
+* Integrator op-amp output is v_int_raw (free-swinging, no clamp diodes
+* on this node). The downstream-visible v_int_out is the *clamped* version,
+* produced by the saturator buffer (XU_aw) below. The back-calc path
+* (R_bc + diff amp) feeds the saturation error e_sat = v_int_raw - v_int_out
+* back into n_int_minus, unwinding the integrator only when v_int_raw is
+* actually past the clamp -- zero effect when in range.
+XU_int 0 n_int_minus vcc vee v_int_raw {opamp_int}
 
-* Anti-windup: real-circuit clamp on V_int_out using two silicon diodes
-* referenced to precision voltage sources. Sized for the 2N5457 V_to=-2.5V
-* operating range: V_int_out ~= -V_ctl, so the loop needs V_int_out in
-* [0, 2.5] to span the JFET's useful R_DS range. Clamp range chosen as
-* [-0.3, +2.5] V (small negative margin keeps the gate reverse-biased).
-* The diodes forward-conduct when V_int_out exceeds +2.5 V (Vf ~0.7V over
-* the +1.8V reference) or goes below -0.3 V (Vf ~0.7V under the +0.3V
-* reference). In production the precision references would be Zeners +
-* dividers off the +/-9 V rails, or band-gap parts (TL431, REF03 etc.).
-* Anti-windup clamp rails. The asymmetric range [+0.3, +1.8] V also
-* acts implicitly as the integrator's overshoot limiter during the
-* slow thermal cold-start (~1-2 s for ILC1-1/7's 1 W filament). The
-* range bounds the loop's accessible v_int operating points, which
-* in turn bounds the JFET V_p range the loop can handle:
+* === Passive saturator + back-calculation anti-windup ===
+* The integrator op-amp output v_int_raw drives v_int_out through a series
+* resistor R_aw_out. Clamp diodes on v_int_out clip it to
+* [V_clamp_lo - Vf, V_clamp_hi + Vf]. When v_int_raw exceeds clamp, the
+* clamp diode conducts, with current bounded by R_aw_out.
 *
-*   V_p too low (e.g., -6 V): loop wants v_int > +1.8 V to pinch off
-*     the JFET, but clamp prevents it -> V_op underdelivered.
-*   V_p OK (-0.5 to -2.5 V): loop settles within the clamp range,
-*     V_op delivered to within 0.2%.
-*
-* Widening the upper clamp (tested at +6 V) doesn't help: the
-* integrator then overshoots during cold-start to +6 V and gets
-* stuck (small steady-state error -> slow recovery from rail).
-*
-* The clean fix would be back-calculation anti-windup (an extra
-* op-amp + resistor network so the integrator's gain drops near
-* the rails), which is a real circuit redesign. Without that, the
-* practical solution is to specify a JFET whose V_p range fits the
-* clamp: MMBFJ113 (Diodes Inc.) datasheet V_p = -0.5 to -3 V is a
-* better match than 2N5457 (-0.5 to -6 V).
-*
-* See diag_clamp_activity.py and sweep_jfet_vp.py for the data this
-* analysis is based on.
-V_clamp_hi v_clamp_hi 0  2.5
+* R_aw_out = 10 ohm sizes for the loads on v_int_out (R_inv1 = 100k draws
+* ~11 uA at OP; the diff amp's R_diff1 draws another ~5 uA): the load drop
+* across R_aw_out is ~0.16 mV at OP, which through the back-calc resistor
+* would give a ~5 nA bias current at the integrator input -- equivalent to
+* ~0.5 K of steady-state T error. Smaller would lower SS error further but
+* makes the saturation diode current larger; at R_aw_out = 10 ohm the worst-
+* case saturation current is (9 - 3.2)/10 = 580 mA (when v_int_raw rails),
+* which is inside the BAS70 / 1N5819 Schottky's 1 A continuous rating.
+* (1N4148 has 300 mA continuous / 4 A pulse, so it survives the ~500 ms
+* cold-start transient but would not be the right BOM choice.)
+* Clamp widened from +2.5 V to +6.0 V to give the loop room for the
+* JMMBFJ112's V_p range (-1 to -5 V). With the +6 V upper clamp, V_ctl
+* can swing to -6 V, comfortably accommodating worst-case V_p = -5 parts
+* without engaging the clamp at OP. Cold-start kick still hits the clamp
+* (which is the intended anti-windup behaviour during slew). The +/-9 V
+* op-amp supplies easily accommodate +6 V on V_int_out.
+V_clamp_hi v_clamp_hi 0  6.0
 V_clamp_lo v_clamp_lo 0  0.3
+R_aw_out   v_int_raw  v_int_out  10
 D_aw_hi    v_int_out  v_clamp_hi Dclamp
 D_aw_lo    v_clamp_lo v_int_out  Dclamp
 .model Dclamp D(Is=2.52n Rs=0.568 N=1.752 Cjo=4p M=0.4 tt=20n)
+
+* Difference op-amp: e_sat = v_int_raw - v_int_out (the "saturation error").
+* Zero when v_int_out follows v_int_raw (no clamp current), positive when
+* upper clamp diode conducts (v_int_raw > v_int_out), negative when lower
+* clamp diode conducts. Standard 4-resistor difference topology, unity
+* gain. Sign convention: v_int_raw is on the +IN side, v_int_out on the -IN
+* side so e_sat = v_int_raw - v_int_out (so R_bc opposes integrator
+* wind-up, not reinforces it).
+R_diff1 v_int_out n_aw_diff_minus 100k
+R_diff2 v_int_raw n_aw_diff_plus  100k
+R_diff3 n_aw_diff_minus e_sat     100k
+R_diff4 n_aw_diff_plus  0         100k
+* Chopper-stabilized op-amp (Vos ~ 5 uV vs 2.5 mV for standard) for the
+* back-calc diff amp. Tight Vos is essential here: e_sat's DC value is
+* multiplied by 1/R_bc to become an integrator bias current, which the
+* closed loop has to compensate with a corresponding steady-state demod
+* error. With R_bc=R_INT (set below), the bias from a 2.5 mV Vos creates
+* a ~33 K T error; chopper-class Vos cuts that to <0.1 K.
+XU_aw_diff n_aw_diff_plus n_aw_diff_minus vcc vee e_sat {opamp_aw}
+
+* Back-calc resistor: routes e_sat to n_int_minus (integrator's summing
+* junction). When v_int_raw > clamp_hi, e_sat > 0 -> injects positive current
+* into n_int_minus, which the integrator counter-integrates -> v_int_raw is
+* pulled back toward v_int_out at rate ~1/(R_bc * C_INT). Symmetric on the
+* low side.
+*
+* Sizing: R_bc = R_INT sets the back-calc tracking time constant to
+* R_INT*C_INT = ~9.5 ms, much faster than the thermal pole (100 ms) so
+* anti-windup acts well within the regulator's response window. The DC
+* leakage (chopper-class Vos -> e_sat offset -> bias current at
+* n_int_minus) is negligible: 5 uV * 1 = 5 uV demand error, < 0.1 K.
+R_bc e_sat n_int_minus {r_int:.6g}
 
 * Inverter + JFET-gate bootstrap: V_ctl is the op-amp output that drives
 * the JFET gate directly. At DC, n_inv_plus is held to 0 by R_btp, so
@@ -1001,12 +1062,12 @@ XU_inv n_inv_plus  n_inv_minus vcc vee v_ctl {opamp}
 * ngspice keeps every external + internal subcircuit node in RAM for the
 * full transient. With manufacturer MOSFET subcircuits (DMP3098L/DMN3404L)
 * this exhausts host memory at ~1.5 s of sim time.
-.save v({v_osc_drive}) v({v_ap_drive}) v(node_A) v(node_B) v(n_diff) v(n_demout) v(v_ctl) v(v_int_out) v(T_node) v(r_fil)
+.save v({v_osc_drive}) v({v_ap_drive}) v(node_A) v(node_B) v(n_diff) v(n_demout) v(v_ctl) v(v_int_out) v(T_node) v(r_fil) v(v_int_raw) v(e_sat)
 .tran 10u {T_END} UIC
 
 .control
 run
-wrdata {data_path.as_posix()} v({v_osc_drive}) v({v_ap_drive}) v(node_A) v(node_B) v(n_diff) v(n_demout) v(v_ctl) v(v_int_out) v(T_node) v(r_fil)
+wrdata {data_path.as_posix()} v({v_osc_drive}) v({v_ap_drive}) v(node_A) v(node_B) v(n_diff) v(n_demout) v(v_ctl) v(v_int_out) v(T_node) v(r_fil) v(v_int_raw) v(e_sat)
 .endcontrol
 
 .end
