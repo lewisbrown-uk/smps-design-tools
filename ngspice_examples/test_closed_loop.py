@@ -82,7 +82,7 @@ TUBES = {
     # IV-3 unified onto the booster+mos_buf topology used by IV-6 / ILC1-1/8.
     # K_buf = 2.6 (buf_fb1 = 1.6k) sizes the buffer for V_d_pk = 1.555 V_pk
     # at OP with x_OP ~ 0.7 (just below peak sensitivity).
-    "iv3":     _make_tube("IV-3",     R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100,  r_int_scale=0.3, booster=True, buf_fb1=1.6e3, buf_fb_ap=1.6e3, v_buf=1.4, ce_buf=True, mos_buf=True),
+    "iv3":     _make_tube("IV-3",     R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100,  r_int_scale=0.5, booster=True, buf_fb1=1.6e3, buf_fb_ap=1.6e3, v_buf=1.4, ce_buf=True, mos_buf=True),
     # Per-tube buf_fb1 sets buffer gain via R_fb1:R_fb2(=1k):
     #   buf_fb1 = 6.2k -> k_buf = 7.2 (matches k_atten=7.15, unity overall gain)
     #   buf_fb1 = 9.1k -> k_buf = 10.1 (1.41x net gain, for ILC1-1/7)
@@ -143,11 +143,12 @@ TUBES = {
     # any future tube whose load characteristics tip the trade-off the
     # other way -- e.g., a higher-current tube where I^2*R_DS_on advantage
     # of MOSFETs becomes significant.
-    # r_int_scale reset to 0.3 for all tubes pending re-tune for the
-    # J201/220nF combination. Previous per-tube scales (0.7/1.5/0.7) were
-    # tuned against J113 dynamics; J201's higher R_DS_on changes the loop's
-    # small-signal gain so the scales need to be re-derived empirically.
-    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.3, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True),
+    # Per-tube r_int_scale tuned empirically with J112 + 1uF + V_clamp_hi=+6V:
+    #   IV-6 / ILC1-1/8: scale=0.7 -- moderate slowdown to kill the cold-start
+    #     overshoot at V_p typ
+    #   ILC1-1/7: scale=1.5 -- larger slowdown to compensate for the higher
+    #     loop gain through its K_buf=14 buffer
+    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.7, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True),
     # ILC1-1/7 K_buf raised from 10.1 to 14 (buf_fb1: 9.1k -> 13k E24).
     # The old 10.1 put V_d_max = 8.47 V_pk vs V_d_required = 8.485 V_pk --
     # zero headroom, loop pinned at the asymptote of (1-H_ap), couldn't
@@ -156,8 +157,8 @@ TUBES = {
     # = 11.76 V_pk (39% headroom over required), letting the loop operate
     # comfortably below the asymptote with real V_d-vs-x sensitivity.
     # v_buf raised 4.3 -> 6.5 V to cover the larger V_top_pk swing.
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=0.3, booster=True, buf_fb1=13e3, buf_fb_ap=13e3, v_buf=6.5),
-    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.3, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=1.5, booster=True, buf_fb1=13e3, buf_fb_ap=13e3, v_buf=6.5),
+    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.7, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
 # two non-inverting unity-gain op-amp + class-AB BC337/BC327 BJT pair buffers
