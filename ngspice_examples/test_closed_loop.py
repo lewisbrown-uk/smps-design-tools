@@ -317,6 +317,19 @@ def make_netlist(data_path: Path,
     # Per-tube buffer rail, defaults to VCC for backward compatibility.
     v_buf = mc.get("v_buf", VCC)
     def _opamp(key, default=None):
+        # Ilimit=1 (A) is a *model* parameter, not a circuit choice. The
+        # uopamp_lvl2 macromodel implements the current limit with V9/V10
+        # offsets of {Ilimit-545m}; with Ilimit < 545 mA the offsets go
+        # negative and the limit clamp fires at sub-100 mV differentials,
+        # breaking oscillator startup (see CAVEAT note in uopamp.lib).
+        # Real Isc of the parts we'll use (TLV9154 ~65 mA, OPA2188 ~50 mA,
+        # both spec'd typ at 25 C) is comfortably above what this circuit
+        # actually draws -- the heaviest op-amp loads here are:
+        #   XU_osc: 10 k Wien return -> 1.4 mA pk at 14 V_pk-pk
+        #   XU_buf_osc / XU_buf_ap:  ~few mA into the BJT base or MOSFET
+        #     gate damping resistor (gate cap < 1 nF -> sub-mA at 1 kHz)
+        #   all others: kohm-Mohm loads -> sub-mA
+        # So the real circuit will never exercise the part's current limit.
         v = mc.get(key, default if default is not None else vos_v)
         return (f"uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 "
                 f"Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos={v:.6e}")
