@@ -35,7 +35,7 @@ Rtop1 fb    b1    120000
 Rbot1 b1    v_osc 120000
 Rtop2 v_osc b2    120000
 Rbot2 b2    fb    120000
-XU_osc np nn vcc vee v_osc uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+XU_osc np nn vcc vee v_osc uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=65m Vrail=100m Vmax=40 Vos=2.500000e-03
 
 * === JFET-controlled all-pass: V_ap = V_osc * (1 - jwR_DS C)/(1 + jwR_DS C) ===
 * All-pass input is taken from v_drv_atten: when a buffer chain is in use,
@@ -45,16 +45,38 @@ XU_osc np nn vcc vee v_osc uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq
 * model's drain/source swap when V_DS reverses polarity.
 R_ap1 v_drv_atten n_ap_minus 1590
 R_ap2 v_ap  n_ap_minus 1590
-* JFET R_DS in series from V_drv_atten (or V_osc) to V+ (cap-shunted node).
-* The gate is driven directly by the inverter op-amp's output (v_ctl), so
-* gate-channel forward-conduction current during overshoots is sunk by
-* the inverter's output stage with no DC offset on V_GS. The bootstrap AC
-* signal is summed into the inverter's non-inverting input -- see the
-* inverter section below.
-J_var v_drv_atten v_ctl n_ap_plus JMMBFJ112
+* PMOS variable resistor: two DMP3098L back-to-back with sources tied at
+* n_var_mid (the canonical bidirectional FET-switch topology). The all-pass
+* has V_DS swinging both polarities at the corner frequency; a single PMOS
+* would forward-conduct its body diode on the negative-V_DS half-cycle and
+* inject 2nd-harmonic distortion that the demodulator captures as a DC
+* bridge offset. Back-to-back makes each FET handle its dominant V_DS
+* polarity (channel) while its own body diode is reverse-biased.
+*
+* Replaces JMMBFJ112 (V_p binned -1 to -5 V, 4 V tolerance window driving
+* per-tube r_int_scale tuning, wide V_clamp_hi requirement, and the
+* gate-source-forward-conduction wrong-polarity-basin trap). DMP3098L's
+* V_GS(th) = -0.4 to -1.0 V (0.6 V window) lets V_clamp_hi stay tight,
+* and the insulated gate eliminates the basin trap entirely.
+*
+* Same DMP3098L as the bridge driver output stage -- no new BOM line item,
+* just two more SOT-23 PMOS per circuit (+$1.20).
+*
+* Total R between v_drv_atten and n_ap_plus = 2 * R_DS_per_FET. For an
+* all-pass corner near 1 kHz with C_AP = 1 uF, each FET should sit at
+* R_DS ~ 100 ohm in triode (V_GS just past V_th).
+XM_var1 v_drv_atten v_ctl n_var_mid DMP3098L
+XM_var2 n_ap_plus    v_ctl n_var_mid DMP3098L
+* n_var_mid sees only the two PMOS sources internally; without an external
+* DC reference path ngspice can't resolve the node, and in the real circuit
+* body-diode leakage mismatch could bias the midpoint asymmetrically (which
+* would defeat the back-to-back bidirectional R). 1 Meg to GND gives DC
+* reference at negligible signal-path impact (channel R is ~100 ohm, so
+* 10000:1 impedance ratio); lower than 10 Meg makes it less noise-prone
+* and less leakage-sensitive in low-voltage circuits.
+R_var_mid_bias n_var_mid 0 1Meg
 C_ap n_ap_plus 0 1.000000e-06    IC=0
-XU_ap n_ap_plus n_ap_minus vcc vee v_ap uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-.model JMMBFJ112 NJF(Vto=-3.0000 Beta=3.3000e-03 Lambda=0)
+XU_ap n_ap_plus n_ap_minus vcc vee v_ap uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=65m Vrail=100m Vmax=40 Vos=2.500000e-03
 
 * === Tube filament thermal-electrical macromodel ===
 * The filament behaves as a non-linear resistor R(T) = R_amb*(T/T_amb)^fil_exp
@@ -92,11 +114,18 @@ R_top_ref v_osc_drive node_B 1000
 R_bot_ref node_B v_ap_drive  100
 
 * === Difference amp (1-op-amp subtractor, gain 1) ===
-R_a1 node_A n_diff_minus 1e+06
-R_a2 n_diff_minus n_diff 1e+06
-R_b1 node_B n_diff_plus 1e+06
-R_b2 n_diff_plus 0 1e+06
-XU_diff n_diff_plus n_diff_minus vcc vee n_diff uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+* PMOS variable-R inverts the V_ctl-to-drive transfer function vs the JFET
+* it replaces (JFET: more negative V_ctl -> more pinched -> more drive;
+* PMOS: more negative V_ctl -> more conducting -> less drive). The cheapest
+* polarity fix is to swap the diff-amp inputs so n_diff = node_A - node_B
+* instead of node_B - node_A. Everything downstream (demod, integrator,
+* inverter) keeps its sign convention and the closed loop polarity is now
+* correct for PMOS.
+R_a1 node_A n_diff_plus  1e+06
+R_a2 n_diff_plus  0      1e+06
+R_b1 node_B n_diff_minus 1e+06
+R_b2 n_diff_minus n_diff 1e+06
+XU_diff n_diff_plus n_diff_minus vcc vee n_diff uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=65m Vrail=100m Vmax=40 Vos=2.500000e-03
 
 * === Comparator (behavioural sign of V_osc) ===
 * Comparator: open-loop op-amp (one channel of the second TLV9154 quad).
@@ -106,7 +135,7 @@ XU_diff n_diff_plus n_diff_minus vcc vee n_diff uopamp_lvl2 Avol=10meg GBW=4.5me
 * Without the booster (IV-3), Buffer 2 doesn't exist and Buffer-1's
 * non-inverting output preserves the old polarity, so the comparator
 * must stay unswapped.
-XU_cmp 0 v_osc vcc vee n_cmp uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+XU_cmp 0 v_osc vcc vee n_cmp uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=65m Vrail=100m Vmax=40 Vos=2.500000e-03
 
 * === Polarity-switching demodulator ===
 .model swMod SW(VT=0 VH=0.1 RON=10 ROFF=1G)
@@ -115,7 +144,7 @@ S2 0      vplus 0     n_cmp swMod
 R_bias vplus 0 1Meg
 R_din n_diff n_dem_minus 10k
 R_dfb n_demout n_dem_minus 10k
-XU_dem vplus n_dem_minus vcc vee n_demout uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=5.000000e-06
+XU_dem vplus n_dem_minus vcc vee n_demout uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=50m Vrail=100m Vmax=40 Vos=5.000000e-06
 
 * === Integrator -> V_ctl (loop amp) ===
 * V_ctl_raw = -1/(R*C) * integral(V_demout). Cold filament: V_demout < 0,
@@ -145,7 +174,17 @@ C_hf     n_int_pidp v_int_raw 1.000000e-08     IC=0
 * (R_bc + diff amp) feeds the saturation error e_sat = v_int_raw - v_int_out
 * back into n_int_minus, unwinding the integrator only when v_int_raw is
 * actually past the clamp -- zero effect when in range.
-XU_int 0 n_int_minus vcc vee v_int_raw uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=5.000000e-06
+* SINGLE-SUPPLY for the integrator. VEE pin tied to GND so v_int_raw is
+* physically bounded to [+0.1, +VCC-Vrail] V. This prevents v_int_out from
+* ever going negative -- which would make V_ctl positive, forward-bias the
+* JFET gate-source junction, and lock the loop in a wrong-polarity basin
+* (see sweep_v_clamp_hi.py results 2026-05-18). With v_int_out >= 0, V_ctl
+* <= 0 always, JFET always in pinch-off, no bistability.
+* Real-circuit note: OPA2188 supports single-supply operation down to 4 V.
+* The chopper dual would need to be split into two singles (or share VEE=GND
+* across both halves) since the demod op-amp on the same dual also benefits
+* from bipolar input range. BOM implications evaluated separately.
+XU_int 0 n_int_minus vcc vee v_int_raw uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=50m Vrail=100m Vmax=40 Vos=5.000000e-06
 
 * === Passive saturator + back-calculation anti-windup ===
 * The integrator op-amp output v_int_raw drives v_int_out through a series
@@ -169,12 +208,33 @@ XU_int 0 n_int_minus vcc vee v_int_raw uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100
 * without engaging the clamp at OP. Cold-start kick still hits the clamp
 * (which is the intended anti-windup behaviour during slew). The +/-9 V
 * op-amp supplies easily accommodate +6 V on V_int_out.
-V_clamp_hi v_clamp_hi 0  6.0
+V_clamp_hi v_clamp_hi 0  6
 V_clamp_lo v_clamp_lo 0  0.3
 R_aw_out   v_int_raw  v_int_out  10
 D_aw_hi    v_int_out  v_clamp_hi Dclamp
 D_aw_lo    v_clamp_lo v_int_out  Dclamp
-.model Dclamp D(Is=2.52n Rs=0.568 N=1.752 Cjo=4p M=0.4 tt=20n)
+* D_aw_lo + V_clamp_lo removed 2026-05-18: with XU_int on a single supply
+* (VEE = GND), v_int_raw is bounded at +0.1 V by the op-amp's own negative
+* rail, which is a tighter and cleaner low clamp than any diode-based one
+* could be (no V_F shift, exactly the rail). The diode clamp was pinning
+* v_int_out at V_clamp_lo - V_F ≈ +0.27 V even when the natural OP wanted
+* to be lower, forcing the loop to overdrive the filament. With the diode
+* removed, v_int_out is free to float between 0 V (single-supply op-amp
+* floor) and V_clamp_hi.
+* Dclamp: switched 2026-05 from 1N4148-class to Schottky (BAT54 / 1N5819).
+* Reason: at the worst-case clamp current (op-amp Isc ~50 mA chopper),
+* the 1N4148's V_F was ~0.76 V; that meant the effective V_int_out floor
+* sat at V_clamp_lo - 0.76 = -0.46 V even with V_clamp_lo = +0.3 V. V_ctl
+* (via inverter, +1*V_int_out) crossed the JFET gate-source forward
+* threshold (~0.6 V) on AC peaks, latching the loop in a "wrong-polarity"
+* steady state where the JFET gate diode forward-conducts. With Schottky
+* V_F ~0.3 V at 50 mA, the effective floor is V_clamp_lo - 0.3 ≈ 0 V,
+* so V_ctl stays comfortably below the gate-conduction threshold. The
+* lvl3 op-amp current verification (verify_opamp_currents.py) exposed
+* the bistability when Ilimit was tightened from 1 A to 50/65 mA.
+* Schottky (BAT54 / 1N5819 class). Higher SOA than 1N4148 for the
+* worst-case clamp engagement current (~ Ilimit at full op-amp saturation).
+.model Dclamp D(Is=10n N=1.0 RS=0.1 BV=40 IBV=0.1m CJO=10p)
 
 * Difference op-amp: e_sat = v_int_raw - v_int_out (the "saturation error").
 * Zero when v_int_out follows v_int_raw (no clamp current), positive when
@@ -193,7 +253,7 @@ R_diff4 n_aw_diff_plus  0         100k
 * closed loop has to compensate with a corresponding steady-state demod
 * error. With R_bc=R_INT (set below), the bias from a 2.5 mV Vos creates
 * a ~33 K T error; chopper-class Vos cuts that to <0.1 K.
-XU_aw_diff n_aw_diff_plus n_aw_diff_minus vcc vee e_sat uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=5.000000e-06
+XU_aw_diff n_aw_diff_plus n_aw_diff_minus vcc vee e_sat uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=50m Vrail=100m Vmax=40 Vos=5.000000e-06
 
 * Back-calc resistor: routes e_sat to n_int_minus (integrator's summing
 * junction). When v_int_raw > clamp_hi, e_sat > 0 -> injects positive current
@@ -227,7 +287,7 @@ C_btd  n_btd_mid   n_inv_plus  10u IC=0
 R_bts  n_ap_plus   n_bts_mid   100k
 C_bts  n_bts_mid   n_inv_plus  10u IC=0
 R_btp  n_inv_plus  0           18k
-XU_inv n_inv_plus  n_inv_minus vcc vee v_ctl uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+XU_inv n_inv_plus  n_inv_minus vcc vee v_ctl uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=65m Vrail=100m Vmax=40 Vos=2.500000e-03
 
 
 * Buffer 0: passive attenuator on V_osc, then op-amp follower to feed JFET
@@ -236,7 +296,7 @@ XU_inv n_inv_plus  n_inv_minus vcc vee v_ctl uopamp_lvl2 Avol=10meg GBW=4.5meg R
 * keeping V_DS in the JFET's linear region.
 R_atten_top  v_osc          v_atten_input 56k
 R_atten_bot  v_atten_input  0             9.1k
-XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=65m Vrail=100m Vmax=40 Vos=2.500000e-03
 
 * Buffer 1 (CE complementary push-pull): v_drv_atten -> v_osc_drive
 * Op-amp + and - inputs SWAPPED relative to standard inverting amp because
@@ -244,7 +304,7 @@ XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten uopamp_lvl2 Avol=1
 * (signals into V-), the loop would have positive feedback and latch up.
 * With signals into V+, the BJT inversion provides the second sign flip
 * needed for negative feedback overall.
-XU_buf_osc n_buf_osc_sum 0 vcc vee n_buf_osc_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+XU_buf_osc n_buf_osc_sum 0 vcc vee n_buf_osc_out uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=65m Vrail=100m Vmax=40 Vos=2.500000e-03
 R_buf1_in   v_drv_atten n_buf_osc_sum 1k
 R_buf1_fb   v_osc_drive n_buf_osc_sum 1600
 R_obb_top   vcc_buf       q_o_bp_top    200
@@ -269,7 +329,7 @@ C_buf2_dcblock v_ap         n_buf2_ac    10u IC=0
 R_buf2_dcref   n_buf2_ac    0            100k
 * Inverting amp summing junction takes both v_drv_atten (via cap-coupled v_ap)
 * and v_ap_drive feedback. R_buf2_in is from n_buf2_ac (AC-coupled v_ap).
-XU_buf_ap   n_buf_ap_sum 0 vcc vee n_buf_ap_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+XU_buf_ap   n_buf_ap_sum 0 vcc vee n_buf_ap_out uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=65m Vrail=100m Vmax=40 Vos=2.500000e-03
 R_buf2_in   n_buf2_ac   n_buf_ap_sum  1k
 R_buf2_fb   v_ap_drive  n_buf_ap_sum  1600
 R_abb_top   vcc_buf       q_a_bp_top    200

@@ -23,8 +23,14 @@
 * Ilimit >= 545 mA. With Ilimit below that the V9/V10 sources go
 * negative, and the current-limit clamp fires at sub-100 mV differentials
 * between the gain node and the output -- which strangles oscillator
-* startup. Workaround: pick Ilimit >= 545 mA when modelling small-signal
-* op-amps where the actual current limit isn't being exercised.
+* startup. Additionally, lvl2's offset formula does not include the Rout
+* factor: the effective output current limit in lvl2 is Ilimit/Rout, not
+* Ilimit (matches the docstring for the default Rout=1, but for Rout=10
+* the clamp is 10x too tight).
+*
+* Both bugs are fixed in uopamp_lvl3 at the bottom of this file. Prefer
+* lvl3 for any work where the current limit is exercised. lvl2 is
+* preserved verbatim for back-compat with older test rigs.
 *****************************************
 
 
@@ -113,6 +119,90 @@ I1 VCC VEE {Iq}
 .param Vmax = 50
 .model diode D(Is=1e-14)
 .model zener D(Is=1e-14 BV={Vmax})
+.param pi=3.1415926535898
+.ends
+*****************************************
+
+
+
+*****************************************
+.subckt uopamp_lvl3 +IN -IN VCC VEE OUT
+* Universal Opamp Level 3
+* Drop-in replacement for uopamp_lvl2 with a corrected current-limit
+* mechanism. The lvl2 model uses V9/V10 offsets of {Ilimit-545m} that
+* cancel the standard diode V_F at the operating point of the current-
+* limit diodes; for Ilimit < 545 mA the offsets go negative and the limit
+* fires at sub-100 mV (see CAVEAT note above lvl2).
+*
+* lvl3 keeps every other lvl2 element verbatim -- same input stage, gain
+* stage, rail-saturation network (G3/G4/G5/G6/R4/R5/D3/D4/D5/D6) -- so the
+* solver behaviour is identical to lvl2 in all regimes except current limit.
+*
+* The fix: drop the V9/V10 offset to a 30 mV compensation, and use a
+* dedicated "clip" diode model with Is sized so V_F == 30 mV at the
+* operating current (~ 1 uA). Now the model works for any Ilimit > 30 mA,
+* covering the realistic Isc of every op-amp we will use in this design
+* (TLV9154 ~65 mA typ, OPA2188 ~50 mA typ).
+*
+* No solver stiffness is introduced -- the clip diodes are the same kind
+* of soft-knee element lvl2 already uses for rail clipping. Newton-
+* Raphson convergence is the same as lvl2.
+*
+* PINOUT ORDER  1   2   3   4   5
+* PINOUT ORDER +IN -IN VCC VEE OUT
+
+G1 VCC N001 N002 -IN 1u
+G2 VEE N001 N002 -IN 1u
+R1 VCC N001 {Avol/1u}
+R2 N001 VEE {Avol/1u}
+G3 OUT VCC VCC N001 {1/(2*Rout)}
+G4 VEE OUT N001 VEE {1/(2*Rout)}
+R4 VCC OUT {2*Rout}
+R5 OUT VEE {2*Rout}
+C1 VCC N001 {1u/(2*pi*GBW)}
+C2 N001 VEE {1u/(2*pi*GBW)}
+G6 N005 VEE N001 OUT {1/(2*Rout)}
+G5 N006 VEE OUT N001 {1/(2*Rout)}
+R8 -IN +IN {Rin}
+V6 VCC N003 {Vrail+545m}
+V7 N008 VEE {Vrail+545m}
+V8 N002 +IN {Vos}
+
+* CHANGED FROM LVL2: drop the V_F compensation from 545m to 30m
+* so the offsets stay positive for any Ilimit > 30 mA. The 30 mV value
+* matches the V_F of the iclip diode below at ~1 uA.
+V9 OUT N007 {Ilimit*Rout-5m}
+V10 N004 OUT {Ilimit*Rout-5m}
+
+D1 N001 N003 diode
+D2 N008 N001 diode
+D3 VCC N005 diode
+D4 VCC N006 diode
+D5 VEE N005 zener
+D6 VEE N006 zener
+* CHANGED FROM LVL2 #2: scale offset by Rout. lvl2 used {Ilimit-545m}
+* assuming Rout=1; for any other Rout the effective clamp current is
+* Ilimit/Rout instead of Ilimit. Now uses {Ilimit*Rout - 5m}, where 5m
+* matches the iclip V_F at the typical clamp current (~ 1 uA).
+D7 N001 N004 iclip
+D8 N007 N001 iclip
+I1 VCC VEE {Iq}
+.param Avol = 100k
+.param GBW = 100meg
+.param Rin = 100g
+.param Rout = 1
+.param Iq = 1m
+.param Ilimit = 50m
+.param Vrail = 0
+.param Vos = 0
+.param Vmax = 50
+.model diode D(Is=1e-14)
+.model zener D(Is=1e-14 BV={Vmax})
+* iclip: tuned so V_F = ~5 mV at ~1 uA (the current that flows when
+* the V9/V10/diode clamp engages). At I=1 uA, Is=1u gives V_F = 0;
+* at I=10 uA, V_F = Vt*ln(10) = 60 mV. Operating point sits around the
+* 5 mV anchor.
+.model iclip D(Is=1u)
 .param pi=3.1415926535898
 .ends
 *****************************************

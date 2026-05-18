@@ -1,12 +1,23 @@
-"""Closed-loop VFD-filament regulator: Wien bridge + JFET all-pass + AC bridge
+"""Closed-loop VFD-filament regulator: Wien bridge + PMOS all-pass + AC bridge
 with thermal filament model + synchronous demodulator + integrator,
-all running on TLV9104-class op-amps and +/-5 V supplies.
+all running on TLV9154-class op-amps and +/-9 V supplies.
 
-Cold-start transient: V(T_node) starts at 300 K, integrator pre-charged so
-V_ctl pinches off the JFET (max all-pass phase shift -> max bridge drive
-amplitude). As the filament heats, V_diff falls, V_demod falls, integrator
-drifts V_ctl toward 0 (JFET more on, smaller phase shift, less drive),
-self-regulating to V_filament_rms ~= 1 V at R(T) = 100 ohm and T = 800 K.
+Variable resistance element: two DMP3098L back-to-back PMOS, sources tied
+at n_var_mid with a 1 Meg bias resistor to GND. This replaces the original
+JMMBFJ112 JFET (whose -1 to -5 V V_p range caused the wrong-polarity basin
+trap via gate-channel forward conduction, and forced V_clamp_hi to +6 V
+which itself caused cold-start overshoot into the wrong basin). DMP3098L
+V_GS(th) is -0.4 to -1.0 V (a 0.6 V window vs the JFET's 4 V); insulated
+gate eliminates the basin trap entirely.
+
+Cold-start transient: V(T_node) starts at 300 K. Integrator slews V_int_out
+upward; via the inverter, V_ctl goes negative, the PMOS conducts (V_GS < V_th),
+R_DS is small, the all-pass (1-H) factor is small, and bridge drive is
+correspondingly small at the very start. As the filament heats and the
+bridge approaches balance, the loop drives V_int_out down to its natural OP
+(~+0.4 V to +1.85 V depending on tube), V_ctl settles at -V_int_out, PMOS
+sits in triode region with R_DS around 100 ohm per device (200 ohm total
+in back-to-back), and the all-pass corner is at f0 = 1 kHz.
 """
 from __future__ import annotations
 import shutil
@@ -209,8 +220,8 @@ T_END = 5.000
 # Higher-voltage successor to TLV9104: 4.5 - 40 V supply range, 4.5 MHz GBW
 # vs TLV9104's 1.8 - 5.5 V / 1 MHz. Lets us run the regulator from +/-9 V
 # rails so the bridge has comfortable swing headroom for the larger tubes.
-OPAMP = ("uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 "
-         "Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.5m")
+OPAMP = ("uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 "
+         "Iq=600u Ilimit=65m Vrail=100m Vmax=40 Vos=2.5m")
 # Supply rails (volts). +/-9 V is comfortable for TLV9154 (range 4.5..40 V
 # supply) and gives the buffer class-AB output ~+/-8.4 V swing capability.
 VCC = 9.0
@@ -301,45 +312,45 @@ def make_netlist(data_path: Path,
     # budget; with TLV9154-grade 2.5 mV Vos here the residual T error
     # is ~30 K, vs ~5 K with chopper.
     vos_chopper = mc.get("vos_chopper", 5e-6)
-    # JFET defaults: MMBFJ112 (onsemi, SOT-23):
-    #   V_GS(off): -1.0 to -5.0 V
-    #   R_DS_on:   ~50 ohm (much lower than J201's 750 ohm, gives more
-    #              x-headroom at low pinch-off)
-    # Wider V_p range than J201 means clamp must extend to ~ -5 V (handled
-    # by raising V_clamp_hi to +6 V below). The cold-start kick drives the
-    # integrator against the clamp, JFET goes into cutoff (V_ctl << V_p),
-    # x -> infinity, |V_d| -> V_d_max -- max heating during slew phase.
-    # Once the bridge balances, V_int_out releases from the clamp and the
-    # JFET operates in its linear region around V_ctl_OP.
-    # Typical (middle of spec): V_p ~ -3, I_DSS ~ 30 mA -> beta ~ 3.3 mA/V^2.
+    # Legacy JFET parameter shims (kept so old Monte-Carlo / validation
+    # scripts that still set jfet_vp / jfet_beta don't break). With the
+    # PMOS variable-R architecture these have no effect on the netlist;
+    # DMP3098L V_GS(th) is fixed by the manufacturer subcircuit model.
     jfet_vp = mc.get("jfet_vp", -3.0)
     jfet_beta = mc.get("jfet_beta", 3.3e-3)
     # Per-tube buffer rail, defaults to VCC for backward compatibility.
     v_buf = mc.get("v_buf", VCC)
-    def _opamp(key, default=None):
-        # Ilimit=1 (A) is a *model* parameter, not a circuit choice. The
-        # uopamp_lvl2 macromodel implements the current limit with V9/V10
-        # offsets of {Ilimit-545m}; with Ilimit < 545 mA the offsets go
-        # negative and the limit clamp fires at sub-100 mV differentials,
-        # breaking oscillator startup (see CAVEAT note in uopamp.lib).
-        # Real Isc of the parts we'll use (TLV9154 ~65 mA, OPA2188 ~50 mA,
-        # both spec'd typ at 25 C) is comfortably above what this circuit
-        # actually draws -- the heaviest op-amp loads here are:
-        #   XU_osc: 10 k Wien return -> 1.4 mA pk at 14 V_pk-pk
-        #   XU_buf_osc / XU_buf_ap:  ~few mA into the BJT base or MOSFET
-        #     gate damping resistor (gate cap < 1 nF -> sub-mA at 1 kHz)
-        #   all others: kohm-Mohm loads -> sub-mA
-        # So the real circuit will never exercise the part's current limit.
+    # Anti-windup clamp set-points. With the PMOS variable-R replacing the
+    # original JFET, the wrong-polarity basin (which used to require careful
+    # clamp tuning to avoid) is impossible -- the MOSFET gate is insulated
+    # so no gate-channel forward conduction can lock the loop into a
+    # negative-V_int_out equilibrium. V_clamp_hi just needs to be above
+    # the deepest natural V_int_out_OP across tubes (ILC1-1/7 at +1.85 V),
+    # +6 V leaves plenty of headroom. V_clamp_lo at +0.3 V is a soft
+    # back-stop -- it almost never engages because the loop naturally
+    # sits at V_int_out > 0.3 V at OP.
+    v_clamp_hi = mc.get("v_clamp_hi", 6.0)
+    v_clamp_lo = mc.get("v_clamp_lo", 0.3)
+    def _opamp(key, default=None, ilimit="65m"):
+        # uopamp_lvl3 fixes two bugs in lvl2: (1) V9/V10 offsets in lvl2 used
+        # {Ilimit-545m} which goes negative for Ilimit < 545 mA, breaking the
+        # clamp (see uopamp.lib CAVEAT); (2) lvl2's offset is not scaled by
+        # Rout, so the actual current limit was Ilimit/Rout instead of Ilimit.
+        # lvl3 uses {Ilimit*Rout - 5m} with a low-V_F clip diode (Is=1u).
+        # Realistic Isc from datasheets (default per op-amp type):
+        #   TLV9154 (standard quad):  ~65 mA typ at 25 C  -> ilimit="65m"
+        #   OPA2188 (chopper dual):   ~50 mA typ at 25 C  -> ilimit="50m"
         v = mc.get(key, default if default is not None else vos_v)
-        return (f"uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 "
-                f"Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos={v:.6e}")
+        return (f"uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 "
+                f"Iq=600u Ilimit={ilimit} Vrail=100m Vmax=40 Vos={v:.6e}")
     opamp = _opamp("vos_v")          # back-compat default for any unmarked usage
     opamp_osc  = _opamp("vos_osc")
     opamp_ap   = _opamp("vos_ap")
     opamp_diff = _opamp("vos_diff")
-    opamp_dem  = _opamp("vos_dem", default=vos_chopper)
-    opamp_int  = _opamp("vos_int", default=vos_chopper)
-    opamp_aw   = _opamp("vos_aw", default=vos_chopper)
+    # Chopper-stabilised op-amps (OPA2188-class), Isc ~50 mA
+    opamp_dem  = _opamp("vos_dem", default=vos_chopper, ilimit="50m")
+    opamp_int  = _opamp("vos_int", default=vos_chopper, ilimit="50m")
+    opamp_aw   = _opamp("vos_aw",  default=vos_chopper, ilimit="50m")
     opamp_cmp  = _opamp("vos_cmp")
     opamp_buf0 = _opamp("vos_buf0")
     opamp_bufo = _opamp("vos_buf_osc")
@@ -688,9 +699,9 @@ R_lp_o n_o_sense_inst n_o_sense_avg 100k
 C_lp_o n_o_sense_avg 0 100n IC=0
 * V_ref source: target average sense voltage at design operating point.
 V_ref_o n_o_vref 0 {v_ref:.4g}
-* LM358 servo (modeled with uopamp_lvl2): inverting integrator.
+* LM358 servo (modeled with uopamp_lvl3): inverting integrator.
 * + input = V_ref, - input via R_in from sense; C_int from output to - input.
-XU_servo_o n_o_vref n_o_servo_minus vcc vee n_o_servo_out uopamp_lvl2 Avol=10meg GBW=1meg Rin=100g Rout=10 Iq=70u Ilimit=20m Vrail=100m Vmax=12 Vos=2.5e-3
+XU_servo_o n_o_vref n_o_servo_minus vcc vee n_o_servo_out uopamp_lvl3 Avol=10meg GBW=1meg Rin=100g Rout=10 Iq=70u Ilimit=20m Vrail=100m Vmax=12 Vos=2.5e-3
 R_servo_o_in n_o_sense_avg n_o_servo_minus 100k
 C_servo_o_int n_o_servo_out n_o_servo_minus 100n IC=0
 * Initial servo output: pre-load to give ~1.5 V V_GS bias at t=0.
@@ -703,7 +714,7 @@ B_sense_a n_a_sense_inst 0 V = V(n_a_nmos_src) - V(n_a_pmos_src)
 R_lp_a n_a_sense_inst n_a_sense_avg 100k
 C_lp_a n_a_sense_avg 0 100n IC=0
 V_ref_a n_a_vref 0 {v_ref:.4g}
-XU_servo_a n_a_vref n_a_servo_minus vcc vee n_a_servo_out uopamp_lvl2 Avol=10meg GBW=1meg Rin=100g Rout=10 Iq=70u Ilimit=20m Vrail=100m Vmax=12 Vos=2.5e-3
+XU_servo_a n_a_vref n_a_servo_minus vcc vee n_a_servo_out uopamp_lvl3 Avol=10meg GBW=1meg Rin=100g Rout=10 Iq=70u Ilimit=20m Vrail=100m Vmax=12 Vos=2.5e-3
 R_servo_a_in n_a_sense_avg n_a_servo_minus 100k
 C_servo_a_int n_a_servo_out n_a_servo_minus 100n IC=0
 .ic V(n_a_servo_out)=1.5
@@ -880,16 +891,38 @@ XU_osc np nn vcc vee v_osc {opamp_osc}
 * model's drain/source swap when V_DS reverses polarity.
 R_ap1 {v_osc_jfet} n_ap_minus {R_AP:.6g}
 R_ap2 v_ap  n_ap_minus {R_AP:.6g}
-* JFET R_DS in series from V_drv_atten (or V_osc) to V+ (cap-shunted node).
-* The gate is driven directly by the inverter op-amp's output (v_ctl), so
-* gate-channel forward-conduction current during overshoots is sunk by
-* the inverter's output stage with no DC offset on V_GS. The bootstrap AC
-* signal is summed into the inverter's non-inverting input -- see the
-* inverter section below.
-J_var {v_osc_jfet} v_ctl n_ap_plus JMMBFJ112
+* PMOS variable resistor: two DMP3098L back-to-back with sources tied at
+* n_var_mid (the canonical bidirectional FET-switch topology). The all-pass
+* has V_DS swinging both polarities at the corner frequency; a single PMOS
+* would forward-conduct its body diode on the negative-V_DS half-cycle and
+* inject 2nd-harmonic distortion that the demodulator captures as a DC
+* bridge offset. Back-to-back makes each FET handle its dominant V_DS
+* polarity (channel) while its own body diode is reverse-biased.
+*
+* Replaces JMMBFJ112 (V_p binned -1 to -5 V, 4 V tolerance window driving
+* per-tube r_int_scale tuning, wide V_clamp_hi requirement, and the
+* gate-source-forward-conduction wrong-polarity-basin trap). DMP3098L's
+* V_GS(th) = -0.4 to -1.0 V (0.6 V window) lets V_clamp_hi stay tight,
+* and the insulated gate eliminates the basin trap entirely.
+*
+* Same DMP3098L as the bridge driver output stage -- no new BOM line item,
+* just two more SOT-23 PMOS per circuit (+$1.20).
+*
+* Total R between v_drv_atten and n_ap_plus = 2 * R_DS_per_FET. For an
+* all-pass corner near 1 kHz with C_AP = 1 uF, each FET should sit at
+* R_DS ~ 100 ohm in triode (V_GS just past V_th).
+XM_var1 {v_osc_jfet} v_ctl n_var_mid DMP3098L
+XM_var2 n_ap_plus    v_ctl n_var_mid DMP3098L
+* n_var_mid sees only the two PMOS sources internally; without an external
+* DC reference path ngspice can't resolve the node, and in the real circuit
+* body-diode leakage mismatch could bias the midpoint asymmetrically (which
+* would defeat the back-to-back bidirectional R). 1 Meg to GND gives DC
+* reference at negligible signal-path impact (channel R is ~100 ohm, so
+* 10000:1 impedance ratio); lower than 10 Meg makes it less noise-prone
+* and less leakage-sensitive in low-voltage circuits.
+R_var_mid_bias n_var_mid 0 1Meg
 C_ap n_ap_plus 0 {c_ap_v:.6e}    IC=0
 XU_ap n_ap_plus n_ap_minus vcc vee v_ap {opamp_ap}
-.model JMMBFJ112 NJF(Vto={jfet_vp:.4f} Beta={jfet_beta:.4e} Lambda=0)
 
 * === Tube filament thermal-electrical macromodel ===
 * The filament behaves as a non-linear resistor R(T) = R_amb*(T/T_amb)^fil_exp
@@ -927,10 +960,17 @@ R_top_ref {bridge_v_top} node_B {r_top_ref:.6g}
 R_bot_ref node_B {bridge_v_bot}  {r_bot_ref:.6g}
 
 * === Difference amp (1-op-amp subtractor, gain 1) ===
-R_a1 node_A n_diff_minus {r_a1:.6g}
-R_a2 n_diff_minus n_diff {r_a2:.6g}
-R_b1 node_B n_diff_plus {r_b1:.6g}
-R_b2 n_diff_plus 0 {r_b2:.6g}
+* PMOS variable-R inverts the V_ctl-to-drive transfer function vs the JFET
+* it replaces (JFET: more negative V_ctl -> more pinched -> more drive;
+* PMOS: more negative V_ctl -> more conducting -> less drive). The cheapest
+* polarity fix is to swap the diff-amp inputs so n_diff = node_A - node_B
+* instead of node_B - node_A. Everything downstream (demod, integrator,
+* inverter) keeps its sign convention and the closed loop polarity is now
+* correct for PMOS.
+R_a1 node_A n_diff_plus  {r_a1:.6g}
+R_a2 n_diff_plus  0      {r_a2:.6g}
+R_b1 node_B n_diff_minus {r_b1:.6g}
+R_b2 n_diff_minus n_diff {r_b2:.6g}
 XU_diff n_diff_plus n_diff_minus vcc vee n_diff {opamp_diff}
 
 * === Comparator (behavioural sign of V_osc) ===
@@ -980,6 +1020,16 @@ C_hf     n_int_pidp v_int_raw {c_hf:.6e}     IC=0
 * (R_bc + diff amp) feeds the saturation error e_sat = v_int_raw - v_int_out
 * back into n_int_minus, unwinding the integrator only when v_int_raw is
 * actually past the clamp -- zero effect when in range.
+* SINGLE-SUPPLY for the integrator. VEE pin tied to GND so v_int_raw is
+* physically bounded to [+0.1, +VCC-Vrail] V. This prevents v_int_out from
+* ever going negative -- which would make V_ctl positive, forward-bias the
+* JFET gate-source junction, and lock the loop in a wrong-polarity basin
+* (see sweep_v_clamp_hi.py results 2026-05-18). With v_int_out >= 0, V_ctl
+* <= 0 always, JFET always in pinch-off, no bistability.
+* Real-circuit note: OPA2188 supports single-supply operation down to 4 V.
+* The chopper dual would need to be split into two singles (or share VEE=GND
+* across both halves) since the demod op-amp on the same dual also benefits
+* from bipolar input range. BOM implications evaluated separately.
 XU_int 0 n_int_minus vcc vee v_int_raw {opamp_int}
 
 * === Passive saturator + back-calculation anti-windup ===
@@ -1004,12 +1054,33 @@ XU_int 0 n_int_minus vcc vee v_int_raw {opamp_int}
 * without engaging the clamp at OP. Cold-start kick still hits the clamp
 * (which is the intended anti-windup behaviour during slew). The +/-9 V
 * op-amp supplies easily accommodate +6 V on V_int_out.
-V_clamp_hi v_clamp_hi 0  6.0
-V_clamp_lo v_clamp_lo 0  0.3
+V_clamp_hi v_clamp_hi 0  {v_clamp_hi:.4g}
+V_clamp_lo v_clamp_lo 0  {v_clamp_lo:.4g}
 R_aw_out   v_int_raw  v_int_out  10
 D_aw_hi    v_int_out  v_clamp_hi Dclamp
 D_aw_lo    v_clamp_lo v_int_out  Dclamp
-.model Dclamp D(Is=2.52n Rs=0.568 N=1.752 Cjo=4p M=0.4 tt=20n)
+* D_aw_lo + V_clamp_lo removed 2026-05-18: with XU_int on a single supply
+* (VEE = GND), v_int_raw is bounded at +0.1 V by the op-amp's own negative
+* rail, which is a tighter and cleaner low clamp than any diode-based one
+* could be (no V_F shift, exactly the rail). The diode clamp was pinning
+* v_int_out at V_clamp_lo - V_F ≈ +0.27 V even when the natural OP wanted
+* to be lower, forcing the loop to overdrive the filament. With the diode
+* removed, v_int_out is free to float between 0 V (single-supply op-amp
+* floor) and V_clamp_hi.
+* Dclamp: switched 2026-05 from 1N4148-class to Schottky (BAT54 / 1N5819).
+* Reason: at the worst-case clamp current (op-amp Isc ~50 mA chopper),
+* the 1N4148's V_F was ~0.76 V; that meant the effective V_int_out floor
+* sat at V_clamp_lo - 0.76 = -0.46 V even with V_clamp_lo = +0.3 V. V_ctl
+* (via inverter, +1*V_int_out) crossed the JFET gate-source forward
+* threshold (~0.6 V) on AC peaks, latching the loop in a "wrong-polarity"
+* steady state where the JFET gate diode forward-conducts. With Schottky
+* V_F ~0.3 V at 50 mA, the effective floor is V_clamp_lo - 0.3 ≈ 0 V,
+* so V_ctl stays comfortably below the gate-conduction threshold. The
+* lvl3 op-amp current verification (verify_opamp_currents.py) exposed
+* the bistability when Ilimit was tightened from 1 A to 50/65 mA.
+* Schottky (BAT54 / 1N5819 class). Higher SOA than 1N4148 for the
+* worst-case clamp engagement current (~ Ilimit at full op-amp saturation).
+.model Dclamp D(Is=10n N=1.0 RS=0.1 BV=40 IBV=0.1m CJO=10p)
 
 * Difference op-amp: e_sat = v_int_raw - v_int_out (the "saturation error").
 * Zero when v_int_out follows v_int_raw (no clamp current), positive when

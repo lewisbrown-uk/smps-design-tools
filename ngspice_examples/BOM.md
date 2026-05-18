@@ -43,7 +43,8 @@ will ramp adequately on its own.
 | **U4** | Sync demod analog switch (`S1`, `S2`)                    | CD74HC4053M96    | Texas Instr.    | SOIC-16 | 296-14532-1-ND     | 595-CD74HC4053M96   | 1   | 0.54     | Triple SPDT, Ron≈100 Ω at ±5 V. Routes vplus = (V_osc>0 ? n_diff : 0) using one of the three channels. VDD=+9 V / VSS=0 / VEE=−9 V split-rail. Logic threshold ref'd VSS..VDD — see U5. (Plain `CD74HC4053M` is obsolete; M96 is the active T&R-packaged successor — same die.) |
 | **U5** | Comparator level shifter for U4 control                  | SN74HC14DR       | TI              | SOIC-14 | 296-1199-5-ND      | 595-SN74HC14DR      | 1   | 0.40     | Hex Schmitt-trigger. V_osc (±3 V) → R + clamp to 0…+9 V → one HC14 stage → CMOS-clean 0/+9 V drive into U4 control pin. `XU_cmp` in the netlist is collapsed onto this part. (Plain `SN74HC14D` is obsolete; DR is the cut-tape successor.) |
 | **Q1, Q2** | Wien BJT amplitude clamp                             | MMBT3904 (or BC847) | Multi (Nexperia, onsemi) | SOT-23 | MMBT3904FSCT-ND | 771-MMBT3904 | 2 | 0.06 | Through-hole: 2N3904 (TO-92). |
-| **J1** | JFET VCR (`J_var`)                                       | MMBFJ112         | onsemi          | SOT-23  | MMBFJ112CT-ND      | 863-MMBFJ112LT1G    | 1   | 0.46     | V_GS(off) −1 to −5 V, R_DS_on ≤50 Ω. Through-hole: J112 (TO-92). |
+| **M_var1, M_var2** | All-pass variable resistor (back-to-back PMOS, `XM_var1`/`XM_var2`) | DMP3098L-7   | Diodes Inc. | SOT-23  | DMP3098L-7DICT-ND | 621-DMP3098L-7    | 2   | 0.61 ea  | Replaces the original JMMBFJ112 JFET. Two PMOS in series, sources tied at `n_var_mid`, gates tied to V_ctl. Insulated gate eliminates the gate-channel-forward-conduction wrong-polarity-basin trap the JFET had. DMP3098L V_GS(th) = −0.4 to −1.0 V (0.6 V window vs J112's 4 V) — drastically tighter operating-point spread. Same part as the bridge driver. |
+| **R_var_mid_bias** | Midpoint DC bias for back-to-back PMOS         | 1 MΩ             | —               | 0805    | (generic)          | (generic)           | 1   | 0.01     | Ties `n_var_mid` (the PMOS source-tie node) to GND so the back-to-back pair is symmetric. 1 MΩ is high enough that the signal path (channel R ~200 Ω total) is unaffected, low enough to overpower stochastic body-diode leakage between the two devices. |
 | **D1–D6** | Anti-windup + buffer bias diodes (`D_aw_hi/lo`, `D_obb_*`, `D_abb_*`) | 1N4148WS | onsemi / Diodes Inc. | SOD-323 | 1N4148WS-FDICT-ND | 621-1N4148WS-F | 6 | 0.10 | Through-hole: 1N4148 (DO-35). |
 | Y1     | None — Wien sets f0=1 kHz via R/C (no crystal)            | —                | —               | —       | —                  | —                   | —   | —        | — |
 
@@ -117,14 +118,15 @@ ILC1-1/7-only feedback divider bottom resistor `R_buf*_fb2` = 1 kΩ (same on oth
 | 1× OPA2188 (U3)                          | 3.36       |
 | 1× CD74HC4053M96 (U4)                    | 0.54       |
 | 1× SN74HC14DR (U5)                       | 0.40       |
-| 1× MMBFJ112 (J1)                         | 0.46       |
+| 2× DMP3098L (M_var1, M_var2 — all-pass)  | 1.22       |
+| 1× 1 MΩ (R_var_mid_bias)                 | 0.01       |
 | 2× MMBT3904 (Q1, Q2)                     | 0.12       |
 | 6× 1N4148WS (D1–D6)                      | 0.60       |
 | Output stage (BJT pair or MOSFET pair)   | 0.80–1.00  |
 | 2× LDO + decoupling                      | 1.20       |
 | Resistors (~50 generic 1 %)              | 1.00       |
 | Capacitors (1× C_ap PP, 1× C_intfb PP, ~10 ceramics) | 1.50 |
-| **Total**                                | **~$14–14.5** |
+| **Total**                                | **~$15–15.8** |
 
 Headroom of ~$4 against the $20/tube target. All parts in stock at
 DigiKey and Mouser as of this writing; no allocation issues, no
