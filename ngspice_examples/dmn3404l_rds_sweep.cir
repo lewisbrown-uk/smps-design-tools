@@ -1,0 +1,14 @@
+* DMN3404L R_DS vs V_GS DC sweep
+* NMOS: source = 0V, drain = +0.1V, V_DS = +0.1V.
+* Sweep V_GS from 0 (off) to +4 V (strong inversion).
+* I_D measured via V_D source.
+.include 'spice_models/DMN3404L.spice.txt'
+V_S  src 0      0
+V_D  drn 0      0.1
+V_G  gat 0      0
+XM1  drn gat src DMN3404L
+.control
+dc V_G 0 4 0.005
+wrdata dmn_rds.data i(V_D)
+.endc
+.end

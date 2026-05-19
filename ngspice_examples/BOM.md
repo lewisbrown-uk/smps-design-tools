@@ -43,8 +43,9 @@ will ramp adequately on its own.
 | **U4** | Sync demod analog switch (`S1`, `S2`)                    | CD74HC4053M96    | Texas Instr.    | SOIC-16 | 296-14532-1-ND     | 595-CD74HC4053M96   | 1   | 0.54     | Triple SPDT, Ron≈100 Ω at ±5 V. Routes vplus = (V_osc>0 ? n_diff : 0) using one of the three channels. VDD=+9 V / VSS=0 / VEE=−9 V split-rail. Logic threshold ref'd VSS..VDD — see U5. (Plain `CD74HC4053M` is obsolete; M96 is the active T&R-packaged successor — same die.) |
 | **U5** | Comparator level shifter for U4 control                  | SN74HC14DR       | TI              | SOIC-14 | 296-1199-5-ND      | 595-SN74HC14DR      | 1   | 0.40     | Hex Schmitt-trigger. V_osc (±3 V) → R + clamp to 0…+9 V → one HC14 stage → CMOS-clean 0/+9 V drive into U4 control pin. `XU_cmp` in the netlist is collapsed onto this part. (Plain `SN74HC14D` is obsolete; DR is the cut-tape successor.) |
 | **Q1, Q2** | Wien BJT amplitude clamp                             | MMBT3904 (or BC847) | Multi (Nexperia, onsemi) | SOT-23 | MMBT3904FSCT-ND | 771-MMBT3904 | 2 | 0.06 | Through-hole: 2N3904 (TO-92). |
-| **M_var1, M_var2** | All-pass variable resistor (back-to-back PMOS, `XM_var1`/`XM_var2`) | DMP3098L-7   | Diodes Inc. | SOT-23  | DMP3098L-7DICT-ND | 621-DMP3098L-7    | 2   | 0.61 ea  | Replaces the original JMMBFJ112 JFET. Two PMOS in series, sources tied at `n_var_mid`, gates tied to V_ctl. Insulated gate eliminates the gate-channel-forward-conduction wrong-polarity-basin trap the JFET had. DMP3098L V_GS(th) = −0.4 to −1.0 V (0.6 V window vs J112's 4 V) — drastically tighter operating-point spread. Same part as the bridge driver. |
-| **R_var_mid_bias** | Midpoint DC bias for back-to-back PMOS         | 1 MΩ             | —               | 0805    | (generic)          | (generic)           | 1   | 0.01     | Ties `n_var_mid` (the PMOS source-tie node) to GND so the back-to-back pair is symmetric. 1 MΩ is high enough that the signal path (channel R ~200 Ω total) is unaffected, low enough to overpower stochastic body-diode leakage between the two devices. |
+| **M_var1, M_var2** | All-pass variable resistor (back-to-back NMOS, `XM_var1`/`XM_var2`) | DMN3404L-7   | Diodes Inc. | SOT-23  | DMN3404L-7DICT-ND | 621-DMN3404L-7    | 2   | 0.35 ea  | Two NMOS in series, sources tied at `n_var_mid`, gates tied to `V_ctl = V_int_out + V_offset` (see V_offset_ref entry below). With V_offset = +2.0 V, V_int_out = 0 puts V_GS into weak triode (R_DS ~6 Ω/FET, |1-H| ~0.15), giving small cold-start drive while still developing a usable bridge signal for the loop to engage. V_int_out_OP is slightly negative (~-0.3 V for ILC1-1/7); the loop modulates V_int_out around 0 to set R_DS. Same part as the bridge driver. |
+| **R_var_mid_bias** | Midpoint DC bias for back-to-back NMOS         | 1 MΩ             | —               | 0805    | (generic)          | (generic)           | 1   | 0.01     | Ties `n_var_mid` (the NMOS source-tie node) to GND so the back-to-back pair is symmetric. 1 MΩ is high enough that the signal path (channel R ~200 Ω total at OP) is unaffected, low enough to overpower stochastic body-diode leakage between the two devices. |
+| **V_offset_ref**   | DC reference for variable-R gate level-shift   | +2.0 V (TL431, programmed via 1:1 R divider; or LM4040DCM3-2.0) | Texas Instruments / Microchip | SOT-23 / SOT-23-3 | (TL431ACDBZR-ND, ~$0.10; LM4040DCM3-2.0 ~$0.50) | — | 1 | 0.10 | Sets the gate-drive level shift so the NMOS pair is partially on at V_int_out = 0 (cold start ≈ 2.5% of P_OP). DC accuracy is not critical: the closed loop compensates for V_offset drift by shifting V_int_out_OP; T_op is unaffected. TL431 with programming-resistor 1:1 divider is the cheapest option. |
 | **D1–D6** | Anti-windup + buffer bias diodes (`D_aw_hi/lo`, `D_obb_*`, `D_abb_*`) | 1N4148WS | onsemi / Diodes Inc. | SOD-323 | 1N4148WS-FDICT-ND | 621-1N4148WS-F | 6 | 0.10 | Through-hole: 1N4148 (DO-35). |
 | Y1     | None — Wien sets f0=1 kHz via R/C (no crystal)            | —                | —               | —       | —                  | —                   | —   | —        | — |
 
@@ -78,8 +79,8 @@ Voltage references (anti-windup):
 
 | RefDes | Function                  | Part       | Notes |
 |--------|---------------------------|------------|-------|
-| V_clamp_hi (+6 V) | Anti-windup high rail | Resistor divider off +9 V (e.g. 30k:60k) buffered by 1× spare TLV9154 channel | OR use LM4040-6.0 shunt ref (DigiKey: LM4040DEM3-6.0+T) $0.95 if precision matters. Spare op-amp is cheaper. |
-| V_clamp_lo (+0.3 V) | Anti-windup low rail  | Resistor divider off +9 V (e.g. 100k:3.45k) buffered by 1× spare TLV9154 channel | 0.3 V is non-critical — just keeps integrator off the negative rail. |
+| V_clamp_hi (+6 V) | Anti-windup high rail (transient safety; rarely engages because V_int_out_OP is negative) | Resistor divider off +9 V (e.g. 30k:60k) buffered by 1× spare TLV9154 channel | OR use LM4040-6.0 shunt ref (DigiKey: LM4040DEM3-6.0+T) $0.95. Spare op-amp is cheaper. |
+| V_clamp_lo (−0.7 V) | Anti-windup low rail (engages during cold-start, gives V_int_out floor ≈ −1.0 V with Schottky V_F=0.3 V) | Resistor divider off −9 V (e.g. 33k:267k) buffered by 1× spare TLV9154 channel | Precision not critical — anti-windup back-calc unwinds the integrator quickly once the lower diode engages. |
 
 PSU rails (±9 V regulators — 1 set common to all tubes):
 
@@ -118,8 +119,9 @@ ILC1-1/7-only feedback divider bottom resistor `R_buf*_fb2` = 1 kΩ (same on oth
 | 1× OPA2188 (U3)                          | 3.36       |
 | 1× CD74HC4053M96 (U4)                    | 0.54       |
 | 1× SN74HC14DR (U5)                       | 0.40       |
-| 2× DMP3098L (M_var1, M_var2 — all-pass)  | 1.22       |
+| 2× DMN3404L (M_var1, M_var2 — all-pass)  | 0.70       |
 | 1× 1 MΩ (R_var_mid_bias)                 | 0.01       |
+| 1× TL431 + 1:1 divider (V_offset_ref)    | 0.10       |
 | 2× MMBT3904 (Q1, Q2)                     | 0.12       |
 | 6× 1N4148WS (D1–D6)                      | 0.60       |
 | Output stage (BJT pair or MOSFET pair)   | 0.80–1.00  |

@@ -1,23 +1,28 @@
-"""Closed-loop VFD-filament regulator: Wien bridge + PMOS all-pass + AC bridge
+"""Closed-loop VFD-filament regulator: Wien bridge + NMOS all-pass + AC bridge
 with thermal filament model + synchronous demodulator + integrator,
 all running on TLV9154-class op-amps and +/-9 V supplies.
 
-Variable resistance element: two DMP3098L back-to-back PMOS, sources tied
-at n_var_mid with a 1 Meg bias resistor to GND. This replaces the original
-JMMBFJ112 JFET (whose -1 to -5 V V_p range caused the wrong-polarity basin
-trap via gate-channel forward conduction, and forced V_clamp_hi to +6 V
-which itself caused cold-start overshoot into the wrong basin). DMP3098L
-V_GS(th) is -0.4 to -1.0 V (a 0.6 V window vs the JFET's 4 V); insulated
-gate eliminates the basin trap entirely.
+Variable resistance element: two DMN3404L back-to-back NMOS, sources tied
+at n_var_mid with a 1 Meg bias resistor to GND. Gate-drive is a non-
+inverting summer giving V_ctl = V_int_out + V_offset with V_offset ≈ +2.5 V,
+biasing V_GS into strong inversion at V_int_out = 0 so the all-pass is at
+R_DS → 0, |1-H| → 0, NO bridge drive at cold start. The loop modulates
+V_int_out (slightly negative at OP) to set the operating R_DS; the V_int_out
+range is small, well within ±5 V integrator rails.
 
-Cold-start transient: V(T_node) starts at 300 K. Integrator slews V_int_out
-upward; via the inverter, V_ctl goes negative, the PMOS conducts (V_GS < V_th),
-R_DS is small, the all-pass (1-H) factor is small, and bridge drive is
-correspondingly small at the very start. As the filament heats and the
-bridge approaches balance, the loop drives V_int_out down to its natural OP
-(~+0.4 V to +1.85 V depending on tube), V_ctl settles at -V_int_out, PMOS
-sits in triode region with R_DS around 100 ohm per device (200 ohm total
-in back-to-back), and the all-pass corner is at f0 = 1 kHz.
+This architecture replaces the prior PMOS+inverter (which had V_int_out = 0
+giving V_GS = 0 ⇒ R_DS = ∞ ⇒ |1-H| = 2 ⇒ MAX cold-start drive, the
+direct cause of the 121 K cold-start overshoot on ILC1-1/7), and before
+that the JMMBFJ112 JFET (which had a wrong-polarity bistability trap via
+gate-source forward conduction).
+
+Cold-start transient: V(T_node) starts at 300 K, V_int_out at 0, NMOS pair
+fully on, |1-H| ≈ 0, bridge drive ≈ 0. As the bridge senses R_fil < target,
+the inverting integrator winds V_int_out NEGATIVE, which (via the non-
+inverting summer) drives V_GS less positive, R_DS grows, |1-H| grows, drive
+grows. Filament heats. At balance, V_int_out_OP sits slightly negative
+(~-0.4 V for ILC1-1/7); V_GS_OP at OP-required R_DS (~80 Ω/FET), all-pass
+corner at f0 = 1 kHz.
 """
 from __future__ import annotations
 import shutil
@@ -314,23 +319,39 @@ def make_netlist(data_path: Path,
     vos_chopper = mc.get("vos_chopper", 5e-6)
     # Legacy JFET parameter shims (kept so old Monte-Carlo / validation
     # scripts that still set jfet_vp / jfet_beta don't break). With the
-    # PMOS variable-R architecture these have no effect on the netlist;
-    # DMP3098L V_GS(th) is fixed by the manufacturer subcircuit model.
+    # NMOS variable-R + level-shift architecture these have no effect on
+    # the netlist; DMN3404L V_GS(th) is fixed by the manufacturer model.
     jfet_vp = mc.get("jfet_vp", -3.0)
     jfet_beta = mc.get("jfet_beta", 3.3e-3)
     # Per-tube buffer rail, defaults to VCC for backward compatibility.
     v_buf = mc.get("v_buf", VCC)
-    # Anti-windup clamp set-points. With the PMOS variable-R replacing the
-    # original JFET, the wrong-polarity basin (which used to require careful
-    # clamp tuning to avoid) is impossible -- the MOSFET gate is insulated
-    # so no gate-channel forward conduction can lock the loop into a
-    # negative-V_int_out equilibrium. V_clamp_hi just needs to be above
-    # the deepest natural V_int_out_OP across tubes (ILC1-1/7 at +1.85 V),
-    # +6 V leaves plenty of headroom. V_clamp_lo at +0.3 V is a soft
-    # back-stop -- it almost never engages because the loop naturally
-    # sits at V_int_out > 0.3 V at OP.
+    # Anti-windup clamps. With the NMOS variable-R + level-shift
+    # architecture, V_int_out_OP is slightly negative (~-0.4 V for ILC1-1/7).
+    # Both clamps are needed because the loop has Kp = R_PID/R_INT = 10:
+    # cold-start demod (~0.5 V) drives V_int_out proportionally to -5 V
+    # instantly, plus integrated wind on top, which would saturate the
+    # integrator at the negative supply rail (~-4.9 V) without a clamp.
+    # The 100+ ms recovery from such deep saturation was the residual
+    # 68 K overshoot on ILC1-1/7 with NMOS+level-shift and no lower clamp.
+    # Set V_clamp_lo = -0.7 V (Schottky V_F = 0.3 V at saturation current
+    # gives V_int_out floor ≈ -1.0 V, ~3x V_int_out_OP magnitude); back-calc
+    # anti-windup unwinds quickly when the lower diode engages.
+    # The upper clamp at +6 V is wind-up safety against transients; it
+    # almost never engages because the loop's natural OP is negative.
     v_clamp_hi = mc.get("v_clamp_hi", 6.0)
-    v_clamp_lo = mc.get("v_clamp_lo", 0.3)
+    v_clamp_lo = mc.get("v_clamp_lo", -0.7)
+    # Variable-R gate DC offset. V_ctl = V_int_out + v_offset_v puts the
+    # NMOS pair into weak triode at V_int_out = 0, with R_DS small enough
+    # that cold-start drive is well below P_OP (no thermal overshoot) but
+    # large enough that the bridge still develops a measurable differential
+    # for the loop to sense (otherwise the integrator stalls at near-zero
+    # demod and the filament never heats).
+    # Default +2.0 V puts V_GS just at the DMN3404L SPICE-model V_TO (+2.0 V),
+    # giving R_DS ≈ 6 Ω/FET, |1-H| ≈ 0.15 (~8% of OP drive), P_cold ≈ 40 mW
+    # into a cold 7.7-Ω filament -- enough to start heating gently while
+    # the loop engages. Hardware: precision +2.0 V reference; an adjustable
+    # TL431 set to 2.0 V suffices.
+    v_offset_v = mc.get("v_offset_v", 2.0)
     def _opamp(key, default=None, ilimit="65m"):
         # uopamp_lvl3 fixes two bugs in lvl2: (1) V9/V10 offsets in lvl2 used
         # {Ilimit-545m} which goes negative for Ilimit < 545 mA, breaking the
@@ -891,28 +912,31 @@ XU_osc np nn vcc vee v_osc {opamp_osc}
 * model's drain/source swap when V_DS reverses polarity.
 R_ap1 {v_osc_jfet} n_ap_minus {R_AP:.6g}
 R_ap2 v_ap  n_ap_minus {R_AP:.6g}
-* PMOS variable resistor: two DMP3098L back-to-back with sources tied at
+* NMOS variable resistor: two DMN3404L back-to-back with sources tied at
 * n_var_mid (the canonical bidirectional FET-switch topology). The all-pass
-* has V_DS swinging both polarities at the corner frequency; a single PMOS
-* would forward-conduct its body diode on the negative-V_DS half-cycle and
-* inject 2nd-harmonic distortion that the demodulator captures as a DC
-* bridge offset. Back-to-back makes each FET handle its dominant V_DS
-* polarity (channel) while its own body diode is reverse-biased.
+* has V_DS swinging both polarities at the corner frequency; a single MOSFET
+* would forward-conduct its body diode on the wrong half-cycle and inject
+* 2nd-harmonic distortion that the demodulator captures as a DC bridge
+* offset. Back-to-back makes each FET handle its dominant V_DS polarity
+* (channel) while its own body diode is reverse-biased.
 *
-* Replaces JMMBFJ112 (V_p binned -1 to -5 V, 4 V tolerance window driving
-* per-tube r_int_scale tuning, wide V_clamp_hi requirement, and the
-* gate-source-forward-conduction wrong-polarity-basin trap). DMP3098L's
-* V_GS(th) = -0.4 to -1.0 V (0.6 V window) lets V_clamp_hi stay tight,
-* and the insulated gate eliminates the basin trap entirely.
+* NMOS chosen over PMOS to allow direct (non-inverting) gate drive from the
+* integrator: V_ctl = V_int_out + V_offset (see gate-drive section below).
+* With V_offset ~ +2.5 V, V_int_out = 0 puts V_GS well above DMN3404L V_TO
+* (~+2.0 V), giving R_DS ≈ 0.1 Ω/FET and the all-pass at τ → 0, |1-H| → 0,
+* NO bridge differential drive at cold start. Solves the PMOS-era cold-
+* start overshoot where V_int_out = 0 ⇒ V_GS = 0 ⇒ MOSFET off ⇒
+* R_DS = ∞ ⇒ |1-H| = 2 ⇒ MAX drive (filament hammered at >1.8 P_OP
+* before the loop could wind up to engage the variable-R).
 *
-* Same DMP3098L as the bridge driver output stage -- no new BOM line item,
-* just two more SOT-23 PMOS per circuit (+$1.20).
+* Same DMN3404L as the bridge driver output stage -- no new BOM line item,
+* just two more SOT-23 NMOS per circuit (+$1.20).
 *
 * Total R between v_drv_atten and n_ap_plus = 2 * R_DS_per_FET. For an
 * all-pass corner near 1 kHz with C_AP = 1 uF, each FET should sit at
-* R_DS ~ 100 ohm in triode (V_GS just past V_th).
-XM_var1 {v_osc_jfet} v_ctl n_var_mid DMP3098L
-XM_var2 n_ap_plus    v_ctl n_var_mid DMP3098L
+* R_DS ~ 100 ohm in triode (V_GS just past V_th) at OP.
+XM_var1 {v_osc_jfet} v_ctl n_var_mid DMN3404L
+XM_var2 n_ap_plus    v_ctl n_var_mid DMN3404L
 * n_var_mid sees only the two PMOS sources internally; without an external
 * DC reference path ngspice can't resolve the node, and in the real circuit
 * body-diode leakage mismatch could bias the midpoint asymmetrically (which
@@ -960,13 +984,22 @@ R_top_ref {bridge_v_top} node_B {r_top_ref:.6g}
 R_bot_ref node_B {bridge_v_bot}  {r_bot_ref:.6g}
 
 * === Difference amp (1-op-amp subtractor, gain 1) ===
-* PMOS variable-R inverts the V_ctl-to-drive transfer function vs the JFET
-* it replaces (JFET: more negative V_ctl -> more pinched -> more drive;
-* PMOS: more negative V_ctl -> more conducting -> less drive). The cheapest
-* polarity fix is to swap the diff-amp inputs so n_diff = node_A - node_B
-* instead of node_B - node_A. Everything downstream (demod, integrator,
-* inverter) keeps its sign convention and the closed loop polarity is now
-* correct for PMOS.
+* Loop polarity bookkeeping:
+*   JFET-era: V_int_out + → V_ctl - (inverter) → V_GS_JFET - → pinched
+*             → R_DS bigger → drive bigger. Cold filament needs more drive
+*             → V_int_out +. Diff-amp natural wiring (n_diff = node_B -
+*             node_A) gave cold → demod < 0 → inverting integrator winds
+*             V_int_out +. Correct.
+*   NMOS+level-shift (current): V_ctl = V_int_out + V_offset (non-inverting
+*             summer). V_int_out + → V_ctl + → V_GS + → NMOS more on
+*             → R_DS smaller → drive smaller. Cold filament needs more
+*             drive → V_int_out -. Diff-amp SWAPPED (n_diff = node_A -
+*             node_B) gives cold → demod > 0 → inverting integrator winds
+*             V_int_out -. Correct.
+* So the swap done for the PMOS era is also right for NMOS+level-shift,
+* by coincidence of sign-flipping the (gate-drive polarity) twice
+* (PMOS inversion AND inverter removal) — net result: opposite polarity
+* from JFET, swapped diff-amp matches.
 R_a1 node_A n_diff_plus  {r_a1:.6g}
 R_a2 n_diff_plus  0      {r_a2:.6g}
 R_b1 node_B n_diff_minus {r_b1:.6g}
@@ -976,11 +1009,10 @@ XU_diff n_diff_plus n_diff_minus vcc vee n_diff {opamp_diff}
 * === Comparator (behavioural sign of V_osc) ===
 * Comparator: open-loop op-amp (one channel of the second TLV9154 quad).
 * V+/V- swapped from the natural "sign of V_osc" connection ONLY when the
-* booster is on -- the booster's inverting Buffer 2 flips the loop's
-* polarity, so we have to flip the demodulator reference to compensate.
-* Without the booster (IV-3), Buffer 2 doesn't exist and Buffer-1's
-* non-inverting output preserves the old polarity, so the comparator
-* must stay unswapped.
+* CE booster is on (mc["ce_buf"]=True): in that topology Buffer 2 is an
+* inverting summer (sign-flipped). The CC booster (default for non-mos_buf
+* tubes like ILC1-1/7) uses non-inverting Buffers 1 and 2, no sign flip,
+* so the comparator stays unswapped.
 XU_cmp {cmp_inputs} vcc vee n_cmp {opamp_cmp}
 
 * === Polarity-switching demodulator ===
@@ -1015,30 +1047,30 @@ C_intfb  n_int_minus n_int_pidp {c_int:.6e}  IC={c_intfb_ic_v:.4g}
 * through to V_ctl.
 C_hf     n_int_pidp v_int_raw {c_hf:.6e}     IC=0
 * Integrator op-amp output is v_int_raw (free-swinging, no clamp diodes
-* on this node). The downstream-visible v_int_out is the *clamped* version,
-* produced by the saturator buffer (XU_aw) below. The back-calc path
-* (R_bc + diff amp) feeds the saturation error e_sat = v_int_raw - v_int_out
-* back into n_int_minus, unwinding the integrator only when v_int_raw is
-* actually past the clamp -- zero effect when in range.
-* SINGLE-SUPPLY for the integrator. VEE pin tied to GND so v_int_raw is
-* physically bounded to [+0.1, +VCC-Vrail] V. This prevents v_int_out from
-* ever going negative -- which would make V_ctl positive, forward-bias the
-* JFET gate-source junction, and lock the loop in a wrong-polarity basin
-* (see sweep_v_clamp_hi.py results 2026-05-18). With v_int_out >= 0, V_ctl
-* <= 0 always, JFET always in pinch-off, no bistability.
-* Real-circuit note: OPA2188 supports single-supply operation down to 4 V.
-* The chopper dual would need to be split into two singles (or share VEE=GND
-* across both halves) since the demod op-amp on the same dual also benefits
-* from bipolar input range. BOM implications evaluated separately.
+* on this node). The downstream-visible v_int_out is the upper-clamped
+* version produced by the saturator (R_aw_out + D_aw_hi below). The
+* back-calc path (R_bc + diff amp) feeds e_sat = v_int_raw - v_int_out
+* into n_int_minus, unwinding the integrator only when v_int_raw is past
+* the upper clamp -- zero effect when in range.
+* DUAL-SUPPLY for the integrator. V_int_out_OP is slightly negative (~-0.4 V
+* for ILC1-1/7) with the NMOS variable-R + level-shift architecture
+* (V_ctl = V_int_out + V_offset). Cold-start: V_int_out winds from 0 toward
+* OP through negative values; the NMOS pair is strongly on at cold start
+* (V_GS ≈ V_offset = +2.5 V), so |1-H| ≈ 0 and the filament heats gently.
+* No wrong-polarity basin (MOSFET gate is insulated; there's no equivalent
+* of the JFET gate-source forward-conduction trap regardless of V_int_out
+* sign).
 XU_int 0 n_int_minus vcc vee v_int_raw {opamp_int}
 
 * === Passive saturator + back-calculation anti-windup ===
 * The integrator op-amp output v_int_raw drives v_int_out through a series
-* resistor R_aw_out. Clamp diodes on v_int_out clip it to
-* [V_clamp_lo - Vf, V_clamp_hi + Vf]. When v_int_raw exceeds clamp, the
-* clamp diode conducts, with current bounded by R_aw_out.
+* resistor R_aw_out. A single upper clamp diode D_aw_hi clips v_int_out to
+* V_clamp_hi + Vf. When v_int_raw exceeds the clamp, the clamp diode
+* conducts, with current bounded by R_aw_out. The lower bound on v_int_out
+* is the integrator op-amp's own VEE rail (no diode clamp needed; the
+* NMOS+level-shift architecture has V_int_out_OP negative).
 *
-* R_aw_out = 10 ohm sizes for the loads on v_int_out (R_inv1 = 100k draws
+* R_aw_out = 10 ohm sizes for the loads on v_int_out (R_sum_in_a = 100k draws
 * ~11 uA at OP; the diff amp's R_diff1 draws another ~5 uA): the load drop
 * across R_aw_out is ~0.16 mV at OP, which through the back-calc resistor
 * would give a ~5 nA bias current at the integrator input -- equivalent to
@@ -1059,14 +1091,14 @@ V_clamp_lo v_clamp_lo 0  {v_clamp_lo:.4g}
 R_aw_out   v_int_raw  v_int_out  10
 D_aw_hi    v_int_out  v_clamp_hi Dclamp
 D_aw_lo    v_clamp_lo v_int_out  Dclamp
-* D_aw_lo + V_clamp_lo removed 2026-05-18: with XU_int on a single supply
-* (VEE = GND), v_int_raw is bounded at +0.1 V by the op-amp's own negative
-* rail, which is a tighter and cleaner low clamp than any diode-based one
-* could be (no V_F shift, exactly the rail). The diode clamp was pinning
-* v_int_out at V_clamp_lo - V_F ≈ +0.27 V even when the natural OP wanted
-* to be lower, forcing the loop to overdrive the filament. With the diode
-* removed, v_int_out is free to float between 0 V (single-supply op-amp
-* floor) and V_clamp_hi.
+* Lower clamp at V_clamp_lo = -0.7 V → V_int_out floor ≈ -1.0 V (Schottky
+* V_F ≈ 0.3 V at saturation current). Without it, the loop's proportional
+* gain (Kp=10) sends V_int_out to the integrator's negative rail (~-5 V)
+* in milliseconds at cold start, and the 100+ ms recovery from saturation
+* drives a +68 K overshoot. With the clamp + back-calc anti-windup
+* (R_bc), V_int_out is bounded at ~-1 V, anti-windup unwinds the
+* integrator quickly when the loop transitions out of the cold-start
+* high-error regime.
 * Dclamp: switched 2026-05 from 1N4148-class to Schottky (BAT54 / 1N5819).
 * Reason: at the worst-case clamp current (op-amp Isc ~50 mA chopper),
 * the 1N4148's V_F was ~0.76 V; that meant the effective V_int_out floor
@@ -1114,26 +1146,35 @@ XU_aw_diff n_aw_diff_plus n_aw_diff_minus vcc vee e_sat {opamp_aw}
 * n_int_minus) is negligible: 5 uV * 1 = 5 uV demand error, < 0.1 K.
 R_bc e_sat n_int_minus {r_int:.6g}
 
-* Inverter + JFET-gate bootstrap: V_ctl is the op-amp output that drives
-* the JFET gate directly. At DC, n_inv_plus is held to 0 by R_btp, so
-* V_ctl = -V_int_out (existing inverter behaviour). At AC the bootstrap
-* path R_btd/C_btd and R_bts/C_bts inject (V_drain + V_source) into
-* n_inv_plus through R_btp to ground; the op-amp's non-inverting summer
-* arrangement gives V_ctl_AC = 2*V(n_inv_plus) = 2*R_btp/(2*R_b + R_btp) *
-* (V_d + V_s). With R_b = 100k, R_btp = 18k that's V_ctl_AC = 0.265*(V_d+V_s),
-* close to the optimal alpha ~ 0.275 for our topology where the C_ap
-* divider gives V_source ~ 0.38*V_drain at f0. Cancels the V_DS-dependent
-* term in 1/R_DS = 2*beta*(V_GS - V_to - V_DS/2), reducing JFET-induced
-* H2 at v_ap from ~6% to ~3%. The C_b caps block DC so the inverter still
-* cleanly tracks V_int_out.
-R_inv1 v_int_out  n_inv_minus 100k
-R_inv2 n_inv_minus v_ctl       100k
-R_btd  {v_osc_jfet} n_btd_mid  100k
-C_btd  n_btd_mid   n_inv_plus  10u IC=0
-R_bts  n_ap_plus   n_bts_mid   100k
-C_bts  n_bts_mid   n_inv_plus  10u IC=0
-R_btp  n_inv_plus  0           18k
-XU_inv n_inv_plus  n_inv_minus vcc vee v_ctl {opamp}
+* === Variable-R gate drive: non-inverting summer with DC level shift ===
+* V_ctl = V_int_out + V_offset, with V_offset ≈ +2.5 V.
+* Picks V_GS_DC at V_int_out = 0 well above DMN3404L V_TO (~+2.0 V from
+* SPICE model), so the NMOS pair is in strong inversion at cold start:
+* R_DS ≈ 0.1 Ω/FET → all-pass τ → 0 → |1-H| → 0 → NO bridge differential
+* drive at t = 0. Cold-start filament heats gently as the loop modulates
+* V_int_out toward V_int_out_OP (negative, ≈ -0.4 V for ILC1-1/7); no
+* windup overshoot mechanism.
+*
+* V_offset implementation in hardware: a precision +2.5 V voltage
+* reference. Practical options:
+*   - LM4040-2.5 (shunt ref, 0.1% grade ~$0.60)
+*   - TL431 (programmable shunt, set to 2.5 V via 1:1 R divider; ~$0.10)
+*   - Zener-regulated VCC + divider (cheap but more tempco)
+* DC accuracy on V_offset is not critical: drift translates 1:1 to V_GS_DC
+* shift, which the closed loop compensates by shifting V_int_out_OP.
+* T_op is unaffected because the bridge balance condition sets T.
+V_offset_ref v_offset_ref 0 {v_offset_v:.4g}
+* Non-inverting summer:
+*   V_+IN at n_sum_plus = (V_int_out + V_offset) / 2 (two equal 100k Rs).
+*   Op-amp closed-loop gain from +IN = 1 + R_sum_fb/R_sum_gnd = 1 + 100k/100k = 2.
+*   Therefore V_ctl = 2 · V(n_sum_plus) = V_int_out + V_offset.
+* Same opamp model as the rest of the loop (TLV9154-class). Output drives
+* the high-impedance MOSFET gates directly; no current beyond Iq.
+R_sum_in_a  v_int_out     n_sum_plus   100k
+R_sum_in_b  v_offset_ref  n_sum_plus   100k
+R_sum_fb    v_ctl         n_sum_minus  100k
+R_sum_gnd   n_sum_minus   0            100k
+XU_sum      n_sum_plus    n_sum_minus  vcc vee v_ctl {opamp}
 
 {booster_lines}{boost_line}
 * === 2N3904 ===

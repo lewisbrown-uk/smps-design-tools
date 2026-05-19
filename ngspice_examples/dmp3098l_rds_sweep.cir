@@ -1,0 +1,19 @@
+* DMP3098L R_DS vs V_GS DC sweep
+* PMOS: source = 0V high, drain = -100mV low, V_DS = -100mV.
+* Sweep gate from 0 V (off) to -4 V (strong inversion).
+* R_DS = V_DS / I_D at each point.
+.include 'spice_models/DMP3098L.spice.txt'
+V_S  src 0      0
+V_D  drn 0     -0.1
+V_G  gat 0      0
+XM1  drn gat src DMP3098L
+.control
+dc V_G 0 -4 -0.005
+* Save only one signal so wrdata layout is unambiguous: (V_G, I_D).
+* I_D defined as current flowing into V_D's positive terminal.
+* With V_D's + terminal at drn (-100mV) and - terminal at GND, a positive
+* I(V_D) corresponds to channel current flowing drain->source inside PMOS,
+* i.e. PMOS source-to-drain conventional current. Magnitude = drain current.
+wrdata dmp_rds.data i(V_D)
+.endc
+.end
