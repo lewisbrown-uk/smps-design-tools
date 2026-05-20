@@ -156,8 +156,20 @@ XU_dem vplus n_dem_minus vcc vee n_demout uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=
 *   Ki = 1/(R_INT * C_INT)         integrator (DC dominates)
 *   Kp = R_PID/R_INT + C_PID/C_INT proportional (mid-band)
 *   Kd = R_PID * C_PID             derivative (HF, fights overshoot)
-R_intin  n_demout n_int_minus 70000
-C_intin  n_demout n_int_minus 1.000000e-09
+* === Log demod (compressive non-linearity between demod & integrator) ===
+* LP filter on n_demout (cutoff 200 Hz) extracts DC component
+* (rejects 2 kHz chop ripple so it doesn't alias into DC via the
+* non-linearity). Then non-linear conformer (signed-log: gain=7.5, v_eps=5.00 mV):
+*   log:  unit gain near 0, 1/(1+|V|/v_eps) compression at large signals
+*   tanh: unit gain near 0, hard bound at ±V_sat at large signals
+* Properties:
+*   - same loop gain near OP (small-signal dynamics unchanged)
+*   - bounded integrator wind rate during cold-start → bounded T_pk
+R_lp_log    n_demout n_lp_dem  10k
+C_lp_log    n_lp_dem 0        7.957747e-08
+B_log_dem   n_log_dem 0  V = 0.0375 * (V(n_lp_dem) >= 0 ? ln(1+V(n_lp_dem)/0.005) : -ln(1+abs(V(n_lp_dem))/0.005))
+R_intin  n_log_dem n_int_minus 70000
+C_intin  n_log_dem n_int_minus 1.000000e-09
 R_intfb  n_int_pidp v_int_raw 700000
 * Realistic startup: cap begins uncharged (no IC). Loop self-starts from
 * the intentional 1% bridge mismatch above + Vos drift in the demod and

@@ -31,6 +31,13 @@ def run_case(tube_key):
         if spec.get(k): mc[k] = True
     for k in ('buf_fb1', 'buf_fb_ap', 'v_buf', 'c_ap'):
         if spec.get(k) is not None: mc[k] = spec[k]
+    # Enable log demod by default with the per-tube optimal gain
+    # (sweep_logdem_gain_4tubes.png 2026-05-20).
+    if spec.get('log_gain_K') is not None:
+        mc['log_demod']  = True
+        mc['log_gain_K'] = spec['log_gain_K']
+        mc['v_eps_log']  = 5e-3
+        mc['nonlin_type']= 'log'
 
     label = f"conv_{tube_key}"
     cir = tcl.WORK / f'{label}.cir'
@@ -69,9 +76,10 @@ def make_plot(results):
     # T peak is annotated -- the prior 4-up grid hid the cold-start thermal
     # overshoot when rendered at thumbnail size.
     fig, axes = plt.subplots(4, 2, figsize=(14, 14), sharex=False)
-    fig.suptitle("NMOS+level-shift variable-R architecture: convergence per tube\n"
-                 "(C_AP=1uF, T_END=2s, V_offset=+2.0V, V_clamp_lo=-0.7V, "
-                 "manufacturer DMN3404L/DMP3098L, lvl3 op-amp)", fontsize=11)
+    fig.suptitle("JFET (LS844) variable-R + V_DS/2 bootstrap + log demod: convergence per tube\n"
+                 "(C_AP=470nF, T_END=2s, V_p-tracking ref, V_clamp_lo=-2.5V, "
+                 "log demod per-tube gain {IV-18:10, IV-6:7.5, ILC1-1/7:5, ILC1-1/8:7.5}, "
+                 "lvl3 op-amp)", fontsize=10)
     for idx, tube_key in enumerate(('iv18', 'iv6', 'ilc11_7', 'ilc11_8')):
         r = next((x for x in results if x['tube'] == tube_key), None)
         if r is None or 'error' in r:

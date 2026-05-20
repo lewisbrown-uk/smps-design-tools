@@ -79,7 +79,8 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                xfmr_n=None, xfmr_lpri=None, bias_zener_v=None,
                buf_comp_pf=None, t_rail_ramp=None,
                servo_bias=False, servo_iq_target=10e-3,
-               servo_r_sense=0.5):
+               servo_r_sense=0.5,
+               log_gain_K=None):
     # Bridge target R = R_op * R_bot_ref / R_sen, set to give R_filament = R_op
     # at the operating temperature T_op. (An earlier version had a 1% offset
     # for "cold-start kick", but that's unnecessary -- the filament starts at
@@ -105,7 +106,8 @@ def _make_tube(name, R_op, V_op, T_op, R_sen, R_bot_ref,
                 t_rail_ramp=t_rail_ramp,
                 servo_bias=servo_bias,
                 servo_iq_target=servo_iq_target,
-                servo_r_sense=servo_r_sense)
+                servo_r_sense=servo_r_sense,
+                log_gain_K=log_gain_K)
 
 # r_int_scale per tube: option-A's 0.3 was tuned for the IV-18 bridge gain.
 # Bridge sensitivity ~ V_drive*R_sen/(R_op+R_sen)^2 changes per tube, so
@@ -123,7 +125,15 @@ TUBES = {
     # the same nominal R_op/V_op as IV-6; our parameters here are closer to
     # IV-18, so renamed 2026-05-20. Resistances unchanged for continuity --
     # to be re-tuned to true IV-18 spec after settling-speed tuning lands.)
-    "iv18":    _make_tube("IV-18",    R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100,  r_int_scale=0.5, booster=True, buf_fb1=1.6e3, buf_fb_ap=1.6e3, v_buf=1.4, ce_buf=True, mos_buf=True),
+    # log_gain_K per tube: optimal small-signal gain for the signed-log
+    # demod conformer (per sweep_logdem_gain_4tubes.png). Picked for zero
+    # cold-start overshoot AND fast settle:
+    #   IV-18:   10   (0 K overshoot, 435 ms settle)
+    #   IV-6:    7.5  (0 K, 743 ms)
+    #   ILC1-1/7: 5   (+1 K, 402 ms — its larger V_op makes the loop
+    #                  aggressive at higher gain; gain=10 gives +9 K)
+    #   ILC1-1/8: 7.5 (0 K, 561 ms)
+    "iv18":    _make_tube("IV-18",    R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100,  r_int_scale=0.5, booster=True, buf_fb1=1.6e3, buf_fb_ap=1.6e3, v_buf=1.4, ce_buf=True, mos_buf=True, log_gain_K=10.0),
     # Per-tube buf_fb1 sets buffer gain via R_fb1:R_fb2(=1k):
     #   buf_fb1 = 6.2k -> k_buf = 7.2 (matches k_atten=7.15, unity overall gain)
     #   buf_fb1 = 9.1k -> k_buf = 10.1 (1.41x net gain, for ILC1-1/7)
@@ -189,7 +199,7 @@ TUBES = {
     #     overshoot at V_p typ
     #   ILC1-1/7: scale=1.5 -- larger slowdown to compensate for the higher
     #     loop gain through its K_buf=14 buffer
-    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.7, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True),
+    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.7, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True, log_gain_K=7.5),
     # ILC1-1/7 K_buf raised from 10.1 to 14 (buf_fb1: 9.1k -> 13k E24).
     # The old 10.1 put V_d_max = 8.47 V_pk vs V_d_required = 8.485 V_pk --
     # zero headroom, loop pinned at the asymptote of (1-H_ap), couldn't
@@ -198,8 +208,8 @@ TUBES = {
     # = 11.76 V_pk (39% headroom over required), letting the loop operate
     # comfortably below the asymptote with real V_d-vs-x sensitivity.
     # v_buf raised 4.3 -> 6.5 V to cover the larger V_top_pk swing.
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=1.5, booster=True, buf_fb1=13e3, buf_fb_ap=13e3, v_buf=6.5),
-    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.7, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=1.5, booster=True, buf_fb1=13e3, buf_fb_ap=13e3, v_buf=6.5, log_gain_K=5.0),
+    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.7, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True, log_gain_K=7.5),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
 # two non-inverting unity-gain op-amp + class-AB BC337/BC327 BJT pair buffers
@@ -329,6 +339,30 @@ def make_netlist(data_path: Path,
     r_a1 = 1e6 * g("k_r_a1"); r_a2 = 1e6 * g("k_r_a2")
     r_b1 = 1e6 * g("k_r_b1"); r_b2 = 1e6 * g("k_r_b2")
     c_ap_v = mc.get("c_ap", C_AP * g("k_c_ap"))
+    # Log demod: insert an LP-filtered signed-log non-linearity between
+    # the demod output and the integrator. Compresses large bridge errors
+    # (cold-start) so the integrator's wind rate is bounded → less cold-
+    # start T_pk overshoot — while preserving unit gain at small signals
+    # so near-OP loop dynamics are unchanged. v_eps_log sets the knee of
+    # the log compression (signals < v_eps_log are linear; signals >>
+    # v_eps_log are compressed). Default 5 mV roughly matches typical
+    # demod amplitudes at the bridge balance point.
+    log_demod   = mc.get("log_demod", False)
+    v_eps_log   = mc.get("v_eps_log", 5e-3)
+    f_lp_log_hz = mc.get("f_lp_log_hz", 200.0)
+    # nonlin_type: "log" → signed log, "tanh" → bounded saturation
+    nonlin_type = mc.get("nonlin_type", "log")
+    # log_gain_K = small-signal slope (gain at V_in=0). Per-tube optimal
+    # values (sweep_logdem_gain_4tubes.png 2026-05-20):
+    #   IV-18: 10 (435 ms settle, 0 K overshoot)
+    #   IV-6, ILC1-1/8: 7.5-10 (200-700 ms, 0 K overshoot)
+    #   ILC1-1/7: 5 (400 ms, +1 K overshoot — gain=10 gives +9 K because
+    #             ILC1-1/7's larger bridge signal makes the loop more
+    #             aggressive even at modest gain)
+    # K=1: legacy unit-gain (slow-on-small-signal, same as linear demod near 0).
+    # K>1: boost small-signal gain to speed up settling near OP, while the
+    # 1/(eps+|V|) compression still bounds wind rate at cold-start.
+    log_gain_K  = mc.get("log_gain_K", 1.0)
     # HF steady-state mode: f0 bumped to 100 kHz, Wien C and C_AP scaled
     # accordingly, filament replaced with a fixed R_op resistor (no thermal
     # dynamics), and v_int_out forced to the per-tube settled value (so the
@@ -963,6 +997,50 @@ R_buf2_fb2   n_buf_ap_fb 0               1k
             f"J_ref      n_ref_drain  0             n_ref_src  J_LS844\n"
             f"R_src_ref  n_ref_src    0             {r_src_ref_ohm:.4g}"
         )
+    # ------- Optional log demod stage -------
+    if log_demod:
+        c_lp_log = 1.0 / (2 * np.pi * f_lp_log_hz * 10e3)
+        # Output is K_log · f(V_in/v_eps) where K_log sets the small-signal
+        # slope = log_gain_K. K_log = log_gain_K · v_eps.
+        K_log = log_gain_K * v_eps_log
+        if nonlin_type == "tanh":
+            # V_out = K_log · tanh(V_in / v_eps). Slope at V_in=0 is
+            # log_gain_K. Output saturates at ±K_log = ±log_gain_K·v_eps.
+            nonlin_expr = (
+                f"{K_log:.4g} * tanh(V(n_lp_dem)/{v_eps_log:.4g})"
+            )
+            nonlin_label = (f"tanh: gain={log_gain_K:.1f}, "
+                            f"V_sat={v_eps_log*1e3:.2f} mV, "
+                            f"sat at ±{K_log*1e3:.1f} mV")
+        else:
+            # V_out = K_log · sign(V_in) · ln(1 + |V_in|/v_eps).
+            # Slope at V_in=0 is K_log/v_eps = log_gain_K.
+            # Slope at V_in: log_gain_K / (1 + |V|/v_eps).
+            nonlin_expr = (
+                f"{K_log:.4g} * "
+                f"(V(n_lp_dem) >= 0 ? ln(1+V(n_lp_dem)/{v_eps_log:.4g}) : "
+                f"-ln(1+abs(V(n_lp_dem))/{v_eps_log:.4g}))"
+            )
+            nonlin_label = (f"signed-log: gain={log_gain_K:.1f}, "
+                            f"v_eps={v_eps_log*1e3:.2f} mV")
+        log_demod_block = (
+            f"* === Log demod (compressive non-linearity between demod & integrator) ===\n"
+            f"* LP filter on n_demout (cutoff {f_lp_log_hz:.0f} Hz) extracts DC component\n"
+            f"* (rejects 2 kHz chop ripple so it doesn't alias into DC via the\n"
+            f"* non-linearity). Then non-linear conformer ({nonlin_label}):\n"
+            f"*   log:  unit gain near 0, 1/(1+|V|/v_eps) compression at large signals\n"
+            f"*   tanh: unit gain near 0, hard bound at ±V_sat at large signals\n"
+            f"* Properties:\n"
+            f"*   - same loop gain near OP (small-signal dynamics unchanged)\n"
+            f"*   - bounded integrator wind rate during cold-start → bounded T_pk\n"
+            f"R_lp_log    n_demout n_lp_dem  10k\n"
+            f"C_lp_log    n_lp_dem 0        {c_lp_log:.6e}\n"
+            f"B_log_dem   n_log_dem 0  V = {nonlin_expr}\n"
+        )
+        n_int_in = "n_log_dem"
+    else:
+        log_demod_block = ""
+        n_int_in = "n_demout"
     return f"""* Closed-loop VFD-filament regulator with thermal model
 
 .include {(HERE/'uopamp.lib').as_posix()}
@@ -1115,8 +1193,8 @@ XU_dem vplus n_dem_minus vcc vee n_demout {opamp_dem}
 *   Ki = 1/(R_INT * C_INT)         integrator (DC dominates)
 *   Kp = R_PID/R_INT + C_PID/C_INT proportional (mid-band)
 *   Kd = R_PID * C_PID             derivative (HF, fights overshoot)
-R_intin  n_demout n_int_minus {r_int:.6g}
-C_intin  n_demout n_int_minus {c_pid:.6e}
+{log_demod_block}R_intin  {n_int_in} n_int_minus {r_int:.6g}
+C_intin  {n_int_in} n_int_minus {c_pid:.6e}
 R_intfb  n_int_pidp v_int_raw {r_pid:.6g}
 * Realistic startup: cap begins uncharged (no IC). Loop self-starts from
 * the intentional 1% bridge mismatch above + Vos drift in the demod and

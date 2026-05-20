@@ -30,6 +30,12 @@ def main():
         if spec.get("servo_bias"): mc["servo_bias"] = True
         if spec.get("servo_iq_target") is not None: mc["servo_iq_target"] = spec["servo_iq_target"]
         if spec.get("servo_r_sense") is not None: mc["servo_r_sense"] = spec["servo_r_sense"]
+        # Log demod is the default since 2026-05-20 (per-tube log_gain_K).
+        if spec.get("log_gain_K") is not None:
+            mc["log_demod"]   = True
+            mc["log_gain_K"]  = spec["log_gain_K"]
+            mc["v_eps_log"]   = 5e-3
+            mc["nonlin_type"] = "log"
         mc["R_op"] = spec["R_op"]
         mc["V_op"] = spec["V_op"]
         # Dummy data path; not actually used since we won't run the sim
