@@ -178,7 +178,7 @@ C_intfb  n_int_minus n_int_pidp 3.183099e-07  IC=0
 * HF rolloff cap: in parallel with R_PID to limit HF gain and suppress
 * the f0 ripple from V_demod that the D term would otherwise pump
 * through to V_ctl.
-C_hf     n_int_pidp v_int_raw 1.000000e-08     IC=0
+C_hf     n_int_pidp v_int_raw 1.000000e-09     IC=0
 * Integrator op-amp output is v_int_raw (free-swinging, no clamp diodes
 * on this node). The downstream-visible v_int_out is the upper-clamped
 * version produced by the saturator (R_aw_out + D_aw_hi below). The

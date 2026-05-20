@@ -219,7 +219,17 @@ R_INT_BASE = 100e3
 C_INT_BASE = 1.0 / (2 * np.pi * 5.0 * R_INT_BASE)
 R_PID_BASE = 1e6
 C_PID_BASE = 1e-9
-C_HF_BASE  = 10e-9   # bumped from 1.6n to push HF pole from 332 Hz to 53 Hz
+C_HF_BASE  = 1e-9    # HF rolloff cap in parallel with R_PID. Sets the HF
+                     # pole at 1/(2π·R_PID·C_HF). The original code had this
+                     # at 1.6 n; it was bumped to 10 n to improve 1 kHz
+                     # ripple suppression, but the bump put the pole at
+                     # ~10 Hz on ILC1-1/7 (r_int_scale=1.5 ⇒ R_PID=1.5 MΩ)
+                     # — right in the loop's working bandwidth, eating PM
+                     # and causing a 12-24 Hz cold-start ring (T_peak +7.7K).
+                     # 1 nF puts the HF pole at 106 Hz on ILC1-1/7 and
+                     # 220-320 Hz on the 1 V tubes; ripple suppression at
+                     # 1 kHz drops from ~40 dB to ~20 dB which is still fine
+                     # given the integrator's natural attenuation.
                      # (gives 25 dB attenuation at 1 kHz to suppress demod
                      # feedthrough that limit-cycles the boosted-tube loops)
 # Module-level "current" values (used in make_netlist when not overridden)
@@ -389,6 +399,12 @@ def make_netlist(data_path: Path,
     opamp_buf0 = _opamp("vos_buf0")
     opamp_bufo = _opamp("vos_buf_osc")
     opamp_bufa = _opamp("vos_buf_ap")
+    # XU_sum (gate-drive level-shifter in the V_TO-tracking arch). Vos
+    # here translates 2:1 to V_ctl (non-inverting summer gain of 2) and
+    # then into V_GS_var DC. The loop compensates by shifting V_int_OP
+    # so the bridge null still holds, so this Vos doesn't directly affect
+    # T_op — but a large enough Vos could push V_int_OP into the clamp.
+    opamp_sum  = _opamp("vos_sum")
     # Output stages: when use_booster=True, the textbook JFET-VCR architecture is:
     #   Buffer 0  attenuates V_osc to keep JFET in linear region (V_DS << V_GS-Vto).
     #             Passive divider on V_osc gives v_atten_input (high-Z), op-amp
@@ -1217,7 +1233,7 @@ R_sum_in_a  v_int_out     n_sum_plus   100k
 R_sum_in_b  v_offset_ref  n_sum_plus   100k
 R_sum_fb    v_ctl         n_sum_minus  100k
 R_sum_gnd   n_sum_minus   0            100k
-XU_sum      n_sum_plus    n_sum_minus  vcc vee v_ctl {opamp}
+XU_sum      n_sum_plus    n_sum_minus  vcc vee v_ctl {opamp_sum}
 
 {booster_lines}{boost_line}
 * === 2N3904 ===
