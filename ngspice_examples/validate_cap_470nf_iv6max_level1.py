@@ -22,12 +22,13 @@ LEVEL1_MODELS = """.model PMOS_LL PMOS(LEVEL=1 VTO=-0.7 KP=100u L=1u W=55600u LA
 def swap_to_level1(netlist_text):
     """Post-process a netlist string: replace BRIDGE-DRIVER manufacturer MOSFET
     instances with Level 1 .model + M instances for runtime speed. The
-    variable-R MOSFETs (M_var1, M_var2) are left at manufacturer model
-    because the level-shift V_offset is sized to their actual V_TO (~+2.0 V
-    for DMN3404L) — substituting the Level-1 placeholder (V_TO=+0.7 V) would
-    stall the loop. .include lines for the manufacturer models are retained
-    for that reason."""
-    PRESERVE = {"M_var1", "M_var2"}
+    variable-R MOSFETs (M_var1, M_var2) and the V_TO-tracking reference
+    (M_ref) are left at manufacturer model: the V_TO-tracking circuit
+    relies on Q_ref's V_TO matching Q_var1/Q_var2's V_TO, and the Level-1
+    placeholder has V_TO=+0.7 V (vs DMN3404L ~+1.7 V effective) which would
+    both break the tracking and stall the loop. .include lines for the
+    manufacturer models are retained for that reason."""
+    PRESERVE = {"M_var1", "M_var2", "M_ref"}
     lines_out = []
     for line in netlist_text.splitlines():
         # Replace X-instances. Match e.g.
