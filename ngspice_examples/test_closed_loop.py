@@ -437,6 +437,19 @@ def make_netlist(data_path: Path,
     # clamps.
     r_d_ref_kohm   = mc.get("r_d_ref_kohm", 10.0)
     r_src_ref_ohm  = mc.get("r_src_ref_ohm", 100.0)
+    # H11F V→I converter sizing.
+    # V_emitter = V_int_out + V_bias (via the op-amp summer).
+    # I_LED = V_emitter / R_sense_led.
+    # Default V_bias=+1.0 V, R_sense_led=100 Ω → V_int=0 gives I_LED=10 mA
+    # which puts the H11F1 near its R_typ=200 Ω OP point. Adjust V_bias if
+    # the bridge wants a different R_DS_OP.
+    v_bias_led    = mc.get("v_bias_led",    1.0)
+    r_sense_led   = mc.get("r_sense_led",   100.0)
+    i_led_bias_ma = v_bias_led / r_sense_led * 1e3  # info-only for the netlist comment
+    # H11F part-variation simulant: scales the internal NJF's BETA, which
+    # equivalently scales R(I_LED) up/down. Per datasheet Figure 5, ±30 %
+    # observed → BETA_SCALE in [0.77, 1.43].
+    h11f_beta_scale = mc.get("h11f_beta_scale", 1.0)
     # LS844 SPICE-model parameters. Default to mid-of-spec V_p, derived
     # I_DSS giving a typical β. mc overrides let us sweep across the
     # 1.0-3.5 V V_p spec range and across I_DSS variation.
@@ -973,30 +986,9 @@ R_buf2_fb2   n_buf_ap_fb 0               1k
             f"V_boost_en vboost_en 0 PWL(0 1 {max(t_boost-1e-6,0):.6e} 1 {t_boost:.6e} 0 1 0)\n"
             f"B_boost 0 T_node I = {p_boost:.6e} * (V(vboost_en) > 0.5)\n"
         )
-    # V_offset reference: self-biased JFET (LS844 second die) that tracks
-    # V_p of the matched J_var on the same die. Produces V_source_ref =
-    # I_ref·R_src_ref ≈ |V_p|/2 (positive). XU_sum subtracts this from
-    # V_int_out: V_ctl = V_int_out - V_source_ref. So V_GS_var at
-    # V_int_out=0 is -V_source_ref ≈ V_p/2 (negative, safely below
-    # the gate-channel diode threshold) and matched to V_p across builds.
-    if force_v_offset_v is not None:
-        # Diagnostic override: replace Q_ref with a fixed source on
-        # n_ref_src equal to -force_v_offset_v, preserving the
-        # V_ctl = V_int_out + force_v_offset_v back-compat convention.
-        v_offset_block = (
-            f"* Fixed V_offset (diagnostic / sweep override): V_ctl_OP = V_int_out + {float(force_v_offset_v):.4g}\n"
-            f"V_offset_ref n_ref_src 0 {-float(force_v_offset_v):.4g}"
-        )
-    else:
-        v_offset_block = (
-            f"* V_p-tracking V_offset reference: LS844 die 2 wired self-biased.\n"
-            f"* I_ref = (VCC - V_drain)/(R_d_ref); V_GS_ref = -I_ref·R_src_ref.\n"
-            f"* V_source_ref (at n_ref_src) ≈ |V_p|/2 ≈ 1 V at typical LS844.\n"
-            f"* On the same die as J_var → ΔV_GS ≤ 5 mV (LS844 grade match).\n"
-            f"R_d_ref    vcc          n_ref_drain   {r_d_ref_kohm:.4g}k\n"
-            f"J_ref      n_ref_drain  0             n_ref_src  J_LS844\n"
-            f"R_src_ref  n_ref_src    0             {r_src_ref_ohm:.4g}"
-        )
+    # H11F architecture has no V_offset reference — control variable is
+    # LED current, set by the V→I converter directly from V_int_out.
+    v_offset_block = ""
     # ------- Optional log demod stage -------
     if log_demod:
         c_lp_log = 1.0 / (2 * np.pi * f_lp_log_hz * 10e3)
@@ -1082,27 +1074,22 @@ XU_osc np nn vcc vee v_osc {opamp_osc}
 * model's drain/source swap when V_DS reverses polarity.
 R_ap1 {v_osc_jfet} n_ap_minus {R_AP:.6g}
 R_ap2 v_ap  n_ap_minus {R_AP:.6g}
-* JFET variable resistor: single LS844 die. JFETs have no body diode, so
-* the back-to-back MOSFET arrangement (needed to keep body diodes reverse-
-* biased on both half-cycles) is unnecessary. The channel handles both
-* V_DS polarities cleanly via its symmetric drain/source structure. R_DS
-* in triode is 1/(2·β·(V_GS-V_p)); at LS844 typical (β=1.25 mS/V) and
-* R_DS_target = 333 Ω, V_GS-V_p ≈ 1.2 V — moderate-overdrive triode,
-* clean linear behaviour, low harmonic content (predicted 6-12 % H2 in
-* this topology without bootstrap, down to 3 % with the bootstrap of
-* commit e5017a4 adapted to the new summer topology).
+* H11F photo-FET variable resistor: a single H11F1 optocoupler. Its
+* "gate" is replaced by LED current (I_LED) — driven by the V→I
+* converter below (XU_vi + Q_led + R_sense_led). Properties:
+*   - No body diode (it's a photo-FET, not an enhancement MOSFET)
+*   - No gate-channel forward-conduction trap (the "gate" is photonic)
+*   - No V_p part variability — the control parameter is I_LED, set
+*     by the loop; part-to-part R(I_LED) variation (±30%) is absorbed
+*     by the integrator shifting V_int_OP. No matched-pair sourcing
+*     required.
+*   - Symmetric V_DS, distortion-free at small signals (0.1% spec at
+*     25 µA RMS; ~3% at 350 mV DC bias per Figure 7).
+* See spice_models/H11F1.spice.txt for the behavioural model.
 *
-* J_var uses the J_LS844 model (defined below). The matched die in the
-* same LS844 package serves as Q_ref for the V_p-tracking V_offset
-* reference, also using the same .model statement (so V_p and β are
-* identical between J_var and Q_ref in simulation; in hardware the LS844
-* on-die match guarantees ±5 mV V_GS, 5 % I_DSS).
-*
-* Drain = v_drv_atten (or v_osc on no-booster tubes), source = n_ap_plus.
-* JFET is symmetric so either side could be drain — by convention we put
-* the higher-voltage-swing side as drain.
-J_var {v_osc_jfet} v_ctl n_ap_plus J_LS844
-.model J_LS844 NJF(Vto={jfet_vp:.4f} Beta={jfet_beta:.4e} Lambda={jfet_lambda:.4f})
+* Pin order: anode, cathode, output_A, output_B.
+.include {(HERE/'spice_models'/'H11F1.spice.txt').as_posix()}
+X_H11F vcc n_led_cathode {v_osc_jfet} n_ap_plus H11F1 PARAMS: H11F_BETA_SCALE={h11f_beta_scale:.4g}
 C_ap n_ap_plus 0 {c_ap_v:.6e}    IC=0
 XU_ap n_ap_plus n_ap_minus vcc vee v_ap {opamp_ap}
 
@@ -1307,58 +1294,38 @@ XU_aw_diff n_aw_diff_plus n_aw_diff_minus vcc vee e_sat {opamp_aw}
 * n_int_minus) is negligible: 5 uV * 1 = 5 uV demand error, < 0.1 K.
 R_bc e_sat n_int_minus {r_int:.6g}
 
-* === Variable-R gate drive: unity-gain SUBTRACTOR with V_p-tracking shift ===
-* V_ctl = V_int_out - V_source_ref, with V_source_ref produced by the
-* self-biased J_ref above. At cold start V_int_out=0, V_ctl = -V_source_ref
-* ≈ V_p/2 (negative), placing J_var at moderate-overdrive triode (R_DS
-* a few hundred Ω, |1-H| moderate, bridge drive moderate). As V_int_out
-* winds negative, V_ctl drops more negative, V_GS drops toward V_p,
-* R_DS grows, drive grows.
+* === V→I converter for the H11F LED ===
+* Drives the H11F's LED with I_LED proportional to V_int_out + V_bias.
+* The op-amp (XU_vi) and BJT (Q_led) form a precision V→I converter:
+*   V_emitter = V_int_out + V_bias  (via virtual short)
+*   I_LED = (V_emitter - V_BE) / R_sense_led ≈ V_emitter / R_sense_led
+* Sized so V_int_out=0 → I_LED ≈ {i_led_bias_ma:.1f} mA (= H11F at
+* R_DS_OP ≈ 200 Ω for ~middle of the bridge balance). V_int swings
+* about ±2 V give I_LED about 0 to 40 mA — wider than needed.
+* Loop polarity: cold filament → demod +D → inverting integrator
+* V_int = -∫D goes negative → V_emitter low → I_LED low → R_DS high
+* → all-pass past corner → MAX bridge drive → filament heats. ✓
 *
-* Why subtractor (not summer with -V_offset source): the self-biased
-* Q_ref naturally produces a POSITIVE V_source_ref (current through R_src
-* lifts the source above ground). Using V_source_ref directly via a
-* subtractor (V_ctl = V_int_out - V_source_ref) gets the correct negative
-* V_offset_effective without an extra inverter stage.
-*
-* The two LS844 dies are matched: V_GS_ref ≈ V_GS_var when both carry
-* the same I, so V_GS_var_OP = V_int_out_OP - V_source_ref_OP is the same
-* gate voltage referenced to V_p of both dies. Across the LS844 V_p spec
-* (1.0-3.5 V), V_int_OP shifts to compensate; the loop converges on
-* whatever value gives R_DS_OP ≈ 333 Ω for the bridge null.
-*
-* Standard 4-resistor diff-amp topology:
-*   V_+IN  = V_int_out · R_gnd/(R_a + R_gnd)
-*   V_-IN  = V(+IN)   (virtual short)
-*   KCL at -IN: (V_source_ref - V_-IN)/R_b = (V_-IN - V_ctl)/R_fb
-*   ⇒ V_ctl = V_+IN · (1 + R_fb/R_b) - V_source_ref · R_fb/R_b
-*           = (R_fb/R_a) · V_int_out - (R_fb/R_b) · V_source_ref     (when R_a=R_gnd, R_b=R_fb)
-*           = V_int_out - V_source_ref                                (all four R = 100k)
-{v_offset_block}
-R_sum_a    v_int_out  n_sum_plus  100k
-R_sum_gnd  n_sum_plus 0           100k
-R_sum_b    n_ref_src  n_sum_minus 100k
-R_sum_fb   v_ctl      n_sum_minus 100k
-* AC bootstrap: inject v_drv_atten and n_ap_plus into +IN through 100k
-* each via AC-coupling caps. With R_a=R_gnd=R_btd=R_bts=100k all to n_sum_plus,
-* +IN AC voltage = (V_int_out + V_drv + V_ap) / 4. Op-amp gain of 2 from +IN
-* gives V_ctl_AC = (V_int_out + V_drv + V_ap)/2 - V_source_ref_AC.
-* For slow V_int (≈ DC) and slow V_source_ref (≈ DC), the AC term at f0
-* is (V_drv + V_ap)/2 = V_avg_DS = V_S_AC + V_DS/2 → V_GS_AC = V_DS/2 →
-* the V_DS-dependent term in R_DS cancels (see Lipshitz-Vanderkooy
-* "JFETs as Voltage-Controlled Resistors" AES Journal). Brings H2 down
-* from ~7-11% to ~3% target.
-*
-* C_btd = C_bts = 100 nF: at f0=1 kHz, |Z_C| = 1.6 kΩ << R_btd=100 kΩ → cap
-* is effectively short at f0. HP cut-off = 1/(2π·100k·100n) ≈ 16 Hz, well
-* below f0 so bootstrap is full strength at the operating frequency, and
-* well above the loop bandwidth (~few Hz) so DC operation is unaffected.
-* Through-hole ceramic / MLCC 100 nF X7R, ~$0.02 each.
-C_btd      v_drv_atten n_btd_mid  100n IC=0
-R_btd      n_btd_mid   n_sum_plus 100k
-C_bts      n_ap_plus   n_bts_mid  100n IC=0
-R_bts      n_bts_mid   n_sum_plus 100k
-XU_sum     n_sum_plus n_sum_minus vcc vee v_ctl {opamp_sum}
+* The +IN summing network with R_vi_a = R_vi_b = 100 kΩ averages
+* V_int_out with the bias voltage. Feedback (R_vi_fb / R_vi_gnd both
+* 100 kΩ) gives op-amp gain ×2 from +IN, so V_emitter = V_int + V_bias.
+V_bias_led v_bias_led  0           {v_bias_led:.4g}
+R_vi_a     v_int_out   n_vi_plus   100k
+R_vi_b     v_bias_led  n_vi_plus   100k
+R_vi_fb    n_led_emit  n_vi_minus  100k
+R_vi_gnd   n_vi_minus  0           100k
+XU_vi      n_vi_plus   n_vi_minus  vcc vee n_vi_out  {opamp_sum}
+* BJT current sink: op-amp output drives BJT base via R_base, BJT
+* collector pulls I_LED through the H11F LED (anode at VCC), emitter
+* sets V_emit = V_int_out + V_bias via R_sense_led to GND.
+* R_base limits op-amp output current and adds stability.
+R_vi_base  n_vi_out    n_led_base  1k
+Q_led      n_led_cathode n_led_base n_led_emit  Q2N3904
+R_sense_led n_led_emit  0           {r_sense_led:.4g}
+* Alias v_ctl = V(n_led_emit) so existing analysis tooling (which probes
+* v_ctl) continues to work. In the H11F arch v_ctl represents the V→I
+* target voltage; I_LED = V(v_ctl) / R_sense_led.
+E_v_ctl_alias v_ctl 0 n_led_emit 0 1
 
 {booster_lines}{boost_line}
 * === 2N3904 ===

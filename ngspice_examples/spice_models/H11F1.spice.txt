@@ -17,7 +17,7 @@
 * H11F1 variant: R_46 max = 200 Ω at I_F=16 mA, I_46=100 µA
 * For H11F2 / H11F3 derivatives, change the BETA and R_TYP scaling.
 *
-.SUBCKT H11F1 1 2 4 6
+.SUBCKT H11F1 1 2 4 6 PARAMS: H11F_BETA_SCALE=1.0
 *
 * === LED side ===
 * Gallium-Aluminum-Arsenide IRED; V_F characteristic from Figure 3:
@@ -65,7 +65,11 @@ B_VGS GATE 4 V =
 *
 * Internal JFET. Drain=6, Gate=GATE, Source=4. Standard NJF model.
 J_DET 6 GATE 4 NJF_H11F
-.MODEL NJF_H11F NJF(VTO=-2.0 BETA=2.5e-3 LAMBDA=0)
+* BETA scaling captures part-to-part R(I_LED) variation: H11F_BETA_SCALE > 1
+* gives lower R at given I_LED (high-current part); < 1 gives higher R.
+* Per datasheet Figure 5, the ±30 % observed range corresponds to
+* H11F_BETA_SCALE in roughly [0.77, 1.43].
+.MODEL NJF_H11F NJF(VTO=-2.0 BETA={2.5e-3 * H11F_BETA_SCALE} LAMBDA=0)
 *
 * Output capacitance (15 pF max per datasheet).
 C_46 4 6 15p
