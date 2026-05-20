@@ -1,0 +1,73 @@
+* H11F1 Photo-FET Optocoupler — Behavioural Model
+*
+* Based on the Fairchild H11F1/F2/F3 datasheet (3/19/03).
+* Captures the key curves for variable-resistor / AGC use:
+*   - LED V_F vs I_F (Figure 3)
+*   - R_46 vs I_LED, normalized to R_typ at I_F=16 mA (Figure 1)
+*   - Symmetric, distortion-free V_46 behavior (with non-linearity at
+*     large signals per Figure 7)
+*
+* Pin map (matches datasheet schematic):
+*   1 = Anode (LED+)
+*   2 = Cathode (LED-)
+*   4 = Output terminal A
+*   6 = Output terminal B
+* (Pins 3 and 5 are no-connects on the physical part; not in the subckt)
+*
+* H11F1 variant: R_46 max = 200 Ω at I_F=16 mA, I_46=100 µA
+* For H11F2 / H11F3 derivatives, change the BETA and R_TYP scaling.
+*
+.SUBCKT H11F1 1 2 4 6
+*
+* === LED side ===
+* Gallium-Aluminum-Arsenide IRED; V_F characteristic from Figure 3:
+*   I_F = 1 mA, 25°C   → V_F ≈ 0.95 V
+*   I_F = 10 mA, 25°C  → V_F ≈ 1.20 V
+*   I_F = 16 mA, 25°C  → V_F ≈ 1.25 V (typ), 1.75 V (max)
+*   I_F = 50 mA, 25°C  → V_F ≈ 1.42 V
+* Model: D with N=1.5 (gives ~60 mV/decade), IS chosen so V_F at 16 mA
+* lands near typ. Series RS captures the V_F slope at high I_F.
+* Sense LED current via a 0 V source in series.
+V_LED_SENSE 1 1A 0
+* IRED model: N=2.0 (steep V_F vs log I_F per Figure 3), IS chosen so
+* V_F at 1 mA ≈ 1.0 V; RS=2 Ω captures the slope above 30 mA.
+D_LED 1A 2 D_H11F_LED
+.MODEL D_H11F_LED D(IS=2e-12 N=2.0 RS=2 BV=5 IBV=1u CJO=50p)
+*
+* === Output detector (photo-FET) ===
+* Symmetric, voltage-controlled resistor whose value depends on I_LED.
+*
+* Per Figure 1 (R vs I_F normalized to 16 mA):
+*   I_F = 1 mA   → R/R_typ ≈ 10
+*   I_F = 4 mA   → R/R_typ ≈ 2.5
+*   I_F = 16 mA  → R/R_typ = 1.0   (R_typ = 200 Ω for H11F1)
+*   I_F = 30 mA  → R/R_typ ≈ 0.6
+*   I_F = 60 mA  → R/R_typ ≈ 0.4
+* Approximate fit: R(I_F) = R_TYP · (16 mA / I_F)^0.85.
+*
+* Realized via an internal JFET in triode region:
+*   R_DS = 1 / (2·BETA·(V_GS - V_TO))
+* For BETA = 2.5 mS/V, V_TO = -2.0 V:
+*   V_GS = -1.0 V → V_OD = 1.0 V → R_DS = 200 Ω  (matches R_typ for H11F1)
+*   V_GS = -1.9 V → V_OD = 0.1 V → R_DS = 2 kΩ   (matches I_F=1 mA point)
+*   V_GS = -0.6 V → V_OD = 1.4 V → R_DS = 143 Ω
+* Piecewise V_GS-vs-log(I_F) to match Figure 1 shape:
+*   for I_F ≤ 16 mA: slope = 0.75 V/decade (matches low-I_F region)
+*   for I_F > 16 mA: slope = 1.5 V/decade  (matches high-I_F compression)
+* Reference: V_GS = -1.0 at I_F = 16 mA.
+* The ternary picks slope on the fly. ln(10) ≈ 2.303.
+*   ln-based: 0.75/2.303 = 0.3257, 1.5/2.303 = 0.6514.
+* Clamp I_F input to a small positive floor so log is defined at startup.
+B_VGS GATE 4 V =
++    -1.0
++   + (i(V_LED_SENSE) <= 16e-3 ? 0.3257 : 0.6514)
++   * ln(max(i(V_LED_SENSE), 1e-9) / 16e-3)
+*
+* Internal JFET. Drain=6, Gate=GATE, Source=4. Standard NJF model.
+J_DET 6 GATE 4 NJF_H11F
+.MODEL NJF_H11F NJF(VTO=-2.0 BETA=2.5e-3 LAMBDA=0)
+*
+* Output capacitance (15 pF max per datasheet).
+C_46 4 6 15p
+*
+.ENDS H11F1
