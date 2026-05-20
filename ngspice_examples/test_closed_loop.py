@@ -992,42 +992,36 @@ R_buf2_fb2   n_buf_ap_fb 0               1k
     # ------- Optional log demod stage -------
     if log_demod:
         c_lp_log = 1.0 / (2 * np.pi * f_lp_log_hz * 10e3)
-        # Output is K_log · f(V_in/v_eps) where K_log sets the small-signal
-        # slope = log_gain_K. K_log = log_gain_K · v_eps.
-        K_log = log_gain_K * v_eps_log
-        if nonlin_type == "tanh":
-            # V_out = K_log · tanh(V_in / v_eps). Slope at V_in=0 is
-            # log_gain_K. Output saturates at ±K_log = ±log_gain_K·v_eps.
-            nonlin_expr = (
-                f"{K_log:.4g} * tanh(V(n_lp_dem)/{v_eps_log:.4g})"
-            )
-            nonlin_label = (f"tanh: gain={log_gain_K:.1f}, "
-                            f"V_sat={v_eps_log*1e3:.2f} mV, "
-                            f"sat at ±{K_log*1e3:.1f} mV")
-        else:
-            # V_out = K_log · sign(V_in) · ln(1 + |V_in|/v_eps).
-            # Slope at V_in=0 is K_log/v_eps = log_gain_K.
-            # Slope at V_in: log_gain_K / (1 + |V|/v_eps).
-            nonlin_expr = (
-                f"{K_log:.4g} * "
-                f"(V(n_lp_dem) >= 0 ? ln(1+V(n_lp_dem)/{v_eps_log:.4g}) : "
-                f"-ln(1+abs(V(n_lp_dem))/{v_eps_log:.4g}))"
-            )
-            nonlin_label = (f"signed-log: gain={log_gain_K:.1f}, "
-                            f"v_eps={v_eps_log*1e3:.2f} mV")
+        # Real-circuit log compressor: NON-INVERTING op-amp with anti-parallel
+        # NPN + PNP clipping the output to ground. Sign-preserving so loop
+        # polarity is unchanged from the linear-demod baseline.
+        #   V_in → +IN of op-amp
+        #   R_gnd from -IN to ground
+        #   R_fb from -IN to op-amp output (V_out)
+        #   Gain = 1 + R_fb/R_gnd = log_gain_K (small-signal)
+        #   NPN + PNP from V_out to ground (B+C tied to V_out, E to GND).
+        #     Conduct when |V_out| approaches V_BE,sat ≈ 0.65 V → output
+        #     saturates there. Smooth exponential clip.
+        # Per-tube log_gain_K varies R_gnd (R_fb fixed at 10 kΩ).
+        r_fb_log_kohm  = 10.0
+        r_gnd_log_kohm = r_fb_log_kohm / (log_gain_K - 1.0)
+        nonlin_label = (f"non-inverting clipper: R_fb=10k, R_gnd={r_gnd_log_kohm:.2g}k "
+                        f"→ gain=1+R_fb/R_gnd={log_gain_K:.1f}, sat at ±V_BE ≈ ±0.65 V")
         log_demod_block = (
-            f"* === Log demod (compressive non-linearity between demod & integrator) ===\n"
+            f"* === Log demod: real-circuit non-inverting BJT-clipped amplifier ===\n"
             f"* LP filter on n_demout (cutoff {f_lp_log_hz:.0f} Hz) extracts DC component\n"
-            f"* (rejects 2 kHz chop ripple so it doesn't alias into DC via the\n"
-            f"* non-linearity). Then non-linear conformer ({nonlin_label}):\n"
-            f"*   log:  unit gain near 0, 1/(1+|V|/v_eps) compression at large signals\n"
-            f"*   tanh: unit gain near 0, hard bound at ±V_sat at large signals\n"
-            f"* Properties:\n"
-            f"*   - same loop gain near OP (small-signal dynamics unchanged)\n"
-            f"*   - bounded integrator wind rate during cold-start → bounded T_pk\n"
+            f"* (rejects 2 kHz chop ripple). Then a sign-preserving soft-clip stage:\n"
+            f"*   {nonlin_label}\n"
+            f"* Small-signal gain = 1 + R_fb/R_gnd = {log_gain_K:.1f}.\n"
+            f"* Large-signal output saturates at ±V_BE,sat ≈ ±0.65 V.\n"
+            f"* Real components: 1 op-amp channel, 1 NPN + 1 PNP, 2 R, 1 LP RC.\n"
             f"R_lp_log    n_demout n_lp_dem  10k\n"
             f"C_lp_log    n_lp_dem 0        {c_lp_log:.6e}\n"
-            f"B_log_dem   n_log_dem 0  V = {nonlin_expr}\n"
+            f"R_gnd_log   n_log_minus 0  {r_gnd_log_kohm:.4g}k\n"
+            f"R_fb_log    n_log_minus n_log_dem  10k\n"
+            f"Q_log_npn   n_log_dem n_log_dem 0 0 Q2N3904\n"
+            f"Q_log_pnp   n_log_dem n_log_dem 0 0 Q2N3906\n"
+            f"XU_log      n_lp_dem n_log_minus  vcc vee n_log_dem  {opamp_int}\n"
         )
         n_int_in = "n_log_dem"
     else:
@@ -1333,6 +1327,11 @@ E_v_ctl_alias v_ctl 0 n_led_emit 0 1
 + ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
 + CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p MJE=.2593 VJE=.75
 + TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
+* === 2N3906 (PNP, used in the log demod's anti-parallel clipper) ===
+.model Q2N3906 PNP(IS=1.41f XTI=3 EG=1.11 VAF=18.7 BF=180.7 NE=1.5
++ ISE=0 IKF=80m XTB=1.5 BR=4.977 NC=2 ISC=0 IKR=0 RC=2.5
++ CJC=9.728p MJC=.5776 VJC=.75 FC=.5 CJE=8.063p MJE=.3677 VJE=.75
++ TR=33.42n TF=179.3p ITF=.4 VTF=4 XTF=6 RB=10)
 
 .options reltol=1e-4 abstol=1p chgtol=1f
 * Limit stored vectors to just the ones we wrdata -- without this,
