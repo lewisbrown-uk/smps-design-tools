@@ -194,7 +194,7 @@ def run_case(tube_key: str, vp_label: str, vp_value: float) -> dict:
 def main():
     cases = [
         (t, lbl, vp)
-        for t in ("iv3", "iv6", "ilc11_7", "ilc11_8")
+        for t in ("iv18", "iv6", "ilc11_7", "ilc11_8")
         for lbl, vp in (("p1", -1.0), ("p3", -3.0))
     ]
     print(f"Running {len(cases)} cases in parallel (T_END={tcl.T_END}s, "

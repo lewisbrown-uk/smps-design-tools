@@ -120,7 +120,7 @@ def lockin_thd(t, x, f0, n_harmonics=10, fs=50_000):
 
 
 def main():
-    tube = sys.argv[1] if len(sys.argv) > 1 else "iv3"
+    tube = sys.argv[1] if len(sys.argv) > 1 else "iv18"
     if tube not in m.TUBES:
         print(f"Unknown tube {tube}; choose from {list(m.TUBES.keys())}")
         sys.exit(1)

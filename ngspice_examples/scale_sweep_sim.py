@@ -17,7 +17,7 @@ def run_case(tube_key, scale):
     spec = TUBES[tube_key]
     mc = {'r_amb': spec['r_amb'], 'sigma_eps_A': spec['sigma_eps_A'], 'c_th': spec['c_th'],
           'r_top_ref': spec['r_top_ref'], 'r_bot_ref': spec['r_bot_ref'], 'r_sense': spec['r_sense'],
-          'c_ap': 470e-9 if tube_key != 'iv3' else 100e-9, 'jfet_vp': -1.5}
+          'c_ap': 470e-9 if tube_key != 'iv18' else 100e-9, 'jfet_vp': -1.5}
     if spec.get('booster'): mc['booster'] = True
     if spec.get('buf_fb1') is not None: mc['buf_fb1'] = spec['buf_fb1']
     if spec.get('buf_fb_ap') is not None: mc['buf_fb_ap'] = spec['buf_fb_ap']

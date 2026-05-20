@@ -1,7 +1,7 @@
 """Capture driver BJT collector currents over one settled AC cycle for each
 booster tube and plot them.
 
-For each of IV-6, ILC1-1/7, ILC1-1/8 (booster=on tubes; IV-3 has no Buffer 1/2):
+For each of IV-6, ILC1-1/7, ILC1-1/8 (booster=on tubes; IV-18 has no Buffer 1/2):
   - Run the closed-loop sim
   - Capture @Q_o_npn[ic], @Q_o_pnp[ic], @Q_a_npn[ic], @Q_a_pnp[ic] in steady state
   - Plot one period centred ~10 ms before the end of the run

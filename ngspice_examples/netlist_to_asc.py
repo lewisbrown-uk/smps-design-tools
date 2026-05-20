@@ -7,7 +7,7 @@ meaningful layout in LTspice once the components are visible on the page.
 
 Usage:
     python3 netlist_to_asc.py [TUBE]
-        TUBE in {iv3, iv6, ilc11_7, ilc11_8} (default: ilc11_7)
+        TUBE in {iv18, iv6, ilc11_7, ilc11_8} (default: ilc11_7)
 
 Writes regulator_<tube>.asc next to this script.
 """

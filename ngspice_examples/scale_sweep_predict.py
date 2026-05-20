@@ -1,5 +1,5 @@
 """Sweep r_int_scale for each tube and predict (f_crossover, PM, zeta) at each.
-Goal: identify the scale that gives PM ~ 25-30° (matching IV-3 baseline)."""
+Goal: identify the scale that gives PM ~ 25-30° (matching IV-18 baseline)."""
 import sys
 sys.path.insert(0, '.')
 import numpy as np

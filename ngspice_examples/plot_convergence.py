@@ -72,7 +72,7 @@ def make_plot(results):
     fig.suptitle("NMOS+level-shift variable-R architecture: convergence per tube\n"
                  "(C_AP=1uF, T_END=2s, V_offset=+2.0V, V_clamp_lo=-0.7V, "
                  "manufacturer DMN3404L/DMP3098L, lvl3 op-amp)", fontsize=11)
-    for idx, tube_key in enumerate(('iv3', 'iv6', 'ilc11_7', 'ilc11_8')):
+    for idx, tube_key in enumerate(('iv18', 'iv6', 'ilc11_7', 'ilc11_8')):
         r = next((x for x in results if x['tube'] == tube_key), None)
         if r is None or 'error' in r:
             axes[idx][0].set_title(f"{tube_key}: FAIL")
@@ -131,7 +131,7 @@ def make_plot(results):
 def main():
     print(f"Running 4 cases in parallel...", flush=True)
     with ThreadPoolExecutor(max_workers=4) as ex:
-        futs = {ex.submit(run_case, t): t for t in ('iv3', 'iv6', 'ilc11_7', 'ilc11_8')}
+        futs = {ex.submit(run_case, t): t for t in ('iv18', 'iv6', 'ilc11_7', 'ilc11_8')}
         results = []
         for f in as_completed(futs):
             try:

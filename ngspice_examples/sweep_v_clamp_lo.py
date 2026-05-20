@@ -86,7 +86,7 @@ def main():
     clo_values = [0.3]
     cases = []
     for clo in clo_values:
-        for tube in ('iv3', 'iv6', 'ilc11_7', 'ilc11_8'):
+        for tube in ('iv18', 'iv6', 'ilc11_7', 'ilc11_8'):
             for vp in (-1.0, -3.0):
                 cases.append((tube, vp, clo))
     print(f"Running {len(cases)} cases in parallel...", flush=True)
@@ -117,7 +117,7 @@ def main():
     print(f"{'tube':10s}  {'V_p':>5s}  ", end='')
     for clo in clo_values: print(f" clo={clo:.2f}    ", end='')
     print()
-    for tube in ('iv3', 'iv6', 'ilc11_7', 'ilc11_8'):
+    for tube in ('iv18', 'iv6', 'ilc11_7', 'ilc11_8'):
         for vp in (-1.0, -3.0):
             print(f"{tube:10s}  {vp:+.1f}  ", end='')
             for clo in clo_values:

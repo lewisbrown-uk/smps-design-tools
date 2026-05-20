@@ -30,7 +30,7 @@ from validate_cap_470nf_iv6max_level1 import swap_to_level1
 
 tcl.T_END = 3.0  # enough to settle past cold-start
 VOS_MAX = 1.5e-3  # TLV9154 typical worst-case Vos
-TUBES = ("iv3", "iv6", "ilc11_7", "ilc11_8")
+TUBES = ("iv18", "iv6", "ilc11_7", "ilc11_8")
 
 
 def build_mc(tube_key, extra=None):

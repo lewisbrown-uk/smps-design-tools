@@ -8,8 +8,8 @@ from test_closed_loop import TUBES, make_netlist, WORK
 from diag_ilc7_peak import patch_extra_signals
 from validate_cap_470nf_iv6max_level1 import swap_to_level1
 
-# IV-3 uses C_AP=100nF (per our earlier fix), others use 470nF
-C_AP_MAP = {'iv3': 100e-9, 'iv6': 470e-9, 'ilc11_7': 470e-9, 'ilc11_8': 470e-9}
+# IV-18 uses C_AP=100nF (per our earlier fix), others use 470nF
+C_AP_MAP = {'iv18': 100e-9, 'iv6': 470e-9, 'ilc11_7': 470e-9, 'ilc11_8': 470e-9}
 
 def run_case(tube_key, vp_label, vp_value):
     spec = TUBES[tube_key]
@@ -48,8 +48,8 @@ def run_case(tube_key, vp_label, vp_value):
     return r
 
 if __name__ == '__main__':
-    cases = [(t, 'typ', -1.5) for t in ('iv3','iv6','ilc11_7','ilc11_8')]
-    cases += [(t, 'max', -3.0) for t in ('iv3','iv6','ilc11_7','ilc11_8')]
+    cases = [(t, 'typ', -1.5) for t in ('iv18','iv6','ilc11_7','ilc11_8')]
+    cases += [(t, 'max', -3.0) for t in ('iv18','iv6','ilc11_7','ilc11_8')]
     print(f'Running {len(cases)} cases in parallel...', flush=True)
     with ThreadPoolExecutor(max_workers=8) as ex:
         futs = [ex.submit(run_case, *c) for c in cases]
