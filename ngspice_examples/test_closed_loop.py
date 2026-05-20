@@ -363,6 +363,11 @@ def make_netlist(data_path: Path,
     # K>1: boost small-signal gain to speed up settling near OP, while the
     # 1/(eps+|V|) compression still bounds wind rate at cold-start.
     log_gain_K  = mc.get("log_gain_K", 1.0)
+    # log_clip_type: 'bjt' = NPN+PNP anti-parallel (V_BE,sat ≈ 0.65 V);
+    # 'schottky' = BAT54 anti-parallel (V_F ≈ 0.3 V). Schottky gives a
+    # lower output saturation level → bounded integrator wind rate
+    # during cold-start → less T_pk overshoot.
+    log_clip_type = mc.get("log_clip_type", "bjt")
     # HF steady-state mode: f0 bumped to 100 kHz, Wien C and C_AP scaled
     # accordingly, filament replaced with a fixed R_op resistor (no thermal
     # dynamics), and v_int_out forced to the per-tube settled value (so the
@@ -1019,9 +1024,12 @@ R_buf2_fb2   n_buf_ap_fb 0               1k
             f"C_lp_log    n_lp_dem 0        {c_lp_log:.6e}\n"
             f"R_gnd_log   n_log_minus 0  {r_gnd_log_kohm:.4g}k\n"
             f"R_fb_log    n_log_minus n_log_dem  10k\n"
-            f"Q_log_npn   n_log_dem n_log_dem 0 0 Q2N3904\n"
-            f"Q_log_pnp   n_log_dem n_log_dem 0 0 Q2N3906\n"
-            f"XU_log      n_lp_dem n_log_minus  vcc vee n_log_dem  {opamp_int}\n"
+            + (f"D_log_pos   n_log_dem 0  BAT54\n"
+               f"D_log_neg   0 n_log_dem  BAT54\n"
+               if log_clip_type == "schottky"
+               else f"Q_log_npn   n_log_dem n_log_dem 0 0 Q2N3904\n"
+                    f"Q_log_pnp   n_log_dem n_log_dem 0 0 Q2N3906\n")
+            + f"XU_log      n_lp_dem n_log_minus  vcc vee n_log_dem  {opamp_int}\n"
         )
         n_int_in = "n_log_dem"
     else:
@@ -1332,6 +1340,10 @@ E_v_ctl_alias v_ctl 0 n_led_emit 0 1
 + ISE=0 IKF=80m XTB=1.5 BR=4.977 NC=2 ISC=0 IKR=0 RC=2.5
 + CJC=9.728p MJC=.5776 VJC=.75 FC=.5 CJE=8.063p MJE=.3677 VJE=.75
 + TR=33.42n TF=179.3p ITF=.4 VTF=4 XTF=6 RB=10)
+* === BAT54 Schottky (V_F ≈ 0.3 V at 10 mA) — used in the low-V_F log
+* clipper variant. SOT-23 dual-anode, but here a single junction is enough.
+.model BAT54 D(IS=4e-8 N=1.0 RS=2 BV=30 IBV=10u CJO=10p VJ=0.4 M=0.4
++ EG=0.69 XTI=2.0 TT=10n)
 
 .options reltol=1e-4 abstol=1p chgtol=1f
 * Limit stored vectors to just the ones we wrdata -- without this,

@@ -34,10 +34,11 @@ def run_case(tube_key):
     # Enable log demod by default with the per-tube optimal gain
     # (sweep_logdem_gain_4tubes.png 2026-05-20).
     if spec.get('log_gain_K') is not None:
-        mc['log_demod']  = True
-        mc['log_gain_K'] = spec['log_gain_K']
-        mc['v_eps_log']  = 5e-3
-        mc['nonlin_type']= 'log'
+        mc['log_demod']    = True
+        mc['log_gain_K']   = spec['log_gain_K']
+        mc['v_eps_log']    = 5e-3
+        mc['nonlin_type']  = 'log'
+        mc['log_clip_type']= 'schottky'  # BAT54: lower V_F → less cold-start drive
 
     label = f"conv_{tube_key}"
     cir = tcl.WORK / f'{label}.cir'
