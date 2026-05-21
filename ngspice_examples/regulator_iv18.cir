@@ -151,8 +151,22 @@ XU_dem vplus n_dem_minus vcc vee n_demout uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=
 *   Ki = 1/(R_INT * C_INT)         integrator (DC dominates)
 *   Kp = R_PID/R_INT + C_PID/C_INT proportional (mid-band)
 *   Kd = R_PID * C_PID             derivative (HF, fights overshoot)
-R_intin  n_demout n_int_minus 50000
-C_intin  n_demout n_int_minus 1.000000e-09
+* === Log demod: real-circuit non-inverting BJT-clipped amplifier ===
+* LP filter on n_demout (cutoff 200 Hz) extracts DC component
+* (rejects 2 kHz chop ripple). Then a sign-preserving soft-clip stage:
+*   non-inverting clipper: R_fb=10k, R_gnd=20k → gain=1+R_fb/R_gnd=1.5, sat at ±V_BE ≈ ±0.65 V
+* Small-signal gain = 1 + R_fb/R_gnd = 1.5.
+* Large-signal output saturates at ±V_BE,sat ≈ ±0.65 V.
+* Real components: 1 op-amp channel, 1 NPN + 1 PNP, 2 R, 1 LP RC.
+R_lp_log    n_demout n_lp_dem  10k
+C_lp_log    n_lp_dem 0        7.957747e-08
+R_gnd_log   n_log_minus 0  20k
+R_fb_log    n_log_minus n_log_dem  10k
+D_log_pos   n_log_dem 0  BAT54
+D_log_neg   0 n_log_dem  BAT54
+XU_log      n_lp_dem n_log_minus  vcc vee n_log_dem  uopamp_lvl3 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=50m Vrail=100m Vmax=40 Vos=5.000000e-06
+R_intin  n_log_dem n_int_minus 50000
+C_intin  n_log_dem n_int_minus 1.000000e-09
 R_intfb  n_int_pidp v_int_raw 500000
 * Realistic startup: cap begins uncharged (no IC). Loop self-starts from
 * the intentional 1% bridge mismatch above + Vos drift in the demod and
