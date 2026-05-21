@@ -38,6 +38,22 @@ using the LEVEL 1 placeholder model in routine sweeps. A real ±9 V
 LDO (LM7809 / LM7909 or LM317-style adjustable, see "Rails" below)
 will ramp adequately on its own.
 
+**Filament resistance tolerance is unavoidable T_end variation.** The
+PCB-side bridge ratio `R_top_ref / R_bot_ref` is fixed to the datasheet
+`R_op` value. If the actual built tube's filament resistance differs
+from the datasheet — typically by ±10–15 % for legacy VFDs due to
+wire-gauge / coating / age variation — the loop drives the filament to
+the **bridge-target resistance**, which corresponds to a different
+temperature. Mapping: `T_actual ≈ T_op × (R_actual / R_nominal)^(1/1.2)`.
+So ±10 % filament R yields ±60 K of T_end variation. Loop dynamics
+(cold-start overshoot, settling, stability) are bounded across this
+range — verified by sweep_filament_tol_h11f.py. The T variation itself
+is a sourcing question, not a circuit question. Builders who want
+tighter T accuracy can measure the cold filament R with a multimeter
+and select an E96 `R_top_ref` accordingly — that's a build-time
+**selection**, not a build-time trim, and is consistent with the
+no-trim project constraint.
+
 **H2 distortion at v_ap (H11F arch).** The H11F1 variable-R has the
 same R_DS(V_DS) nonlinearity as any JFET. Measured steady-state H2
 at v_ap is **6–13 %** across the 4 tubes (IV-18:13 %, IV-6:9 %,
