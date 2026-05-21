@@ -14,11 +14,18 @@ Reference designators follow the `regulator_<tube>.cir` names.
 ~545 mA (see CAVEAT comment in `uopamp.lib`). This is a *modelling*
 choice, not a real circuit parameter. The chosen real parts have
 short-circuit currents of **65 mA (TLV9154)** and **50 mA (OPA2188)**,
-both spec'd typ at +25 °C. The heaviest op-amp load in the circuit is
-`XU_osc` driving the 10 k Wien return at peak — ~1.4 mA pk — and the
-buffer op-amps drive only gate-damping R (~1 mA pk). Real Isc is
-well above the design requirement, so no op-amp will ever current-limit
-in operation.
+both spec'd typ at +25 °C. Heaviest loads, by analytical bound:
+
+  - `XU_osc`     ~1.4 mA pk (Wien return through 10 k)
+  - `XU_buf_*`   ~1 mA pk (gate-damping R, 1 k)
+  - `XU_int`     ~1.7 mA pk (charging C_intfb=318 nF at integrator pk excursion)
+  - `XU_vi` (new for H11F) ~0.2 mA pk (Q2 base via R_vi_base=1 k; full
+    I_LED flows through Q2 collector→emitter, not through XU_vi output)
+  - `XU_log` (new for H11F) ~0.06 mA pk (clipped at ±0.3 V into R_fb_log=10 k)
+  - All other op-amp outputs: ≤0.1 mA pk
+
+Worst-case load is ~1.7 mA pk at the OPA2188 integrator, ~29× below
+its 50 mA Isc. No op-amp will current-limit in operation.
 
 **PSU rail PWL.** The model defaults to instantaneous rails (`t_rail_ramp=0`).
 Real LDOs ramp ±9 V over ~1–10 ms as the output cap charges through
