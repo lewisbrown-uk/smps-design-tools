@@ -247,12 +247,16 @@ def main():
     spec = m.TUBES[tube]
     mc = {k: spec[k] for k in ("r_amb", "sigma_eps_A", "c_th",
                                "r_top_ref", "r_bot_ref", "r_sense")}
-    if spec.get("booster"): mc["booster"] = True
-    if spec.get("c_ap") is not None: mc["c_ap"] = spec["c_ap"]
-    if spec.get("buf_fb1") is not None: mc["buf_fb1"] = spec["buf_fb1"]
-    if spec.get("buf_fb_ap") is not None: mc["buf_fb_ap"] = spec["buf_fb_ap"]
-    if spec.get("v_buf") is not None: mc["v_buf"] = spec["v_buf"]
-    if spec.get("wien_alpha") is not None: mc["wien_alpha"] = spec["wien_alpha"]
+    for k in ("booster", "ce_buf", "mos_buf"):
+        if spec.get(k): mc[k] = True
+    for k in ("c_ap", "buf_fb1", "buf_fb_ap", "v_buf", "wien_alpha"):
+        if spec.get(k) is not None: mc[k] = spec[k]
+    if spec.get("log_gain_K") is not None:
+        mc["log_demod"]    = True
+        mc["log_gain_K"]   = spec["log_gain_K"]
+        mc["v_eps_log"]    = 5e-3
+        mc["nonlin_type"]  = "log"
+        mc["log_clip_type"]= "schottky"
     netlist = m.make_netlist(HERE / f"_unused.data",
                              v_preset=0.55, t_ramp=0.1,
                              r_int_scale=spec["r_int_scale"], mc=mc)
