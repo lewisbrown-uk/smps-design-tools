@@ -31,6 +31,27 @@ using the LEVEL 1 placeholder model in routine sweeps. A real ±9 V
 LDO (LM7809 / LM7909 or LM317-style adjustable, see "Rails" below)
 will ramp adequately on its own.
 
+**H2 distortion at v_ap (H11F arch).** The H11F1 variable-R has the
+same R_DS(V_DS) nonlinearity as any JFET. Measured steady-state H2
+at v_ap is **6–13 %** across the 4 tubes (IV-18:13 %, IV-6:9 %,
+ILC1-1/7:6 %, ILC1-1/8:9 %). The LS844 arch suppressed this to
+<0.4 % via a V_DS/2 gate bootstrap, but that trick doesn't translate
+to the H11F (the "gate" is LED current, V→I bandwidth and LED time
+constants are too slow to bootstrap at 1 kHz). **This is acceptable
+for a filament regulator** because:
+
+  - the tube filament is a passive thermal resistor — heated by RMS
+    power, doesn't care about voltage waveform H2;
+  - the chopper demod re-rectifies the 2 kHz tone at v_diff to a
+    small DC offset, which the loop compensates via V_int_OP shift;
+    end-to-end T accuracy is <0.5 K (per pmos_convergence.png);
+  - extra filament dissipation from H2 components is ~1 % of
+    fundamental power — well within margin.
+
+The 10× higher H2 vs the bootstrapped LS844 is the cost of
+eliminating the V_p part-variation failure that stalled IV-18
+cold-start at V_p=−3.5 V. Verified 2026-05-21 (measure_h2_distortion.py).
+
 ---
 
 ## Common components (all 4 tubes identical)

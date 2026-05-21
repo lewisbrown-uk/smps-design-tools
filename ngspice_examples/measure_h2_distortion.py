@@ -43,6 +43,13 @@ def run_one(tube_key):
         if spec.get(k): mc[k] = True
     for k in ("buf_fb1", "buf_fb_ap", "v_buf", "c_ap"):
         if spec.get(k) is not None: mc[k] = spec[k]
+    # Enable log demod with per-tube optimal gain (H11F arch defaults).
+    if spec.get("log_gain_K") is not None:
+        mc["log_demod"]    = True
+        mc["log_gain_K"]   = spec["log_gain_K"]
+        mc["v_eps_log"]    = 5e-3
+        mc["nonlin_type"]  = "log"
+        mc["log_clip_type"]= "schottky"
     cir = tcl.WORK / f"h2_{tube_key}.cir"
     dat = tcl.WORK / f"h2_{tube_key}.data"
     raw = tcl.make_netlist(dat, v_preset=0.0, t_ramp=0.0,
