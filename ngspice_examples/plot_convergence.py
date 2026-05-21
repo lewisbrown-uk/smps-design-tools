@@ -77,9 +77,9 @@ def make_plot(results):
     # T peak is annotated -- the prior 4-up grid hid the cold-start thermal
     # overshoot when rendered at thumbnail size.
     fig, axes = plt.subplots(4, 2, figsize=(14, 14), sharex=False)
-    fig.suptitle("JFET (LS844) variable-R + V_DS/2 bootstrap + log demod: convergence per tube\n"
-                 "(C_AP=470nF, T_END=2s, V_p-tracking ref, V_clamp_lo=-2.5V, "
-                 "log demod per-tube gain {IV-18:10, IV-6:7.5, ILC1-1/7:5, ILC1-1/8:7.5}, "
+    fig.suptitle("H11F1 variable-R + log demod + BAT54 Schottky clipper: convergence per tube\n"
+                 "(C_AP=470nF, T_END=2s, V→I converter LED drive, "
+                 "log demod per-tube gain {IV-18:1.5, IV-6:30, ILC1-1/7:20, ILC1-1/8:30}, "
                  "lvl3 op-amp)", fontsize=10)
     for idx, tube_key in enumerate(('iv18', 'iv6', 'ilc11_7', 'ilc11_8')):
         r = next((x for x in results if x['tube'] == tube_key), None)

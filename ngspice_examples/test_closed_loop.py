@@ -126,14 +126,17 @@ TUBES = {
     # IV-18, so renamed 2026-05-20. Resistances unchanged for continuity --
     # to be re-tuned to true IV-18 spec after settling-speed tuning lands.)
     # log_gain_K per tube: optimal small-signal gain for the signed-log
-    # demod conformer (per sweep_logdem_gain_4tubes.png). Picked for zero
-    # cold-start overshoot AND fast settle:
-    #   IV-18:   10   (0 K overshoot, 435 ms settle)
-    #   IV-6:    7.5  (0 K, 743 ms)
-    #   ILC1-1/7: 5   (+1 K, 402 ms — its larger V_op makes the loop
-    #                  aggressive at higher gain; gain=10 gives +9 K)
-    #   ILC1-1/8: 7.5 (0 K, 561 ms)
-    "iv18":    _make_tube("IV-18",    R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100,  r_int_scale=0.5, booster=True, buf_fb1=1.6e3, buf_fb_ap=1.6e3, v_buf=1.4, ce_buf=True, mos_buf=True, log_gain_K=10.0),
+    # demod conformer on the H11F arch with BAT54 Schottky anti-parallel
+    # clipper (per sweep_h11f_log_gain.png 2026-05-21):
+    #   IV-18:    1.5  (+3 K overshoot, 334 ms settle — sweet spot just
+    #                   below the saturation cliff at gain≈1.7)
+    #   IV-6:     30   (+14 K, 226 ms — asymptotic to clip-limited floor)
+    #   ILC1-1/7: 20   (+5 K, 116 ms — plateau reached)
+    #   ILC1-1/8: 30   (+12 K, 200 ms — asymptotic to clip-limited floor)
+    # Settling is thermal-limited (flat across gain) for 3 of 4 tubes;
+    # only IV-18 transitions from slow (2.6 s at gain=1) to fast
+    # (~300 ms above gain=1.5) as the clipper begins to saturate.
+    "iv18":    _make_tube("IV-18",    R_op=100, V_op=1.0, T_op=800, R_sen=10, R_bot_ref=100,  r_int_scale=0.5, booster=True, buf_fb1=1.6e3, buf_fb_ap=1.6e3, v_buf=1.4, ce_buf=True, mos_buf=True, log_gain_K=1.5),
     # Per-tube buf_fb1 sets buffer gain via R_fb1:R_fb2(=1k):
     #   buf_fb1 = 6.2k -> k_buf = 7.2 (matches k_atten=7.15, unity overall gain)
     #   buf_fb1 = 9.1k -> k_buf = 10.1 (1.41x net gain, for ILC1-1/7)
@@ -199,7 +202,7 @@ TUBES = {
     #     overshoot at V_p typ
     #   ILC1-1/7: scale=1.5 -- larger slowdown to compensate for the higher
     #     loop gain through its K_buf=14 buffer
-    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.7, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True, log_gain_K=7.5),
+    "iv6":     _make_tube("IV-6",     R_op= 20, V_op=1.0, T_op=800, R_sen= 5, R_bot_ref=500,  r_int_scale=0.7, booster=True, buf_fb1=2.0e3, buf_fb_ap=2.0e3, v_buf=1.2, ce_buf=True, mos_buf=True, log_gain_K=30.0),
     # ILC1-1/7 K_buf raised from 10.1 to 14 (buf_fb1: 9.1k -> 13k E24).
     # The old 10.1 put V_d_max = 8.47 V_pk vs V_d_required = 8.485 V_pk --
     # zero headroom, loop pinned at the asymptote of (1-H_ap), couldn't
@@ -208,8 +211,8 @@ TUBES = {
     # = 11.76 V_pk (39% headroom over required), letting the loop operate
     # comfortably below the asymptote with real V_d-vs-x sensitivity.
     # v_buf raised 4.3 -> 6.5 V to cover the larger V_top_pk swing.
-    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=1.5, booster=True, buf_fb1=13e3, buf_fb_ap=13e3, v_buf=6.5, log_gain_K=5.0),
-    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.7, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True, log_gain_K=7.5),
+    "ilc11_7": _make_tube("ILC1-1/7", R_op= 25, V_op=5.0, T_op=800, R_sen= 5, R_bot_ref=1000, r_int_scale=1.5, booster=True, buf_fb1=13e3, buf_fb_ap=13e3, v_buf=6.5, log_gain_K=20.0),
+    "ilc11_8": _make_tube("ILC1-1/8", R_op=  8, V_op=1.2, T_op=800, R_sen= 2, R_bot_ref=200,  r_int_scale=0.7, booster=True, buf_fb1=2.5e3, buf_fb_ap=2.5e3, v_buf=1.4, ce_buf=True, mos_buf=True, log_gain_K=30.0),
 }
 # Higher-current tubes (IV-6, ILC1-1/7, ILC1-1/8) enable the buffer stage:
 # two non-inverting unity-gain op-amp + class-AB BC337/BC327 BJT pair buffers
@@ -1009,7 +1012,10 @@ R_buf2_fb2   n_buf_ap_fb 0               1k
         #     saturates there. Smooth exponential clip.
         # Per-tube log_gain_K varies R_gnd (R_fb fixed at 10 kΩ).
         r_fb_log_kohm  = 10.0
-        r_gnd_log_kohm = r_fb_log_kohm / (log_gain_K - 1.0)
+        # Non-inverting gain = 1 + R_fb/R_gnd. Gain=1 ⇒ R_gnd=∞ (unity
+        # follower). Cap at 10 MΩ as a practical 'open'.
+        r_gnd_log_kohm = (r_fb_log_kohm / (log_gain_K - 1.0)
+                          if log_gain_K > 1.0001 else 1e4)
         nonlin_label = (f"non-inverting clipper: R_fb=10k, R_gnd={r_gnd_log_kohm:.2g}k "
                         f"→ gain=1+R_fb/R_gnd={log_gain_K:.1f}, sat at ±V_BE ≈ ±0.65 V")
         log_demod_block = (
