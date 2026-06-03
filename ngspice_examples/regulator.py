@@ -1,18 +1,24 @@
-"""Settling, overshoot, dissipation hotspots for stage 5 closed-loop regulator.
+"""Canonical VFD-filament regulator: netlist generator + diagnostic harness.
 
-Two simulations:
+`make_netlist(**TUBES[key])` is the single source of truth for the regulator
+design across all four tubes (ilc11_7/iv6/iv18/ilc11_8) — H11F variable-gain
+(split-gain Stage 1 + Stage 2) driving a BJT class-AB push-pull buffer, an AC
+bridge, synchronous + log demod, and a PID integrator.  `dump_netlists.py` and
+`netlist_to_asc.py` import this module to emit the regulator_<tube>.{cir,asc}
+artifacts.  (Superseded the older all-pass test_closed_loop.py on 2026-06-02.)
+
+The diagnostic functions below run two simulations:
   A) Cold start (no integrator IC, all caps zero, filament at T_amb).
-     Run 15 s.  Find settling time, peak T (overshoot), V_fil response.
+     Find settling time, peak T (overshoot), V_fil response.
   B) Steady-state with per-device current sensing (V_im=0V sources in
-     series with key paths).  Run 4 s with integrator IC near equilibrium.
-     Compute per-device dissipation, identify hotspots.
+     series with key paths).  Compute per-device dissipation, find hotspots.
 """
 import subprocess, numpy as np, sys, re
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 
 HERE = Path(__file__).resolve().parent
-WORK = HERE / "_stage5_diag"; WORK.mkdir(exist_ok=True)
+WORK = HERE / "_regulator"; WORK.mkdir(exist_ok=True)
 UOPAMP = (HERE / "uopamp.lib").as_posix()
 H11F_LIB = (HERE / "spice_models" / "H11F1.spice.txt").as_posix()
 
@@ -279,7 +285,7 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
             f"XU_vgain 0 n_h11f_out vcc_buf vee_buf v_drv {op}"
         )
 
-    return f"""* Stage 5 diagnostics: polarity_swap={polarity_swap}, instrument_power={instrument_power}, use_split_gain={use_split_gain}
+    return f"""* Regulator netlist: polarity_swap={polarity_swap}, instrument_power={instrument_power}, use_split_gain={use_split_gain}
 .include {UOPAMP}
 .include {H11F_LIB}
 {QMODELS}

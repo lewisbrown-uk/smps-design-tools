@@ -245,7 +245,7 @@ def emit_asc(components, out_path: Path, title: str):
 def main():
     tube = sys.argv[1] if len(sys.argv) > 1 else "ilc11_7"
     sys.path.insert(0, str(HERE))
-    import stage5_diagnose as m
+    import regulator as m
     if tube not in m.TUBES:
         print(f"Unknown tube {tube}; available: {list(m.TUBES.keys())}")
         sys.exit(1)

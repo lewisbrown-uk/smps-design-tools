@@ -1,6 +1,6 @@
 """Integrated filament-driver cascade: real Wien oscillator -> filament regulator.
 
-Replaces stage5_diagnose's behavioral B_src (a sine with a soft-start envelope)
+Replaces regulator's behavioral B_src (a sine with a soft-start envelope)
 with the actual 2-NPN-symmetric-clamp Wien oscillator (the one in
 wien_oscillator.py / test_closed_loop.py), and adds a V_clamp_hi drive-ceiling
 soft-start to recover the cold-start overshoot the behavioral envelope had been
@@ -33,7 +33,7 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import stage5_diagnose as s5
+import regulator as s5
 
 # Q2N3904 model (from test_closed_loop.py) for the Wien clamp transistors.
 Q2N3904 = """.model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259

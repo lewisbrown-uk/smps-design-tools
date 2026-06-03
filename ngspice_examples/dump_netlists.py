@@ -1,4 +1,4 @@
-"""Dump the canonical regulator netlist (as stage5_diagnose.make_netlist
+"""Dump the canonical regulator netlist (as regulator.make_netlist
 generates it) for each tube to a .cir file.  The .cir is the reference used
 to cross-check a hand-drawn LTspice schematic against the ngspice netlist
 when diagnosing why a converted .asc doesn't simulate quite the same way.
@@ -8,7 +8,7 @@ import sys
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
-import stage5_diagnose as m
+import regulator as m
 
 
 def main():
@@ -18,7 +18,7 @@ def main():
         out = HERE / f"regulator_{tube_key}.cir"
         header = (
             f"* VFD-filament regulator netlist for {name} (tube={tube_key})\n"
-            f"* Generated from stage5_diagnose.py make_netlist (TUBES['{tube_key}']);\n"
+            f"* Generated from regulator.py make_netlist (TUBES['{tube_key}']);\n"
             f"* matches the netlist that regulator_{tube_key}.asc was converted from.\n\n"
         )
         out.write_text(header + netlist)

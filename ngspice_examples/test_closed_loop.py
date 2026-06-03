@@ -2,8 +2,8 @@
 
 This is the original JFET/H11F *all-pass* (phase-modulation) regulator
 architecture.  It has been SUPERSEDED by the H11F *variable-gain* +
-BJT push-pull design in `stage5_diagnose.py`, which is now the canonical
-generator: `stage5_diagnose.TUBES` + `make_netlist(**TUBES[key])` produces
+BJT push-pull design in `regulator.py`, which is now the canonical
+generator: `regulator.TUBES` + `make_netlist(**TUBES[key])` produces
 the `regulator_<key>.{cir,asc}` artifacts (via `dump_netlists.py` /
 `netlist_to_asc.py`).  Do NOT use this file for new work; it remains only
 so the ~70 legacy experiment/diagnostic scripts that import it still run.

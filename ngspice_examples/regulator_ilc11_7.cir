@@ -1,8 +1,8 @@
 * VFD-filament regulator netlist for ILC1-1/7 (tube=ilc11_7)
-* Generated from stage5_diagnose.py make_netlist (TUBES['ilc11_7']);
+* Generated from regulator.py make_netlist (TUBES['ilc11_7']);
 * matches the netlist that regulator_ilc11_7.asc was converted from.
 
-* Stage 5 diagnostics: polarity_swap=False, instrument_power=False, use_split_gain=True
+* Regulator netlist: polarity_swap=False, instrument_power=False, use_split_gain=True
 .include /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/uopamp.lib
 .include /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/spice_models/H11F1.spice.txt
 .model QBC337 NPN (IS=15.6f BF=290 VAF=125 IKF=1.0 ISE=29p NE=1.5 BR=4.65 RB=1 RC=0.41 CJC=12p MJC=0.4 VJC=0.4 CJE=20p MJE=0.4 VJE=0.85)
@@ -189,6 +189,6 @@ R_led_set n_v_led n_led_a 270
 .save v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a)
 .control
 run
-wrdata /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/_stage5_diag/run.data v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a)
+wrdata /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/_regulator/run.data v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a)
 .endc
 .end
