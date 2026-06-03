@@ -1,56 +1,25 @@
-"""Dump the raw netlist (as the test_closed_loop.py make_netlist function
-generates it) for each tube to a .cir file. Useful for comparing the
-LTspice-generated netlist against the original ngspice netlist when
-diagnosing why a converted .asc doesn't simulate quite the same way.
+"""Dump the canonical regulator netlist (as stage5_diagnose.make_netlist
+generates it) for each tube to a .cir file.  The .cir is the reference used
+to cross-check a hand-drawn LTspice schematic against the ngspice netlist
+when diagnosing why a converted .asc doesn't simulate quite the same way.
 """
 from pathlib import Path
 import sys
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
-import test_closed_loop as m
+import stage5_diagnose as m
 
 
 def main():
-    for tube_key, spec in m.TUBES.items():
-        mc = {k: spec[k] for k in ("r_amb", "sigma_eps_A", "c_th",
-                                   "r_top_ref", "r_bot_ref", "r_sense")}
-        if spec.get("booster"): mc["booster"] = True
-        if spec.get("c_ap") is not None: mc["c_ap"] = spec["c_ap"]
-        if spec.get("buf_fb1") is not None: mc["buf_fb1"] = spec["buf_fb1"]
-        if spec.get("buf_fb_ap") is not None: mc["buf_fb_ap"] = spec["buf_fb_ap"]
-        if spec.get("v_buf") is not None: mc["v_buf"] = spec["v_buf"]
-        if spec.get("ce_buf"): mc["ce_buf"] = True
-        if spec.get("mos_buf"): mc["mos_buf"] = True
-        if spec.get("wien_alpha") is not None: mc["wien_alpha"] = spec["wien_alpha"]
-        if spec.get("bias_diode"): mc["bias_diode"] = spec["bias_diode"]
-        if spec.get("bias_zener_v") is not None: mc["bias_zener_v"] = spec["bias_zener_v"]
-        if spec.get("buf_comp_pf") is not None: mc["buf_comp_pf"] = spec["buf_comp_pf"]
-        if spec.get("t_rail_ramp") is not None: mc["t_rail_ramp"] = spec["t_rail_ramp"]
-        if spec.get("servo_bias"): mc["servo_bias"] = True
-        if spec.get("servo_iq_target") is not None: mc["servo_iq_target"] = spec["servo_iq_target"]
-        if spec.get("servo_r_sense") is not None: mc["servo_r_sense"] = spec["servo_r_sense"]
-        # Log demod is the default since 2026-05-20 (per-tube log_gain_K).
-        # BAT54 Schottky clipper since 2026-05-21 (H11F arch).
-        if spec.get("log_gain_K") is not None:
-            mc["log_demod"]    = True
-            mc["log_gain_K"]   = spec["log_gain_K"]
-            mc["v_eps_log"]    = 5e-3
-            mc["nonlin_type"]  = "log"
-            mc["log_clip_type"]= "schottky"
-        mc["R_op"] = spec["R_op"]
-        mc["V_op"] = spec["V_op"]
-        # Dummy data path; not actually used since we won't run the sim
-        netlist = m.make_netlist(HERE / f"_{tube_key}_unused.data",
-                                 v_preset=0.55, t_ramp=0.1,
-                                 r_int_scale=spec["r_int_scale"], mc=mc)
+    for tube_key, params in m.TUBES.items():
+        name = m.TUBE_NAMES.get(tube_key, tube_key)
+        netlist = m.make_netlist(**params)
         out = HERE / f"regulator_{tube_key}.cir"
-        # Add a header comment so the file describes itself
         header = (
-            f"* VFD-filament regulator netlist for {spec['name']} (tube={tube_key})\n"
-            f"* Generated from test_closed_loop.py make_netlist; matches the\n"
-            f"* netlist that the corresponding regulator_{tube_key}.asc was\n"
-            f"* converted from. Use to cross-check LTspice's generated netlist.\n\n"
+            f"* VFD-filament regulator netlist for {name} (tube={tube_key})\n"
+            f"* Generated from stage5_diagnose.py make_netlist (TUBES['{tube_key}']);\n"
+            f"* matches the netlist that regulator_{tube_key}.asc was converted from.\n\n"
         )
         out.write_text(header + netlist)
         print(f"Wrote {out}")

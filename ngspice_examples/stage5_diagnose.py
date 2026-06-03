@@ -22,29 +22,27 @@ QMODELS = """\
 .model Dbias D (IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
 """
 
+# Defaults below are for ILC1-1/7; per-tube values live in TUBES.
 R_OP = 25.0; V_OP = 5.0; T_OP = 800.0; T_AMB = 300.0
 R_SENSE = 5.0; R_TOP_REF = 5e3; R_BOT_REF = 1e3; F0 = 1000.0; FIL_EXP = 1.2
 TAU_TH = 0.1
-P_OP = V_OP**2 / R_OP
-SIGMA_EPS_A = P_OP / (T_OP**4 - T_AMB**4)
-C_TH = TAU_TH * 4 * SIGMA_EPS_A * T_OP**3
-R_AMB = R_OP / (T_OP / T_AMB) ** FIL_EXP
 
-FIL_SUBCKT = f"""\
-.param T_amb={T_AMB}
-.param R_amb={R_AMB:.6e}
-.param sigma_eps_A={SIGMA_EPS_A:.6e}
-.param C_th={C_TH:.6e}
-.param fil_exp={FIL_EXP}
-
-.subckt filament v_top v_bot T_node r_fil
-B_fil   v_top v_bot I = (V(v_top) - V(v_bot)) / (R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp)
-B_pelec 0 T_node    I = (V(v_top)-V(v_bot))*(V(v_top)-V(v_bot)) / (R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp)
-B_prad  T_node 0    I = sigma_eps_A * (max(V(T_node),T_amb)^4 - T_amb^4)
-C_th    T_node 0    {{C_th}} IC={T_AMB}
-B_R     r_fil 0     V = R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp
-.ends
-"""
+# Per-tube calibration for the unified H11F variable-gain + BJT push-pull
+# regulator.  Only five things change per tube: the filament operating point
+# (R_op, V_op, T_op → the thermal macromodel), the three bridge-reference
+# resistors (set the regulated target R_fil = R_sense·R_top_ref/R_bot_ref =
+# R_op), and the oscillator amplitude V_src_rms.  Everything else — the gain
+# chain, compensator, clamps, log demod — is shared across all tubes.
+# Validated 2026-06-02 (see multitube_unified note).  Keys match the
+# regulator_<key>.{cir,asc} artifact filenames.  Each dict is directly
+# splattable into make_netlist(**TUBES[key]).
+TUBES = {
+    "ilc11_7": dict(R_op=25.0,  V_op=5.0, T_op=800.0, R_sense=5.0,  R_top_ref=5.0e3, R_bot_ref=1.0e3, V_src_rms=0.100),
+    "iv6":     dict(R_op=20.0,  V_op=1.0, T_op=800.0, R_sense=5.0,  R_top_ref=2.0e3, R_bot_ref=500.0, V_src_rms=0.020),
+    "iv18":    dict(R_op=100.0, V_op=1.0, T_op=800.0, R_sense=10.0, R_top_ref=1.0e3, R_bot_ref=100.0, V_src_rms=0.018),
+    "ilc11_8": dict(R_op=8.0,   V_op=1.2, T_op=800.0, R_sense=2.0,  R_top_ref=800.0, R_bot_ref=200.0, V_src_rms=0.024),
+}
+TUBE_NAMES = {"ilc11_7": "ILC1-1/7", "iv6": "IV-6", "iv18": "IV-18", "ilc11_8": "ILC1-1/8"}
 
 
 def make_netlist(*, instrument_power=False, T_end=15.0,
@@ -52,6 +50,8 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
                   R_bias=2200, k_buf=14, V_src_rms=0.1, t_src_ramp=0.6,
                   R_cs=0.01, I_limit_enable=False,
                   R_series=0.01,
+                  R_op=R_OP, V_op=V_OP, T_op=T_OP,
+                  R_sense=R_SENSE, R_top_ref=R_TOP_REF, R_bot_ref=R_BOT_REF,
                   R_fb_vgain=100000, R_atten_top=12000, R_atten_bot=1000,
                   use_split_gain=True,
                   R_in_s1=10, R_max_s1=24,
@@ -80,6 +80,28 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
       memory note for why this gives bigger overshoot.
     """
     V_src_pk = V_src_rms * np.sqrt(2)
+
+    # Per-tube filament thermal macromodel, derived from the operating point.
+    # Calibrated so driving the filament at V_op (RMS) holds it at T_op.
+    P_op = V_op ** 2 / R_op
+    sigma_eps_A = P_op / (T_op ** 4 - T_AMB ** 4)
+    C_th = TAU_TH * 4 * sigma_eps_A * T_op ** 3
+    R_amb = R_op / (T_op / T_AMB) ** FIL_EXP
+    fil_subckt = f"""\
+.param T_amb={T_AMB}
+.param R_amb={R_amb:.6e}
+.param sigma_eps_A={sigma_eps_A:.6e}
+.param C_th={C_th:.6e}
+.param fil_exp={FIL_EXP}
+
+.subckt filament v_top v_bot T_node r_fil
+B_fil   v_top v_bot I = (V(v_top) - V(v_bot)) / (R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp)
+B_pelec 0 T_node    I = (V(v_top)-V(v_bot))*(V(v_top)-V(v_bot)) / (R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp)
+B_prad  T_node 0    I = sigma_eps_A * (max(V(T_node),T_amb)^4 - T_amb^4)
+C_th    T_node 0    {{C_th}} IC={T_AMB}
+B_R     r_fil 0     V = R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp
+.ends
+"""
     R_fb_buf = (k_buf - 1) * 1e3
     Rb_half = R_bias / 2.0
     op = ("uopamp_lvl3 Avol=1meg GBW=10meg Rin=100g Rout=10 "
@@ -261,7 +283,7 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
 .include {UOPAMP}
 .include {H11F_LIB}
 {QMODELS}
-{FIL_SUBCKT}
+{fil_subckt}
 
 * Power supplies with optional ramp.  Real PSUs charge their output cap
 * over ~ms; with t_rail_ramp=0 the rails step instantly (sim-only case).
@@ -328,9 +350,9 @@ R_cs        n_buf_emi   v_osc_drive   {R_cs}
 * same v_bridge_top node — the R_series voltage drop is common-mode.
 R_series v_osc_drive v_bridge_top {R_series}
 X_filament v_bridge_top node_A T_node r_fil filament
-R_sense  node_A      v_ap_drive {R_SENSE}
-R_topref v_bridge_top node_B    {R_TOP_REF}
-R_botref node_B      v_ap_drive {R_BOT_REF}
+R_sense  node_A      v_ap_drive {R_sense}
+R_topref v_bridge_top node_B    {R_top_ref}
+R_botref node_B      v_ap_drive {R_bot_ref}
 R_ap_gnd v_ap_drive  0          0.01
 
 XU_buf_A  node_A n_node_A_buf vcc_buf vee_buf n_node_A_buf {op}
