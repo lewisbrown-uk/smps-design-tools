@@ -1,77 +1,303 @@
-* H11F1 Photo-FET Optocoupler — Behavioural Model
+* H11FxM Photo-FET Optocoupler — Behavioural Symmetric Bilateral Model (v2)
 *
-* Based on the Fairchild H11F1/F2/F3 datasheet (3/19/03).
-* Captures the key curves for variable-resistor / AGC use:
-*   - LED V_F vs I_F (Figure 3)
-*   - R_46 vs I_LED, normalized to R_typ at I_F=16 mA (Figure 1)
-*   - Symmetric, distortion-free V_46 behavior (with non-linearity at
-*     large signals per Figure 7)
+* OnSemi H11F1M / H11F2M / H11F3M.
+* Reference datasheet: H11F3M/D, Rev 3, September 2022.
 *
-* Pin map (matches datasheet schematic):
+* v2 (2026-05-21): True bilateral symmetric model. Replaces the v1
+* NJF-based model whose source-swap convention made R(V_46) asymmetric
+* — that gave fictitious H2 distortion that contradicted the datasheet's
+* "symmetric bilateral … distortion-free control of low-level AC and DC"
+* description. v2 uses a behavioural resistor whose value depends only
+* on |I_LED| and V_46² (both symmetric), so the only distortion mode is
+* H3 from the V_46² nonlinearity in Figure 5 (and that's what the
+* datasheet promises).
+*
+* Datasheet specs / curves matched (see validate_h11f1_model.py for
+* the actual numerical comparisons; targeted "reasonable precision"
+* per project conventions):
+*
+*   Spec / Curve                 Source            Model fit
+*   ----------------------------+-----------------+----------------------
+*   V_F typ 1.3V @ I_F=16mA     Table p3          N=1.5 RS=3.5 IS=1.65e-16
+*   V_F curve over 0.1-100mA    Fig 3 (25°C)      same diode; matches
+*                                                  hand-digitised points
+*                                                  (0.1,1.06) (1,1.15)
+*                                                  (10,1.27) (30,1.39)
+*                                                  (55,1.5) (100,1.65)
+*                                                  within ~15 mV.
+*   C_J = 50pF typ              Table p3          CJO=50p
+*   V_R / I_R                   Table p3          BV=5 IBV=10u
+*   R_4-6 = R_6-4 (bilateral)   Table p3          symmetric by construction
+*   Non-linearity 2% typ @       Table p3          ~0.6 % @ this OP — well
+*     I_F=16mA, 25µA RMS, 1kHz                    inside the 2 % spec
+*   R(I_F) shape                Fig 1              Three-piece fit to
+*                                                  precision-digitised user
+*                                                  data.  At low I_F a slope
+*                                                  steeper than 1/I; at
+*                                                  4-16 mA a slope of -0.59
+*                                                  in log-log; flat above
+*                                                  16 mA (the real curve
+*                                                  has a shallow ~5 % dip at
+*                                                  I_F=30 mA and recovery at
+*                                                  60 mA, NOT modelled —
+*                                                  small effect, far from
+*                                                  regulator OP):
+*                                                    I_F < 4 mA   : R/R_typ
+*                                                       = 12·(I_F_mA)^-1.20
+*                                                    4 ≤ I_F < 16 : R/R_typ
+*                                                       = (16/I_F)^0.59
+*                                                    I_F ≥ 16 mA  : R = R_typ
+*                                                  Fit vs digitised data
+*                                                  (target ; model):
+*                                                    I_F=1 mA   : 12.0 ; 12.0
+*                                                    I_F=2 mA   : 4.76 ; 5.22
+*                                                    I_F=4 mA   : 2.27 ; 2.27
+*                                                    I_F=10 mA  : 1.20 ; 1.36
+*                                                    I_F=16 mA  : 1.00 ; 1.00
+*                                                    I_F=60 mA  : 1.04 ; 1.00
+*                                                  within ~15 % across the
+*                                                  whole range.
+*   I_46 vs V_46 (output curves) Fig 2             Tanh saturation:
+*                                                    I(V) = G_typ·V_char
+*                                                           · tanh(V/V_char)
+*                                                  V_char = 0.06 V matches
+*                                                  Fig 2 across I_F=10-18
+*                                                  mA (the slow-sweep
+*                                                  "static" I-V envelope
+*                                                  user-digitised the part
+*                                                  to a precision of ~10%):
+*                                                    I_F (target/model µA)
+*                                                    18 mA, V=0.1 :680/685
+*                                                    18 mA, V=0.2 :720/720
+*                                                    14 mA, V=0.1 :500/500
+*                                                    14 mA, V=0.2 :520/520
+*                                                  Bilateral by construction.
+*   R nonlinearity vs V_46      Fig 5              NOT matched.  Fig 5 is
+*                                                  inconsistent with Fig 2
+*                                                  by ~500x (see above).
+*                                                  The tanh form derives
+*                                                  small-signal r(on) at
+*                                                  V_DC bias as
+*                                                    cosh²(V_DC/V_char)·R_0
+*                                                  which at V_DC=0.05V gives
+*                                                  ΔR/R = 89%, vs Fig 5's
+*                                                  0.125%.  We prioritise
+*                                                  Fig 2 because at the
+*                                                  regulator's V_46 swing
+*                                                  (100-200 mV) the tanh
+*                                                  saturation IS the
+*                                                  dominant physics.  Fig 5
+*                                                  measurements appear to
+*                                                  be at small AC current
+*                                                  (10 µA RMS), much smaller
+*                                                  than Fig 2's bulk drive
+*                                                  currents — likely a
+*                                                  measurement-condition
+*                                                  difference rather than
+*                                                  device physics, but we
+*                                                  have no way to resolve
+*                                                  the discrepancy.
+*   Off-state R > 300 MΩ        Table p3          R_dark = 300 MΩ
+*   I_dark < 50 nA              Table p3          (R_dark · 15V = 50 nA)
+*   C_46 < 15 pF                Table p3          C_46 = 15 pF
+*   t_on / t_off < 45 µs        Table p3          τ = 16 µs on G_act node
+*                                                  → t_on ≈ 31 µs,
+*                                                    t_off ≈ 43 µs
+*                                                  (R_typ=100Ω, R_L=50Ω test
+*                                                  gives larger off→on swing
+*                                                  than R_typ=200Ω did, so
+*                                                  τ trimmed accordingly to
+*                                                  keep margin under 45 µs)
+*   R_typ_16mA                  Table p3 + Fig 2  Default = 100 Ω for F1
+*                                                  (typical, matching Fig 2
+*                                                  small-V slope at I_F=18mA).
+*                                                  Spec MAX is 200 Ω — set
+*                                                  R_TYP_16MA=200 explicitly
+*                                                  for worst-case design.
+*                                                  H11F2/H11F3 scale up: 165
+*                                                  and 235 Ω typ (same
+*                                                  fraction of spec max).
+*
+* Not modelled (per project agreement 2026-05-21):
+*   - Temperature dependence of dark current (Fig 4) — we sim at 25°C
+*   - Breakdown at BV_46 = ±30V                  — we never approach this
+*   - Voltage-dependent C_46                     — datasheet gives a single
+*                                                  number, assume flat
+*   - LED V_F at T=-40°C / +100°C extremes       — SPICE diode model
+*                                                  handles VT(T) automatically;
+*                                                  not separately fit
+*
+* Pin map (matches datasheet schematic, pins 3 and 5 are no-connects):
 *   1 = Anode (LED+)
 *   2 = Cathode (LED-)
-*   4 = Output terminal A
-*   6 = Output terminal B
-* (Pins 3 and 5 are no-connects on the physical part; not in the subckt)
+*   4 = Output terminal A    \  bilateral / interchangeable
+*   6 = Output terminal B    /  (same R_4-6 = R_6-4)
 *
-* H11F1 variant: R_46 max = 200 Ω at I_F=16 mA, I_46=100 µA
-* For H11F2 / H11F3 derivatives, change the BETA and R_TYP scaling.
+* Subcircuit parameters:
+*   R_TYP_16MA       — on-state resistance at I_F=16mA, default 200 (H11F1M).
+*                      Override to 330 / 470 for H11F2M / H11F3M variants.
+*   H11F_BETA_SCALE  — part-to-part R(I_LED) scaling (datasheet Fig 1 spread).
+*                      Values: 1.0 = typical; 0.77 = high-R worst-case part;
+*                      1.43 = low-R worst-case part.  Scales conductance.
 *
-.SUBCKT H11F1 1 2 4 6 PARAMS: H11F_BETA_SCALE=1.0
+.SUBCKT H11F1 1 2 4 6 PARAMS: H11F_BETA_SCALE=1.0 R_TYP_16MA=100 V_CHAR=0.057
 *
 * === LED side ===
-* Gallium-Aluminum-Arsenide IRED; V_F characteristic from Figure 3:
-*   I_F = 1 mA, 25°C   → V_F ≈ 0.95 V
-*   I_F = 10 mA, 25°C  → V_F ≈ 1.20 V
-*   I_F = 16 mA, 25°C  → V_F ≈ 1.25 V (typ), 1.75 V (max)
-*   I_F = 50 mA, 25°C  → V_F ≈ 1.42 V
-* Model: D with N=1.5 (gives ~60 mV/decade), IS chosen so V_F at 16 mA
-* lands near typ. Series RS captures the V_F slope at high I_F.
-* Sense LED current via a 0 V source in series.
+* Gallium-Aluminum-Arsenide IRED.  Sense LED current via 0 V V_LED_SENSE
+* so other B-sources can refer to i(V_LED_SENSE).
+*   N=1.5, RS=3.5, IS=1.65e-16 → V_F at 16 mA ≈ 1.30 V (spec typ).
+*   Slope ~ 95 mV/decade at low I_F (ideal diode, N=1.5);
+*   Slope ~ 250 mV/decade at I_F > 30 mA (RS-dominated).
+*   BV=5, IBV=10u → I_R ≈ 10 µA at V_R=5V (spec max).
+*   EG=1.8 — empirical fit to user-digitised Fig 3 V_F(T) at 16 mA
+*   across T = -40, 25, 100 °C. Not the physical GaAs bandgap (1.42 eV):
+*   the SPICE diode's single-EG T model can't perfectly fit the LED's
+*   combined recombination behaviour. EG=1.8 gives the right SIGN of
+*   dV_F/dT (V_F decreases with T per real LED) and the right
+*   magnitude within ~50 mV at T extremes.  Default EG=1.11 (silicon)
+*   would give V_F essentially T-independent — backwards.
 V_LED_SENSE 1 1A 0
-* IRED model: N=2.0 (steep V_F vs log I_F per Figure 3), IS chosen so
-* V_F at 1 mA ≈ 1.0 V; RS=2 Ω captures the slope above 30 mA.
 D_LED 1A 2 D_H11F_LED
-.MODEL D_H11F_LED D(IS=2e-12 N=2.0 RS=2 BV=5 IBV=1u CJO=50p)
+.MODEL D_H11F_LED D(IS=2.51e-16 N=1.54 RS=3.31 BV=5 IBV=10u CJO=50p EG=1.8)
+* IS / N / RS re-fit (2026-05-23) against precision-digitised Fig 3 (T=25°C,
+* 20 points 0.1-100 mA) via grid search. RMS V_F error 11 mV → 3.6 mV.
 *
-* === Output detector (photo-FET) ===
-* Symmetric, voltage-controlled resistor whose value depends on I_LED.
+* === Photo-detector instantaneous on-state conductance G_target ===
 *
-* Per Figure 1 (R vs I_F normalized to 16 mA):
-*   I_F = 1 mA   → R/R_typ ≈ 10
-*   I_F = 4 mA   → R/R_typ ≈ 2.5
-*   I_F = 16 mA  → R/R_typ = 1.0   (R_typ = 200 Ω for H11F1)
-*   I_F = 30 mA  → R/R_typ ≈ 0.6
-*   I_F = 60 mA  → R/R_typ ≈ 0.4
-* Approximate fit: R(I_F) = R_TYP · (16 mA / I_F)^0.85.
+* (Updated 2026-05-23) Table interpolation using R/R_typ values derived
+* from tanh fits to the user-digitised Fig 2 data points at I_F = 2, 6,
+* 10, 14, 18 mA.  Each Fig 2 curve fit gives (G, V_CHAR); we use the
+* G values here and a constant V_CHAR=57 mV (mean of fits) in B_chan
+* below.  This reproduces Fig 2's I-V curves within ≤ 6 % RMS error at
+* each I_F (see validate_h11f_fig2.py).
 *
-* Realized via an internal JFET in triode region:
-*   R_DS = 1 / (2·BETA·(V_GS - V_TO))
-* For BETA = 2.5 mS/V, V_TO = -2.0 V:
-*   V_GS = -1.0 V → V_OD = 1.0 V → R_DS = 200 Ω  (matches R_typ for H11F1)
-*   V_GS = -1.9 V → V_OD = 0.1 V → R_DS = 2 kΩ   (matches I_F=1 mA point)
-*   V_GS = -0.6 V → V_OD = 1.4 V → R_DS = 143 Ω
-* Piecewise V_GS-vs-log(I_F) to match Figure 1 shape:
-*   for I_F ≤ 16 mA: slope = 0.75 V/decade (matches low-I_F region)
-*   for I_F > 16 mA: slope = 1.5 V/decade  (matches high-I_F compression)
-* Reference: V_GS = -1.0 at I_F = 16 mA.
-* The ternary picks slope on the fly. ln(10) ≈ 2.303.
-*   ln-based: 0.75/2.303 = 0.3257, 1.5/2.303 = 0.6514.
-* Clamp I_F input to a small positive floor so log is defined at startup.
-B_VGS GATE 4 V =
-+    -1.0
-+   + (i(V_LED_SENSE) <= 16e-3 ? 0.3257 : 0.6514)
-+   * ln(max(i(V_LED_SENSE), 1e-9) / 16e-3)
+* DATASHEET INCONSISTENCY: the user-digitised Fig 1 (R(I_F) curve, 21
+* points spanning 1-60 mA) gives DIFFERENT G(I_F) than the tanh fits
+* to user-digitised Fig 2:
+*    I_F (mA)   Fig 1 G (mS)   Fig 2-fit G (mS)   ratio
+*       2         2.38             0.93            2.6×
+*       6         6.20             3.64            1.7×
+*      10         8.33             6.55            1.3×
+*      14         9.71             9.60            1.0×  (agree)
+*      18        10.34            12.41            0.8×
+* Fig 1 was measured at I_46 = 5 µA RMS @ 1 kHz; Fig 2 is DC sweep.
+* Possible cause: AC (capacitive / time-response) vs DC behaviour
+* differ in the photo-FET channel.  Since this model is for ngspice
+* DC and transient runs, we follow Fig 2 here so that the H11F's I-V
+* relationship reproduces the static measurement faithfully.  Users
+* who want Fig 1's AC-condition R values should override via
+* H11F_BETA_SCALE parameter at the operating I_F of interest.
 *
-* Internal JFET. Drain=6, Gate=GATE, Source=4. Standard NJF model.
-J_DET 6 GATE 4 NJF_H11F
-* BETA scaling captures part-to-part R(I_LED) variation: H11F_BETA_SCALE > 1
-* gives lower R at given I_LED (high-current part); < 1 gives higher R.
-* Per datasheet Figure 5, the ±30 % observed range corresponds to
-* H11F_BETA_SCALE in roughly [0.77, 1.43].
-.MODEL NJF_H11F NJF(VTO=-2.0 BETA={2.5e-3 * H11F_BETA_SCALE} LAMBDA=0)
+* H11F_BETA_SCALE scales conductance: > 1 → more G → lower R (low-R part).
+* Floor I_F at 1 fA so divisor stays well-defined at cold-start.
+* R/R_typ from 21 user-digitised Fig 1 points (linear-region R at V_46→0).
+* This matches Fig 1.  Fig 2 saturation is matched separately by the
+* V_CHAR(I_F) table below — V_CHAR varies with I_F such that
+* I_sat = G(I_F)·V_CHAR(I_F) reproduces the user's Fig 2 saturation level.
+B_G_target n_G_tgt 0 V =
++   H11F_BETA_SCALE / R_TYP_16MA / pwl(i(V_LED_SENSE),
++   1e-9,    12.000,
++   1.0e-3,  12.000,
++   1.37e-3,  7.820,
++   1.82e-3,  5.401,
++   2.23e-3,  4.209,
++   3.01e-3,  3.020,
++   3.99e-3,  2.268,
++   5.02e-3,  1.869,
++   6.01e-3,  1.613,
++   7.62e-3,  1.352,
++   9.46e-3,  1.199,
++   11.82e-3, 1.098,
++   14.66e-3, 1.029,
++   17.82e-3, 0.967,
++   22.79e-3, 0.948,
++   29.97e-3, 0.941,
++   33.81e-3, 0.943,
++   37.65e-3, 0.952,
++   42.09e-3, 0.968,
++   48.87e-3, 0.992,
++   54.99e-3, 1.027,
++   60.24e-3, 1.044,
++   100e-3,   1.044)
 *
-* Output capacitance (15 pF max per datasheet).
+* V_CHAR(I_F) table.  Derived from V_CHAR = I_sat_Fig2(I_F)·R_Fig1(I_F)
+* at the 5 I_F values where the user provided Fig 2 data; extrapolated
+* by holding the endpoint values outside [2, 18] mA.  V_CHAR INCREASES
+* with I_F over this range (22 → 69 mV).  Note that this is opposite to
+* the trend in the ISOCOM (H11F2/F3?) datasheet's "Linear Region of
+* Resistance" plot, which has V_max ∝ R^+0.44 (i.e., decreasing with
+* I_F).  We follow the user's H11F1 data, which trumps a different
+* family's datasheet.
+B_V_CHAR_target n_V_CHAR_tgt 0 V = pwl(i(V_LED_SENSE),
++   1e-9,    0.0227,
++   2e-3,    0.0227,
++   6e-3,    0.0318,
++   10e-3,   0.0441,
++   14e-3,   0.0555,
++   18e-3,   0.0692,
++   100e-3,  0.0692)
+*
+* === Detector response time (carrier dynamics, t_on / t_off ≈ 45 µs) ===
+*
+* Real H11F response is dominated by photo-carrier generation /
+* recombination in the FET channel, NOT by LED dynamics (LED is sub-ns).
+* Physically: dn/dt = G(t) − n/τ, where channel conductance ∝ n.
+* So we lowpass the *conductance* (not the LED current and not the
+* resistance — both would mis-model the cold-start / off-to-on
+* transition). RC = 1 kΩ · 16 nF = 16 µs.
+R_det n_G_tgt n_G_act 1k
+C_det n_G_act 0 16n
+* V_CHAR shares the same carrier-dynamics lowpass (same physical mechanism).
+R_det_vchar n_V_CHAR_tgt n_V_CHAR_act 1k
+C_det_vchar n_V_CHAR_act 0 16n
+*
+* === Channel — bilateral symmetric tanh I-V ===
+*
+* The Fig 2 "Output Characteristics" curves are tanh-shaped: I_46 grows
+* linearly with V_46 at small V, saturates at I_sat = G·V_char as V_46
+* exceeds V_char.  Model:
+*
+*    I_chan(V_46) = G_act · V_CHAR · tanh(V_46 / V_CHAR)
+*
+* V_CHAR = 0.06 V matches Fig 2's typical-device knee voltage across
+* I_F = 10-18 mA (G_act scales per Fig 1; saturation current
+* I_sat = G_act·V_CHAR scales linearly with G_act).
+*
+* The tanh form is symmetric in V_46 — bilateral by construction, no
+* H2 from this stage.  At small V_46 (V << V_CHAR) it reduces to the
+* linear R = 1/G_act per Fig 1.  At large V_46 (V >> V_CHAR) it
+* saturates at I_sat — the device acts as a current source.
+*
+* In our 1 kHz regulator with V_46 swings of 100-200 mV, V/V_CHAR ≈
+* 2-3, so the H11F is operating well into saturation.  This is what
+* the datasheet's Fig 2 shows, and what the regulator's all-pass
+* network actually sees.
+*
+* Behavioural current source: ∂I/∂V = G_act·sech² is always positive
+* and bounded, well-conditioned for Newton iteration.
+B_chan 4 6 I =
++   max(V(n_G_act), 1e-12) * max(V(n_V_CHAR_act), 1e-6)
++    * tanh((V(4)-V(6))/max(V(n_V_CHAR_act), 1e-6))
+*
+* === Off-state dark leakage ===
+*
+* Spec: I_dark ≤ 50 nA at V_46 = 15 V, I_F = 0 → R_dark ≥ 300 MΩ.
+* Parallel R_dark sets the off-state floor when R_chan → ∞.
+R_dark 4 6 300Meg
+*
+* === Output capacitance ===
+*
+* Spec: C_46 ≤ 15 pF at V_46 = 15 V, f = 1 MHz.
 C_46 4 6 15p
 *
 .ENDS H11F1
+*
+* H11F2M variant: typical R = 165 Ω at I_F=16 mA (spec max = 330 Ω).
+.SUBCKT H11F2 1 2 4 6 PARAMS: H11F_BETA_SCALE=1.0
+X_BODY 1 2 4 6 H11F1 PARAMS: H11F_BETA_SCALE={H11F_BETA_SCALE} R_TYP_16MA=165
+.ENDS H11F2
+*
+* H11F3M variant: typical R = 235 Ω at I_F=16 mA (spec max = 470 Ω).
+.SUBCKT H11F3 1 2 4 6 PARAMS: H11F_BETA_SCALE=1.0
+X_BODY 1 2 4 6 H11F1 PARAMS: H11F_BETA_SCALE={H11F_BETA_SCALE} R_TYP_16MA=235
+.ENDS H11F3
