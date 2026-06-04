@@ -1,216 +1,239 @@
-# BOM — VFD filament regulator (4 tubes)
+# BOM — VFD filament regulator (4 tubes, canonical design)
 
-Real-part mapping for every netlist element. Target ≤ $20/tube, no
-build-time trimming, available at DigiKey and Mouser. All footprints
-are SMD where convenient (SOT-23 / SOIC) but every part also exists
-in a through-hole equivalent for forum builders who prefer it.
+Real-part mapping for the **canonical `regulator.py` design** (H11F
+variable-gain + BJT class-AB push-pull). Target ≤ $20/tube, **no
+build-time trimming**, all parts stocked at DigiKey/Mouser. SMD where
+convenient (SOIC/SOT-23/0805); every part has a through-hole equivalent
+for forum builders.
 
-Reference designators follow the `regulator_<tube>.cir` names.
+Reference designators follow the `regulator_<tube>.cir` element names.
 
-## Decisions about the simulation that affect the BOM
-
-**Op-amp current limit.** The macromodel `uopamp_lvl2` is run with
-`Ilimit = 1 A` because its internal V9/V10 cancellation breaks below
-~545 mA (see CAVEAT comment in `uopamp.lib`). This is a *modelling*
-choice, not a real circuit parameter. The chosen real parts have
-short-circuit currents of **65 mA (TLV9154)** and **50 mA (OPA2188)**,
-both spec'd typ at +25 °C. Heaviest loads, by analytical bound:
-
-  - `XU_osc`     ~1.4 mA pk (Wien return through 10 k)
-  - `XU_buf_*`   ~1 mA pk (gate-damping R, 1 k)
-  - `XU_int`     ~1.7 mA pk (charging C_intfb=318 nF at integrator pk excursion)
-  - `XU_vi` (new for H11F) ~0.2 mA pk (Q2 base via R_vi_base=1 k; full
-    I_LED flows through Q2 collector→emitter, not through XU_vi output)
-  - `XU_log` (new for H11F) ~0.06 mA pk (clipped at ±0.3 V into R_fb_log=10 k)
-  - All other op-amp outputs: ≤0.1 mA pk
-
-Worst-case load is ~1.7 mA pk at the OPA2188 integrator, ~29× below
-its 50 mA Isc. No op-amp will current-limit in operation.
-
-**PSU rail PWL.** The model defaults to instantaneous rails (`t_rail_ramp=0`).
-Real LDOs ramp ±9 V over ~1–10 ms as the output cap charges through
-finite-current loop bandwidth; this **does not affect the regulator
-loop's steady-state behaviour** (the loop integrator settles in 100 ms
-to 5 s depending on tube, far longer than any rail ramp). The rail PWL
-is left disabled in production simulations because it would only mask
-the MOSFET-edge artefact at cold-start, which is already managed by
-using the LEVEL 1 placeholder model in routine sweeps. A real ±9 V
-LDO (LM7809 / LM7909 or LM317-style adjustable, see "Rails" below)
-will ramp adequately on its own.
-
-**Filament resistance tolerance is unavoidable T_end variation.** The
-PCB-side bridge ratio `R_top_ref / R_bot_ref` is fixed to the datasheet
-`R_op` value. If the actual built tube's filament resistance differs
-from the datasheet — typically by ±10–15 % for legacy VFDs due to
-wire-gauge / coating / age variation — the loop drives the filament to
-the **bridge-target resistance**, which corresponds to a different
-temperature. Mapping: `T_actual ≈ T_op × (R_actual / R_nominal)^(1/1.2)`.
-So ±10 % filament R yields ±60 K of T_end variation. Loop dynamics
-(cold-start overshoot, settling, stability) are bounded across this
-range — verified by sweep_filament_tol_h11f.py. The T variation itself
-is a sourcing question, not a circuit question. Builders who want
-tighter T accuracy can measure the cold filament R with a multimeter
-and select an E96 `R_top_ref` accordingly — that's a build-time
-**selection**, not a build-time trim, and is consistent with the
-no-trim project constraint.
-
-**H2 distortion at v_ap (H11F arch).** The H11F1 variable-R has the
-same R_DS(V_DS) nonlinearity as any JFET. Measured steady-state H2
-at v_ap is **6–13 %** across the 4 tubes (IV-18:13 %, IV-6:9 %,
-ILC1-1/7:6 %, ILC1-1/8:9 %). The LS844 arch suppressed this to
-<0.4 % via a V_DS/2 gate bootstrap, but that trick doesn't translate
-to the H11F (the "gate" is LED current, V→I bandwidth and LED time
-constants are too slow to bootstrap at 1 kHz). **This is acceptable
-for a filament regulator** because:
-
-  - the tube filament is a passive thermal resistor — heated by RMS
-    power, doesn't care about voltage waveform H2;
-  - the chopper demod re-rectifies the 2 kHz tone at v_diff to a
-    small DC offset, which the loop compensates via V_int_OP shift;
-    end-to-end T accuracy is <0.5 K (per pmos_convergence.png);
-  - extra filament dissipation from H2 components is ~1 % of
-    fundamental power — well within margin.
-
-The 10× higher H2 vs the bootstrapped LS844 is the cost of
-eliminating the V_p part-variation failure that stalled IV-18
-cold-start at V_p=−3.5 V. Verified 2026-05-21 (measure_h2_distortion.py).
+> **Supersedes the previous all-pass BOM (2026-06).** The earlier BOM
+> described the retired JFET/H11F *all-pass* architecture
+> (`test_closed_loop.py`, now deprecated): TLV9154 quads + OPA2188
+> chopper, all-pass legs, a V→I LED converter, and per-tube MOSFET
+> boosters. The canonical design is a different circuit and is **much
+> simpler per-tube** — see the architecture note below.
 
 ---
 
-## Common components (all 4 tubes identical)
+## Architecture (what the canonical circuit is)
 
-| RefDes | Function (netlist element)                               | Part Number      | Mfr             | Pkg     | DigiKey            | Mouser              | Qty | Unit ($) | Notes |
-|--------|----------------------------------------------------------|------------------|-----------------|---------|--------------------|---------------------|-----|----------|-------|
-| **U1** | Std op-amp quad (`XU_osc`, `XU_ap`, `XU_diff`, `XU_inv`) | TLV9154IDR       | Texas Instr.    | SOIC-14 | 296-TLV9154IDR-ND  | 595-TLV9154IDR      | 1   | 2.05     | 4.5 V…40 V, GBW=4.5 MHz, Vos=2.5 mV max, Isc=65 mA typ. Through-hole: TLV9154IP (PDIP-14, $2.25). |
-| **U2** | Std op-amp quad (`XU_buf0`, `XU_buf_osc`, `XU_buf_ap`, `XU_aw_diff`) | TLV9154IDR       | Texas Instr.    | SOIC-14 | 296-TLV9154IDR-ND  | 595-TLV9154IDR      | 1   | 2.05     | Second quad — see U1. |
-| **U3** | Chopper op-amp dual (`XU_dem`, `XU_int`)                 | OPA2188AIDR      | Texas Instr.    | SOIC-8  | 296-27751-1-ND     | 595-OPA2188AIDR     | 1   | 3.36     | 25 µV Vos typ / 75 µV max; chopper. Sets demod & integrator residual T error to <5 K. Alt: LMP2022MA (~$3.80) if substitution preferred. |
-| **U4** | Sync demod analog switch (`S1`, `S2`)                    | CD74HC4053M96    | Texas Instr.    | SOIC-16 | 296-14532-1-ND     | 595-CD74HC4053M96   | 1   | 0.54     | Triple SPDT, Ron≈100 Ω at ±5 V. Routes vplus = (V_osc>0 ? n_diff : 0) using one of the three channels. VDD=+9 V / VSS=0 / VEE=−9 V split-rail. Logic threshold ref'd VSS..VDD — see U5. (Plain `CD74HC4053M` is obsolete; M96 is the active T&R-packaged successor — same die.) |
-| **U5** | Comparator level shifter for U4 control                  | SN74HC14DR       | TI              | SOIC-14 | 296-1199-5-ND      | 595-SN74HC14DR      | 1   | 0.40     | Hex Schmitt-trigger. V_osc (±3 V) → R + clamp to 0…+9 V → one HC14 stage → CMOS-clean 0/+9 V drive into U4 control pin. `XU_cmp` in the netlist is collapsed onto this part. (Plain `SN74HC14D` is obsolete; DR is the cut-tape successor.) |
-| **Q1, Q2** | Wien BJT amplitude clamp                             | MMBT3904 (or BC847) | Multi (Nexperia, onsemi) | SOT-23 | MMBT3904FSCT-ND | 771-MMBT3904 | 2 | 0.06 | Through-hole: 2N3904 (TO-92). |
-| **U6 (X_H11F)** | All-pass variable resistor (H11F1 photo-FET optocoupler: LED-driven symmetric N-JFET) | H11F1 | onsemi / Vishay | DIP-6 (also avail. SMD-6) | H11F1M | DigiKey: H11F1M | 1 | 0.85 | Symmetric photo-FET in the all-pass: D-S between `v_drv_atten` and `n_ap_plus`. LED brightness controlled by `XU_vi`+`Q2`+`R_sense_led` (V→I converter, see below). Replaces the LS844 JFET pair (committed 2026-05-21). Key wins vs JFET: (a) no V_p part variation — R_DS controlled by LED current, not by the gated channel's V_p so the matched-die self-bias scheme isn't needed; (b) no body diode — clean symmetric all-pass operation, H2 < 0.4 %; (c) no V_DS/2 bootstrap needed (the JFET arch's R_DS(V_GS, V_DS) cross-term doesn't exist). R range ~100 Ω (at I_LED=20 mA) to ~300 MΩ (LED dark). |
-| **XU_vi (V→I)**   | Op-amp ch. driving Q2 base; sets I_LED = V(v_ctl)/R_sense_led | 1× spare ch. of a TLV9154 quad (U1/U2) | TI | — | (uses spare ch.) | — | (shared) | — | One spare channel of U1 or U2. +IN: `V_int_out + V_bias_led`. −IN: `n_led_emit` (across `R_sense_led`). Out: drives `Q2` base via `R_vi_base`. Closes the V→I loop so I_LED tracks V_int_out (with V_bias_led offset). |
-| **Q2 (V→I sink)** | BJT current sink in V→I converter (collector at H11F LED cathode) | 2N3904 / MMBT3904 | Multi | SOT-23 (or TO-92) | MMBT3904FSCT-ND | 771-MMBT3904 | 1 | 0.06 | Collector to H11F LED cathode (`n_led_cathode`), emitter to `n_led_emit` (across R_sense_led to GND), base from XU_vi via R_vi_base = 1 kΩ. Carries the full LED current (≤ ~20 mA). H11F LED V_F ≤ 1.5 V; VCC sets the LED anode (typically 5 V or 9 V — DigiKey BOM assumes the 9 V rail). |
-| **V_bias_led**    | DC bias offset for the V→I converter           | +1.0 V (precision-set resistor pair off +9 V) | — | — | (use 1× TL431 + R ladder, or a precision divider with op-amp buffer) | — | 1 | 0.20 | Sets the LED current at V_int_out=0 to I_LED ≈ V_bias_led/R_sense_led = 10 mA — keeps the H11F R_DS near nominal across the operating range. Precision tolerance ±5 % is fine (the loop compensates via V_int_out). |
-| **R_sense_led**   | LED current-sense resistor (sets V→I transconductance) | 100 Ω | 1 % | 0805 / through-hole | (generic) | (generic) | 1 | 0.02 | I_LED = (V_int_out + V_bias_led) / R_sense_led. With V_bias_led = 1 V and R_sense_led = 100 Ω the V→I gain is 10 mA/V (each 100 mV of V_int_out gives 1 mA of LED change). |
-| **R_vi_base**     | Base resistor between XU_vi output and Q2 base | 1 kΩ | 5 % | 0805 / through-hole | (generic) | (generic) | 1 | 0.01 | Limits base current. Could be ~470 Ω–10 kΩ; not critical. |
-| **U7 (XU_log)**    | Log demod conformer: non-inverting op-amp with anti-parallel BAT54 Schottky clipper in feedback | 1× op-amp channel + 2× BAT54 | TI / Nexperia / onsemi | SOIC-8 / SOT-23 / SOD-323 | (use 1 channel of a TLV9154 quad) | — | 1 set | 0.12 | Implements a soft non-linear compressor between demod and integrator. Topology: input on +IN, feedback divider R_fb_log:R_gnd_log sets small-signal gain K = 1 + R_fb_log/R_gnd_log (per-tube — see TUBES dict). Two BAT54 Schottky diodes anti-parallel from op-amp output to GND clip the output at ±0.3 V_F, capping the integrator-drive amplitude during the cold-start excursion. Settles fast at small-signal (~K× gain) while bounding cold-start overshoot. Per-tube log_gain_K: {IV-18:1.5, IV-6:30, ILC1-1/7:20, ILC1-1/8:30} — only R_gnd_log differs per tube (R_fb_log fixed at 10 kΩ). Replaced the original transdiode log conformer 2026-05-21 — empirically the anti-parallel Schottky clipper gives the same speed-overshoot tradeoff with simpler hardware and no BJT matching. |
-| **R_lp_log**       | LP filter R (between demod output and log conformer) | 10 kΩ            | 1 %             | 0805 / through-hole | (generic) | (generic)           | 1   | 0.01     | Sets LP cut-off ~200 Hz (with C_lp_log=80 nF) — rejects 2 kHz chopper ripple so it doesn't alias to DC through the non-linearity, while passing the slow loop-bandwidth signal cleanly. |
-| **C_lp_log**       | LP filter C (between demod output and log conformer) | 82 nF            | 10 %, X7R       | 0805 / through-hole | (generic) | (generic)           | 1   | 0.05     | See R_lp_log. |
-| **R_fb_log**       | Feedback resistor in U7 (fixed for all tubes)   | 10 kΩ            | 1 %             | 0805 / through-hole | (generic) | (generic)           | 1   | 0.01     | Together with R_gnd_log (per-tube) sets log demod small-signal gain K = 1 + R_fb_log/R_gnd_log. |
-| **D_log_pos, D_log_neg** | Anti-parallel Schottky clipper diodes in U7 feedback | BAT54 (single junction) | onsemi / Nexperia | SOT-23 (or SOD-323 single) | BAT54-FDICT-ND | 621-BAT54 | 2 | 0.10 | Clip U7 output at ±0.3 V_F. Replaces the previous BJT clipper (V_BE,sat ≈ 0.65 V); the lower V_F gives a softer cold-start drive bound. BAT54 SOT-23 is a dual-anode common-cathode pkg — wire one anode to op-amp out and cathode to GND for each polarity, or use two single SOD-323 BAT54Ls if you prefer. |
-| **D1–D6** | Anti-windup + buffer bias diodes (`D_aw_hi/lo`, `D_obb_*`, `D_abb_*`) | 1N4148WS | onsemi / Diodes Inc. | SOD-323 | 1N4148WS-FDICT-ND | 621-1N4148WS-F | 6 | 0.10 | Through-hole: 1N4148 (DO-35). |
-| Y1     | None — Wien sets f0=1 kHz via R/C (no crystal)            | —                | —               | —       | —                  | —                   | —   | —        | — |
+Signal flow: **Wien oscillator (1 kHz)** → attenuator → **H11F
+variable-gain Stage 1** (H11F photo-FET in the feedback, ∥ R_max) →
+**Stage 2** (fixed gain G2 = 25) → AC-couple → **BJT class-AB push-pull
+buffer** → series sense → **AC bridge** (filament vs reference) →
+bridge buffers → **diff amp** → **synchronous demod** (chopper) → LP →
+**log demod** → **PID integrator** with back-calc anti-windup → drives
+the **H11F LED** (via `R_led_set`), closing the loop. The H11F's
+LED-current-controlled resistance sets Stage-1 gain → filament drive →
+filament temperature, regulated against the bridge reference.
 
-Resistors and capacitors (common):
-
-| RefDes group | Function                              | Value     | Tolerance | Pkg / type            | DigiKey example         | Per-unit ($) |
-|--------------|---------------------------------------|-----------|-----------|-----------------------|--------------------------|--------------|
-| R1, R2       | Wien R                                | 10 kΩ     | 1 %       | 0805 thin-film        | RMCF0805FT10K0CT-ND      | 0.02         |
-| Rg, Rfa, Rfb | Wien gain net                         | 10k/10k/12k | 1 %     | 0805                  | (generic)                | 0.02 ea      |
-| Rtop1…Rbot2  | Wien BJT clamp base bias              | 120 kΩ    | 5 %       | 0805                  | (generic)                | 0.01 ea      |
-| R_ap1, R_ap2 | All-pass legs (eq R for matching)     | 1.59 kΩ   | 1 %       | 0805                  | (generic)                | 0.02 ea      |
-| R_a1–R_b2    | Diff-amp matched-1Meg quad            | 1 MΩ      | **0.1 %** | 0805 thin-film, TC50  | RNCP0805FTD1M00CT-ND     | 0.08 ea      |
-| R_bias       | Demod bias pull-down                  | 1 MΩ      | 1 %       | 0805                  | (generic)                | 0.02         |
-| R_din, R_dfb | Demod integrating R                   | 10 kΩ     | 1 %       | 0805                  | (generic)                | 0.02 ea      |
-| R_intin      | Integrator input R                    | 30 kΩ × scale | 1 % | 0805                  | (generic)                | 0.02         |
-| R_intfb      | Integrator feedback R                 | 300 kΩ × scale | 1 % | 0805                | (generic)                | 0.02         |
-| R_inv1, R_inv2 | Inverter (G=−1) matched pair        | 100 kΩ    | 0.1 % matched | 0805 thin-film     | (generic)                | 0.05 ea      |
-| R_btd, R_bts, R_btp | Bias-T to v_ctl                | 100 k / 100 k / 18 k | 1 % | 0805            | (generic)                | 0.02 ea      |
-| R_atten_top, _bot | V_osc divider into Buffer 0     | 56 kΩ / 9.1 kΩ | 1 %  | 0805                  | (generic)                | 0.02 ea      |
-| R_gd_*       | MOSFET gate damping (IV-18/IV-6/ILC1-1/8) | 1 kΩ     | 5 %       | 0805                  | (generic)                | 0.01 ea      |
-| C1, C2       | Wien C (f0 = 1 kHz)                   | 16 nF     | 5 % NP0/C0G | 1206 or PP film 5 mm | 1276-CL31C163JBFNNNECT-ND | 0.20 ea      |
-| C_ap         | All-pass cap                          | **1 µF**  | 5 % PP film | WIMA FKP2 (5 mm)    | 495-1338-ND              | 0.45         |
-| C_intin      | Demod high-freq bypass                | 1 nF      | 5 % C0G   | 0805                  | (generic)                | 0.10         |
-| C_intfb      | Integrator pole-set                   | 318 nF (use 330 nF) | 5 % PP film | WIMA MKS2 5 mm | 495-1268-ND               | 0.25         |
-| C_pid (C_hf) | Loop HF zero                          | 10 nF     | 5 % C0G   | 0805                  | (generic)                | 0.10         |
-| C_btd, C_bts | Bias-T DC blocking to V_ctl           | 10 µF     | ±20 % X7R | 1210 ceramic 25 V     | (generic)                | 0.20 ea      |
-| C_buf2_dcblock | DC block on V_ap into Buffer 2       | 10 µF (or 100 nF for ILC1-1/7) | X7R | 1210 | (generic)         | 0.15         |
-| C_psu        | ±9 V supply decoupling                | 100 nF + 10 µF per rail per IC | X7R | 0805 + 1210 | (generic)        | 0.15 / set   |
-
-Voltage references (anti-windup):
-
-| RefDes | Function                  | Part       | Notes |
-|--------|---------------------------|------------|-------|
-| V_clamp_hi (+6 V) | Anti-windup high rail (transient safety; rarely engages because V_int_out_OP is negative) | Resistor divider off +9 V (e.g. 30k:60k) buffered by 1× spare TLV9154 channel | OR use LM4040-6.0 shunt ref (DigiKey: LM4040DEM3-6.0+T) $0.95. Spare op-amp is cheaper. |
-| V_clamp_lo (−0.7 V) | Anti-windup low rail (engages during cold-start, gives V_int_out floor ≈ −1.0 V with Schottky V_F=0.3 V) | Resistor divider off −9 V (e.g. 33k:267k) buffered by 1× spare TLV9154 channel | Precision not critical — anti-windup back-calc unwinds the integrator quickly once the lower diode engages. |
-
-PSU rails (±9 V regulators — 1 set common to all tubes):
-
-| RefDes | Function | Part | Pkg | DigiKey | Notes |
-|--------|----------|------|-----|---------|-------|
-| U6 | +9 V LDO | MC78L09ACPRPG | TO-92 | MC78L09ACPRPGOSCT-ND ($0.40) | 100 mA, drops the unregulated +12-15 V rail to clean +9 V. Or LM317 + R-set if you already have higher input voltage. |
-| U7 | −9 V LDO | MC79L09ACPRPG | TO-92 | MC79L09ACPRPGOSCT-ND ($0.45) | 100 mA. Or LM337-adj. |
-| C_psu_in, C_psu_out | Reg I/O caps | 1 µF X7R / 10 µF X7R | 1210 | (generic) | 0.15 ea |
-
-(Builders without dual unregulated rails: a single +12 V wall-wart through a TL431-referenced charge-pump inverter generates the −9 V; see forum writeup.)
+**Key simplification vs the old all-pass design — only FOUR things vary
+per tube:** the three bridge-reference resistors and the oscillator
+drive level (set by the attenuator). The op-amps, output stage, gain
+chain, compensator, LED drive, and rails are **identical across all four
+tubes.** (`R_op`/`V_op`/`T_op` in the netlist are *filament physical
+properties* used to calibrate the thermal model — not parts to buy.)
 
 ---
 
-## Per-tube variants
+## Per-tube variants (the ONLY per-tube parts)
 
-These six items change per tube. Everything else above is identical.
+| element     | IV-18 | IV-6 | ILC1-1/7 | ILC1-1/8 | notes |
+|-------------|-------|------|----------|----------|-------|
+| `R_topref`  | 1 kΩ  | 2 kΩ | 5 kΩ     | 800 Ω    | bridge top ref; 1 % thin-film 0805 |
+| `R_botref`  | 100 Ω | 500 Ω| 1 kΩ     | 200 Ω    | bridge bottom ref; 1 % thin-film |
+| `R_sense`   | 10 Ω  | 5 Ω  | 5 Ω      | 2 Ω      | bridge sense leg; 1 % (ILC1-1/7 carries ~1 W RMS → ½ W part) |
+| oscillator level | ↓ | ↓ | ↓ | ↓ | set by the attenuator divider so the carrier into Stage 1 matches the tube; in sim = `V_src_rms` 0.018 / 0.020 / 0.100 / 0.024 |
+| target R_fil | 100 Ω | 20 Ω | 25 Ω | 8 Ω | = R_sense·R_topref/R_botref (held by the loop) |
 
-| RefDes      | IV-18            | IV-6            | ILC1-1/7        | ILC1-1/8        | Notes |
-|-------------|-----------------|-----------------|-----------------|-----------------|-------|
-| `R_top_ref` | 1 kΩ            | 2 kΩ            | 5 kΩ            | 800 Ω           | 1 % thin-film 0805. Sets bridge ratio = R_op. |
-| `R_bot_ref` | 100 Ω           | 500 Ω           | 1 kΩ            | 200 Ω           | 1 % thin-film 0805. |
-| `R_sen`     | 10 Ω, ¼ W       | 5 Ω, ¼ W        | 5 Ω, ½ W (1 W RMS) | 2 Ω, ¼ W      | 1 % wirewound or 1206 thick-film bulk-metal. ILC1-1/7 dissipates ~1 W RMS — use Vishay PR01 ½ W or larger. DigiKey: PR01000200000JR500-ND ($0.35). |
-| `R_buf1_fb` & `R_buf2_fb` (or `_fb1`) | 1.6 kΩ | 2 kΩ | **13 kΩ** | 2.5 kΩ | 1 % thin-film 0805. Sets K_buf (buffer voltage gain). |
-| `Vcc_buf` / `Vee_buf` rail | ±1.4 V | ±1.2 V | ±6.5 V | ±1.4 V | Tap from LM317 + LM337 adjusted by single trim resistor pair (no pot — fixed E96 R chosen at build). For ILC1-1/7 (±6.5 V) the LM7806/7906 work well; for the low-rail tubes use LM317/337 set to a fixed value. Detail in companion build doc. |
-| `R_gnd_log` | 20 kΩ | **345 Ω** | 526 Ω | **345 Ω** | 1 % thin-film 0805. Sets log demod small-signal gain K = 1 + R_fb_log/R_gnd_log per tube. With R_fb_log fixed at 10 kΩ: IV-18 K=1.5, IV-6 K=30, ILC1-1/7 K=20, ILC1-1/8 K=30. Per H11F gain-sweep optima (sweep_h11f_log_gain.png 2026-05-21). Use E24: 20 k / 360 / 510 / 360 (within 5 % of computed values). |
-| Output stage transistors | **M1, M2:** DMP3098L (PMOS, SOT-23, Diodes Inc.), DMN3404L (NMOS, SOT-23) | **M1, M2:** DMP3098L + DMN3404L | **Q_o_*, Q_a_*:** BC868 (NPN) + **BC869** (PNP) SOT-89 complementary pair, Nexperia | **M1, M2:** DMP3098L + DMN3404L | DigiKey: DMP3098L-7DICT-ND (~$0.61 @ 1), DMN3404L-7DICT-ND (~$0.35 @ 1 — check stock, NMOS occasionally back-ordered; AO3400A is a drop-in alt). BC868/BC869 (SOT-89, Nexperia) ~$0.40 @ 1 each. The booster sees ≤±2 V_pk for IV-18/IV-6/ILC1-1/8 (low-rail MOSFETs OK) and ±5.5 V_pk for ILC1-1/7 (medium-V BJT, ss_avg ~100 mW each — SOT-89 thermal margin chosen for headroom). |
+**Bridge sets the regulated point:** `R_fil = R_sense · R_topref / R_botref`.
+With 1 % resistors the guaranteed worst-case is **±3 % R_fil / +21 K T**
+(8-corner analysis). The three bridge resistors are the *only* lever for
+tighter temperature uniformity — use 0.5 %/0.1 % thin-film there if you
+want it; **caps and every other resistor are irrelevant to R_fil/T.**
+Filament-R part variation maps as `T ≈ T_op·(R_actual/R_nominal)^(1/1.2)`;
+the constant-voltage mains-winding history bounds real filament spread to
+a few %, well inside loop authority (no binning needed).
 
-ILC1-1/7-only feedback divider bottom resistor `R_buf*_fb2` = 1 kΩ (same on others).
-
----
-
-## Cost summary (qty-1 DigiKey, per tube)
-
-| Item                                    | $ per tube |
-|-----------------------------------------|------------|
-| 2× TLV9154 (U1, U2)                      | 4.10       |
-| 1× OPA2188 (U3)                          | 3.36       |
-| 1× CD74HC4053M96 (U4)                    | 0.54       |
-| 1× SN74HC14DR (U5)                       | 0.40       |
-| 1× H11F1 (photo-FET variable-R)          | 0.85       |
-| V→I converter: 1× Q2 (MMBT3904) + 1× 100 Ω + 1× 1 k | 0.09 |
-| V_bias_led: 1× TL431 + R divider         | 0.20       |
-| Log clipper (op-amp ch + 2× BAT54 + R_fb + R_gnd) | 0.12 |
-| 1× 10 k (R_lp_log) + 1× 82 nF (C_lp_log) | 0.06       |
-| 2× MMBT3904 (Q1, Q2 — Wien clamp)         | 0.12       |
-| 6× 1N4148WS (D1–D6)                      | 0.60       |
-| Output stage (BJT pair or MOSFET pair)   | 0.80–1.00  |
-| 2× LDO + decoupling                      | 1.20       |
-| Resistors (~50 generic 1 %)              | 1.00       |
-| Capacitors (1× C_ap PP, 1× C_intfb PP, ~10 ceramics) | 1.50 |
-| **Total**                                | **~$13.8–14.6** |
-
-Headroom of ~$5 against the $20/tube target. The H11F retrofit
-**saves ~$1.50/tube** vs the LS844 JFET arch (drops the $2.50 LS844
-+ bootstrap parts; adds the $0.85 H11F1 + V→I converter pennies +
-V_bias_led divider). All parts in stock at DigiKey and Mouser as of
-this writing; no allocation issues, no single-source distributors.
+**Oscillator level per tube:** with one fixed-amplitude Wien (≈2.5 V_rms,
+see "Source"), set the per-tube carrier by the attenuator divider
+(`R_atten_top`/`R_atten_bot`) rather than a different oscillator. The sim
+abstracts this as `V_src_rms`; in hardware it is the divider ratio (one
+E96 resistor chosen per tube — a build-time *selection*, not a trim).
 
 ---
 
-## Notes on the synchronous demodulator (U4 + U5)
+## Op-amps — 3 × OPA4277 quad (all 10 positions)
 
-The netlist models the demodulator with two SPICE `S` switches
-controlled by `n_cmp = sign(V_osc)`. The real implementation is:
+The 10 op-amp channels collapse into **3 quad packages** (12 channels,
+2 spare). Quad packaging is verified safe here (see "Coupling").
 
-1. `U5a` (one 74HC14 Schmitt-trigger stage): input is V_osc through
-   a 100 kΩ resistor with a Schottky clamp to GND/+9 V. Output is a
-   clean 0/+9 V square wave at f0 = 1 kHz.
-2. `U4` (one channel of CD74HC4053): control = U5a output. X0 input
-   = 0 (GND), X1 input = `n_diff` (op-amp output), common = `vplus`.
+| pkg | channels (netlist) | function |
+|-----|--------------------|----------|
+| **U1 (OPA4277)** | `XU_atten_buf`, `XU_vgain`, `XU_s2`, `XU_buf` | source attenuator buffer + H11F Stage-1 + Stage-2 gain + class-AB driver |
+| **U2 (OPA4277)** | `XU_buf_A`, `XU_buf_B`, `XU_da`, `XU_log` | two bridge buffers + diff amp + log demod |
+| **U3 (OPA4277)** | `XU_int`, `XU_aw_diff`, +2 spare | PID integrator + anti-windup diff amp; spares buffer the V_clamp refs |
 
-This replaces the `S1`/`S2` SPICE primitives with one IC channel
-plus one inverter. CD74HC4053 has Ron ≈ 100 Ω, well above the SPICE
-model's 10 Ω, but `R_din = 10 kΩ` makes the gain error <1 % which is
-well below the 5 K T_op accuracy goal.
+- **OPA4277UA** (SOIC-14) or **OPA4277PA** (PDIP-14 through-hole).
+  Precision bipolar, OP07-class: Vos ~10 µV typ (~50 µV max), drift
+  ±0.1 µV/°C, **GBW 1 MHz**, A_OL 134 dB, CMRR ~140 dB, **PSRR ~130 dB**,
+  channel separation **±1 µV/V**, BJT class-AB output (no LM358 crossover).
+- **Why OPA4277 / why 1 MHz:** the GBW sweep showed low GBW is the THD
+  sweet spot — 1 MHz best, ≥3 MHz both degrades THD ~10 dB *and* hunts
+  under Vos patterns. 1 MHz is ideal; do **not** substitute a faster part.
+- **Vos:** the design is Vos-insensitive (Fix A's G2 = 25 keeps cumulative
+  Vos·G2 small); 1024-case ±2 mV cube passes. Economy grade is fine.
+- **Coupling / why quads are OK:** channel separation ±1 µV/V and 130 dB
+  PSRR; a shared-supply coupling sim (pessimistic 0.3 Ω pin impedance,
+  adversarial grouping, model PSRR 62 dB ≪ real 130 dB) gave only
+  −0.14 dB THD penalty. One bypass cap (100 nF) per package.
+- **Single-pack fallback:** OP07CDR (£0.18, 0.6 MHz) on 10 single SOIC-8
+  positions if quads are ever undesired — same performance, more packages.
 
-The remaining two channels of U4 are unused — wire X-pins to GND.
+---
 
-If a builder prefers an even cheaper part, CD4053BNSR (~$0.40, the
-non-HC version) works identically with Ron ≈ 240 Ω → gain error
-~2.4 % — still adequate.
+## H11F variable-gain actuator + LED drive
+
+| RefDes | element | part | notes |
+|--------|---------|------|-------|
+| **U4** | `X_h11f` (variable-R in Stage-1 feedback) | **H11F1M** photo-FET optocoupler (onsemi/Vishay), DIP-6 or SMD-6 | symmetric bilateral photo-FET; R(I_LED) ≈ 100 Ω (at 16 mA) … 300 MΩ (dark). LED anode↔FET isolated. Variants: H11F2M/H11F3M (higher R_typ). |
+| `R_led_set` | LED series resistor (sets I_LED) | 270 Ω, 1 %, 0805 | between the +5 V LED supply and the LED anode; cathode returns to the integrator output `v_int`. I_LED ≈ (5 − V_F − v_int)/270 ≈ 4–14 mA over the operating range. |
+
+No V→I converter, no gate bootstrap (those were all-pass-era parts).
+H11F **part-to-part R spread is a non-issue** here: the split-gain
+`R_max_s1 = 24 Ω` swamps it (the spec-max 2× R part is bit-identical to
+typical in sim; the integrator absorbs the rest). No matched-pair
+sourcing, no trimming.
+
+---
+
+## BJT class-AB push-pull output buffer (identical all tubes)
+
+| RefDes | element | part | notes |
+|--------|---------|------|-------|
+| **Q1 (Q_o_out_n)** | top NPN output | **BC337-40** (NPN, TO-92, 800 mA) or BC817-40 (SOT-23) | delivers up to ~280 mA_pk (ILC1-1/7) |
+| **Q2 (Q_o_out_p)** | bottom PNP output | **BC327-40** (PNP, TO-92) or BC807-40 (SOT-23) | complementary to Q1 |
+| **Q3 (Q_o_drv_n)** | top NPN driver | BC337-40 / BC817 | pre-driver |
+| **Q4 (Q_o_drv_p)** | bottom PNP driver | BC327-40 / BC807 | pre-driver |
+| `D_bbo_t1/t2/b1/b2` | class-AB bias string (4×) | **1N4148** (DO-35) / 1N4148WS (SOD-323) | V_BE-multiplier-style bias |
+| `R_bbo_ta/tb/ba/bb` | bias-chain resistors (4×) | 1.1 kΩ, 5 %, 0805 | |
+| `R_o_bleed_n/p` | output-pair bleed (2×) | 5 kΩ, 5 %, 0805 | |
+| `R_cs` | current-sense / series limit | 0.01–0.1 Ω (model 0.01) | low-value; a short PCB trace or 0.1 Ω 1 % is fine. (`R_series` 0.01 Ω likewise — cold-start current limit.) |
+| **C_bbo_t, C_bbo_b** | bias-rail bootstrap (2×) | **4.7 µF — electrolytic / tantalum / film. *NOT* Y5V ceramic.** | ⚠ **See dielectric rule.** These are the only THD-critical caps. |
+
+> **Cap dielectric rule (Y5V study):** every cap in the design may be
+> cheap Y5V ceramic **except `C_bbo_t`/`C_bbo_b`** (the 4.7 µF bootstrap
+> caps). If those collapse under Y5V's temperature/tolerance droop, the
+> class-AB bias rail sags within the carrier cycle → crossover distortion
+> (THD −55 → −22 dB at 85 °C). At 4.7 µF they'd naturally be electrolytic
+> or tantalum anyway, so this is a "don't accidentally spec Y5V" note. All
+> other caps: Y5V-safe (zero effect on regulation, stability, or THD).
+
+For ILC1-1/7 (≈5.5 V_pk drive, output devices dissipate ~100 mW each),
+use SOT-89 (e.g. BCX-class) or TO-92 with a little lead length for
+thermal headroom. The low-power tubes (≤±2 V_pk) are comfortable in
+SOT-23.
+
+---
+
+## Gain chain (identical all tubes)
+
+| element | value | type | function |
+|---------|-------|------|----------|
+| `R_atten_top` / `R_atten_bot` | per-tube ratio (sim 12 k / 1 k for a 0.1 V_rms model source; scale `R_atten_top` up — e.g. ~330 k — for the real ~2.5 V_rms Wien) | 1 % 0805 | sets carrier level into Stage 1 |
+| `R_in_vgain` | 10 Ω | 1 % | Stage-1 input resistor |
+| `R_max_s1` | 24 Ω | 1 % | bounds Stage-1 gain (∥ H11F) — also desensitizes H11F part spread |
+| `R_fb_s2` / `R_gnd_s2` | 2.4 kΩ / 100 Ω | 1 % | Stage-2 gain G2 = 1 + 2400/100 = **25** (Fix A; do not restore 201) |
+| `C_couple_buf` | 1 µF | X7R/film | AC-couple Stage 2 → buffer (Y5V-safe) |
+| `R_bias_buf` | 16 kΩ | 1 % | buffer input bias |
+| `R_fb_buf` / `R_in_buf` | 13 kΩ / 1 kΩ | 1 % | buffer gain (k_buf = 14) |
+
+---
+
+## Bridge sense, diff amp, demodulator, compensator, anti-windup
+
+| block | elements | values | part / note |
+|-------|----------|--------|-------------|
+| Bridge buffers | `XU_buf_A`, `XU_buf_B` | — | 2 OPA4277 channels (high-Z taps of node_A / node_B) |
+| Diff amp | `R_da_inA`,`R_da_inB`,`R_da_fb`,`R_da_gB` | 1 k, 1 k, 30 k, 30 k | K_diff = 30; 1 % thin-film (match the two 1 k and two 30 k) |
+| **Sync demod** | `B_demod` (behavioural) | — | **hardware = chopper:** 1 ch of **CD74HC4053** analog switch + 1 stage of **SN74HC14** Schmitt to square up V_osc into a clean 0/+rail gate. Ron ≈ 100 Ω ≪ R_lp_demod 100 k → negligible error. |
+| Demod LP | `R_lp_demod` / `C_lp_demod` | 100 kΩ / 1 µF | ~1.6 Hz post-demod LP; C may be X7R (Y5V-safe) |
+| Log demod | `XU_log`, `R_fb_log`, `R_gnd_log` | 10 kΩ / 526 Ω | K = 1 + 10k/526 ≈ **20, uniform all tubes**. (No Schottky clip — removed; the op-amp rails bound cold-start.) |
+| PID integrator | `XU_int`, `R_intin`, `C_intin`, `C_intfb`, `R_pid`, `C_hf`, `R_int_p` | 100 k, 1 nF, **330 nF (use for 318 nF)**, 1 MΩ, 1 nF, 100 k | integrator zero ~5 Hz, HF pole ~160 Hz. `C_intfb` = film/C0G preferred (Y5V-safe but value-stable is nice for the dominant pole); `C_intin`/`C_hf` C0G. `R_int_pg` 1 GΩ is a model leak path — omit in hardware. |
+| Anti-windup | `R_diff1–4`, `R_bc`, `R_aw_out`, `D_aw_hi`, `D_aw_lo` | 100 k ×4, 5 k, 10 Ω, 2× clamp diode | back-calc unwind; clamp diodes = 1N4148 or BAT54 (low-V_F). |
+| Clamp refs | `V_clamp_hi`, `V_clamp_lo` | +4.0 V, −0.5 V | resistor dividers off the rails, buffered by U3's 2 spare OPA4277 channels (or LM4040 shunt refs). Recommend wider [−3, +6] for headroom at corners/low-power tubes. |
+
+---
+
+## Source — Wien bridge oscillator (1 kHz)
+
+The netlist abstracts the source as `B_src`; in hardware it is the
+two-NPN symmetric-clamp Wien oscillator (`wien_oscillator.py`).
+
+| element | value | part |
+|---------|-------|------|
+| `R1`, `R2` (frequency) | 10 kΩ, 1 % | f0 = 1/(2πRC) = 1 kHz |
+| `C1`, `C2` (frequency) | 16 nF (15.9 nF), 5 % **C0G/NP0 or PP film** | frequency-setting — keep stable dielectric |
+| gain net (Rfa/Rfb/Rg) | 10 k / 12 k / 10 k, 1 % | sets loop gain just > 3 |
+| clamp transistors | 2× **MMBT3904** (SOT-23) / 2N3904 (TO-92) | matched anti-parallel NPN amplitude clamp (kills H2) |
+| base-bias dividers | 120 kΩ, 5 % | set clamp threshold (α = 0.5) |
+
+> **Bench-check (flagged):** the matched-NPN clamp is clean (THD ~2.3 %,
+> H2 killed, perfect PSRR) but its amplitude has a **−0.45 %/°C tempco**
+> and the oscillation **dies above ~60 °C / at Rg +5 %** *in simulation*
+> (model-dependent). This is the system's main temperature risk — verify
+> on the bench and add tempco comp / AGC if the real part confirms it.
+
+---
+
+## Rails
+
+| RefDes | function | part | notes |
+|--------|----------|------|-------|
+| +V rail | +10 V (sim `V_vcc`) | MC7810 / LM317-set | op-amp + buffer positive rail (±9 V works with slightly less headroom) |
+| −V rail | −10 V (sim `V_vee`) | MC7910 / LM337-set | negative rail |
+| +5 V | H11F LED supply (`V_led_supply`) | 78L05 / divider | feeds `R_led_set` |
+| decoupling | 100 nF + 10 µF per rail per IC | X7R | (`R_sense_vcc/vee` 0.1 Ω in the netlist are model rail-sense elements, not real parts) |
+
+---
+
+## Cost summary (qty-1, per tube, approximate — verify live pricing)
+
+| item | $/tube |
+|------|--------|
+| 3× OPA4277 quad (U1–U3) | ~6.0–9.0 |
+| 1× H11F1M (U4) + R_led_set | ~0.9 |
+| 4× BJT (BC337/BC327 pair ×2) + 4× 1N4148 bias | ~0.6 |
+| 2× 4.7 µF bootstrap (tantalum/electrolytic) | ~0.3 |
+| CD74HC4053 + SN74HC14 (chopper demod) | ~0.9 |
+| Wien: 2× MMBT3904 + C0G/film freq caps + R | ~0.6 |
+| anti-windup / clamp diodes (1N4148 / BAT54) | ~0.3 |
+| 2× LDO (±10 V) + 78L05 + decoupling | ~1.4 |
+| resistors (~40 × 1 % thin-film) | ~0.9 |
+| capacitors (1× C_intfb film, ~10 ceramics) | ~1.0 |
+| **Total** | **~$13–16** |
+
+Comfortably inside the ~$20/tube target. OPA4277 quads are the biggest
+line item; the OP07CDR single-pack fallback trades package count for a
+slightly lower op-amp cost.
+
+---
+
+## Bench-check items (sim findings to confirm on hardware)
+
+These are model-dependent; validate before committing to a production run:
+
+1. **Wien amplitude tempco / >60 °C death cliff** (−0.45 %/°C in sim) —
+   the system's main temperature weak point; the regulator loop itself is
+   temperature-robust (integrator rejects device tempco).
+2. **H11F R(I_LED) at the real operating point** — the SPICE model is an
+   empirical fit to digitised datasheet curves (Fig 1/2 disagree; we follow
+   Fig 2 for transient/DC). Confirm the real part's R at the ~4–14 mA
+   operating range and that V_int lands clear of the clamps.
+3. **Filament-R tolerance vs the constant-V history assumption** — confirm
+   real filament spread is the assumed few-%; if wider, widen the clamp to
+   [−3, +6] and/or select `R_topref` per measured cold filament R.
+4. **Bridge-resistor grade** — 1 % gives ±3 % R_fil / +21 K T; drop to
+   0.5 %/0.1 % only if tighter digit-to-digit T uniformity is wanted.
