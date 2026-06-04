@@ -110,8 +110,13 @@ B_R     r_fil 0     V = R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp
 """
     R_fb_buf = (k_buf - 1) * 1e3
     Rb_half = R_bias / 2.0
-    op = ("uopamp_lvl3 Avol=1meg GBW=10meg Rin=100g Rout=10 "
-          "Iq=2m Ilimit=500m Vos=10u Vmax=30 Vrail=0.1")
+    # Models the OPA4277 (quad precision, OP07-class, all 10 positions):
+    # A_OL 134 dB (~5e6), GBW 1 MHz, Vos ~10 µV typ / ~50 µV max (quad),
+    # BJT class-AB output, ~0.8 mA/ch Iq.  GBW=1 MHz is the best-THD point in
+    # the GBW sweep (≥3 MHz degrades THD + hunts under Vos).  Quad packaging
+    # is safe here (channel sep ±1 µV/V; coupling sim showed ≤0.14 dB penalty).
+    op = ("uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 "
+          "Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1")
     R_diff_in = 1000
     R_diff_fb = int(K_diff * R_diff_in)
     # Power instrumentation: insert 0-V current-sense sources in series with
