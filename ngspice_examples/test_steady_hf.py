@@ -54,7 +54,7 @@ def run_hf(tube_key: str):
         "iv6":     2.13,
         "ilc11_7": 2.10,
         "ilc11_8": 2.10,
-        "iv3":     0.50,   # IV-3 has different scale, smaller v_int
+        "iv18":     0.50,   # IV-18 has different scale, smaller v_int
     }
     mc["v_int_settled"] = v_int_settled_map.get(tube_key, 2.0)
 

@@ -202,7 +202,7 @@ wrdata {dat.as_posix()} {wrdata_args}
 
 
 def main():
-    tubes = sys.argv[1:] or ["iv3", "iv6", "ilc11_7", "ilc11_8"]
+    tubes = sys.argv[1:] or ["iv18", "iv6", "ilc11_7", "ilc11_8"]
     for tube in tubes:
         if tube not in m.TUBES:
             print(f"Unknown tube {tube}"); continue

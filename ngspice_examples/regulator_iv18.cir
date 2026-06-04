@@ -1,0 +1,194 @@
+* VFD-filament regulator netlist for IV-18 (tube=iv18)
+* Generated from regulator.py make_netlist (TUBES['iv18']);
+* matches the netlist that regulator_iv18.asc was converted from.
+
+* Regulator netlist: polarity_swap=False, instrument_power=False, use_split_gain=True
+.include /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/uopamp.lib
+.include /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/spice_models/H11F1.spice.txt
+.model QBC337 NPN (IS=15.6f BF=290 VAF=125 IKF=1.0 ISE=29p NE=1.5 BR=4.65 RB=1 RC=0.41 CJC=12p MJC=0.4 VJC=0.4 CJE=20p MJE=0.4 VJE=0.85)
+.model QBC327 PNP (IS=18.4f BF=215 VAF=80 IKF=1.0 ISE=29p NE=1.7 BR=2.4 RB=1 RC=0.41 CJC=10p MJC=0.4 VJC=0.4 CJE=20p MJE=0.4 VJE=0.85)
+.model Dbias D (IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
+
+.param T_amb=300.0
+.param R_amb=3.082035e+01
+.param sigma_eps_A=2.490660e-14
+.param C_th=5.100872e-06
+.param fil_exp=1.2
+
+.subckt filament v_top v_bot T_node r_fil
+B_fil   v_top v_bot I = (V(v_top) - V(v_bot)) / (R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp)
+B_pelec 0 T_node    I = (V(v_top)-V(v_bot))*(V(v_top)-V(v_bot)) / (R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp)
+B_prad  T_node 0    I = sigma_eps_A * (max(V(T_node),T_amb)^4 - T_amb^4)
+C_th    T_node 0    {C_th} IC=300.0
+B_R     r_fil 0     V = R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp
+.ends
+
+
+* Power supplies with optional ramp.  Real PSUs charge their output cap
+* over ~ms; with t_rail_ramp=0 the rails step instantly (sim-only case).
+* All rails ramp together so the relative timing matches hardware.
+V_vcc vcc_top 0 DC 10
+V_vee vee_top 0 DC -10
+V_led_supply n_v_led 0 DC 5.0
+R_sense_vcc vcc_top vcc_buf 0.1
+R_sense_vee vee_top vee_buf 0.1
+
+
+
+* V_src models the Wien oscillator output.  In real hardware, a Wien
+* with AGC takes ~τ to ramp from 0 to settled amplitude — typically
+* 50-500 ms for the amplitude-clamp loop.  Modelled here as a sine
+* with exponentially-growing envelope, τ = t_src_ramp.  With
+* t_src_ramp ≥ τ_thermal (filament thermal τ), the filament tracks
+* V_src quasi-statically and there's no thermal overshoot at cold-start.
+B_src v_src 0 V = 0.0254558 * (1 - exp(-time/0.6)) * sin(2*3.141592653589793*1000.0*time)
+
+R_atten_top v_src n_atten_raw 12000
+R_atten_bot n_atten_raw 0 1000
+XU_atten_buf n_atten_raw v_atten vcc_buf vee_buf v_atten uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+
+* Split-gain Stage 1: H11F in feedback || R_max, R_in_s1 input
+* H11F channel between n_h11f_inv (= virtual ground) and v_drv1
+* LED bias inverted: V_LED supply → R_LED → LED anode, cathode → v_int
+R_in_vgain v_atten n_h11f_inv 10
+R_max_s1   n_h11f_inv v_drv1 24
+X_h11f     n_led_a v_int n_h11f_inv v_drv1 H11F1
+XU_vgain   0 n_h11f_inv vcc_buf vee_buf v_drv1 uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+* DC coupling between Stage 1 and Stage 2.  AC coupling caused
+* slow settling artifacts during cold-start; Stage 1's Vos (10µV)
+* through G2=201 gives only ~2mV at v_drv, negligible.
+R_dc_couple v_drv1 n_s2_in 0
+* Stage 2: fixed-gain non-inverting amp, G2 = 1 + R_fb/R_gnd
+R_gnd_s2   n_minus_s2 0 100
+R_fb_s2    v_drv n_minus_s2 2400.0
+XU_s2      n_s2_in n_minus_s2 vcc_buf vee_buf v_drv uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+
+* AC-couple between Stage 2 output (v_drv) and the buffer input.
+* Blocks DC propagated through the Stage 1/Stage 2 gain chain (the dominant
+* DC source is Stage 2's Vos × G2=201 ≈ 1V worst-case for non-chopper op-amps).
+* C × R = 16ms gives 10 Hz corner; 0.57° phase shift at the 1 kHz carrier.
+* The HP filter sits in the SIGNAL (carrier) chain only — the loop's DC
+* sensing path runs through the chopper+integrator and is unaffected.
+C_couple_buf v_drv     v_buf_in  1u  IC=0
+R_bias_buf   v_buf_in  0         16k
+XU_buf       v_buf_in  n_fb_buf vcc_buf vee_buf n_buf_o uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+R_fb_buf v_osc_drive n_fb_buf 13000
+R_in_buf n_fb_buf 0 1k
+R_bbo_ta vcc_buf     mid_bbo_t   1100
+R_bbo_tb mid_bbo_t    q_o_bn      1100
+* Bootstrap caps tie bias chain to the BJT emitter node (n_buf_emi), NOT
+* the post-R_cs load (v_osc_drive).  If they bootstrap to v_osc_drive,
+* the I·R_cs drop reduces V_BE on the output BJTs and they collapse at
+* peak current — destroys THD and defeats the current limit.
+C_bbo_t  mid_bbo_t    n_buf_emi   4.7u IC=0
+D_bbo_t1 q_o_bn       n_bbo_t1    Dbias
+D_bbo_t2 n_bbo_t1     n_buf_o     Dbias
+D_bbo_b1 n_buf_o      n_bbo_b1    Dbias
+D_bbo_b2 n_bbo_b1     q_o_bp      Dbias
+R_bbo_bb q_o_bp       mid_bbo_b   1100
+R_bbo_ba mid_bbo_b    vee_buf     1100
+C_bbo_b  mid_bbo_b    n_buf_emi   4.7u IC=0
+Q_o_drv_n   vcc_buf q_o_bn      n_o_pair_n   QBC337
+Q_o_out_n   vcc_buf n_o_pair_n  n_buf_emi    QBC337
+R_o_bleed_n n_o_pair_n n_buf_emi 5k
+Q_o_drv_p   vee_buf q_o_bp      n_o_pair_p   QBC327
+Q_o_out_p   vee_buf n_o_pair_p  n_buf_emi    QBC327
+R_o_bleed_p n_o_pair_p n_buf_emi 5k
+* Current-sense resistor between output BJT emitters and the load.
+* Current limit threshold = V_BE_on / R_cs ≈ 0.6V / R_cs.
+R_cs        n_buf_emi   v_osc_drive   0.01
+* current limit disabled
+
+* Series R between buffer output and the bridge top.  Limits cold-start
+* current (since R_fil is small when cold and dominates the bridge
+* impedance).  Bridge balance is unchanged because both arms tap the
+* same v_bridge_top node — the R_series voltage drop is common-mode.
+R_series v_osc_drive v_bridge_top 0.01
+X_filament v_bridge_top node_A T_node r_fil filament
+R_sense  node_A      v_ap_drive 10.0
+R_topref v_bridge_top node_B    1000.0
+R_botref node_B      v_ap_drive 100.0
+R_ap_gnd v_ap_drive  0          0.01
+
+XU_buf_A  node_A n_node_A_buf vcc_buf vee_buf n_node_A_buf uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+XU_buf_B  node_B n_node_B_buf vcc_buf vee_buf n_node_B_buf uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+
+R_da_inA  n_node_A_buf n_da_minus 1000
+R_da_inB  n_node_B_buf n_da_plus  1000
+R_da_gB   n_da_plus 0       30000
+R_da_fb   v_diff_amp n_da_minus 30000
+XU_da     n_da_plus n_da_minus vcc_buf vee_buf v_diff_amp uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+
+B_demod n_demod 0 V = V(v_diff_amp) * (V(v_osc_drive) >= 0 ? 1 : -1)
+R_lp_demod n_demod n_demod_dc 100000.0
+C_lp_demod n_demod_dc 0 1e-06
+
+* ===== Log demod / soft saturator =====
+* Non-inverting op-amp with R_fb=10k and R_gnd sized for gain log_gain_K.
+* Anti-parallel BAT54 Schottkys clip output at ±V_F ≈ ±0.3V → at cold
+* start when bridge error is ~12V × demod gain, the integrator input
+* is clipped to ±0.3V so the wind-up rate is bounded.  Small-signal:
+* linear gain log_gain_K = 20.0, faster settling at OP.
+R_gnd_log   n_log_minus 0 526.3157894736842
+R_fb_log    n_log_minus n_log_dem 10k
+* Schottky clip diodes removed (2026-05-25).  With small SS bridge error
+* the clip kept the op-amp at current-limit continuously → asymmetric rail
+* current.  Now linear at SS; op-amp only saturates at its rails (-9.9V)
+* briefly during cold-start while the loop catches up.
+XU_log      n_demod_dc n_log_minus vcc_buf vee_buf n_log_dem uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+
+V_set n_setpoint 0 DC 0
+R_int_p n_setpoint n_int_plus 100000.0
+R_int_pg n_int_plus 0 1G
+* PID compensator with HF rolloff (matches the tuned compensator from the
+* old test_closed_loop.py architecture).
+*   Input branch (parallel):  R_int || C_pid (adds Kd through input)
+*   Feedback branch (series): (R_pid || C_hf) + C_int
+*   H(s) = -((R_pid || 1/sC_hf) + 1/sC_int) · (1 + sR_int·C_pid) / R_int
+*   Integrator zero: f_zi = 1/(2π·R_pid·C_int) ≈ 5 Hz
+*   HF rolloff: f_hf = 1/(2π·R_pid·C_hf) ≈ 160 Hz
+R_intin  n_log_dem n_int_minus 100000.0
+C_intin  n_log_dem n_int_minus 1e-09
+R_pid    n_int_pidp v_int_raw 1000000.0
+C_intfb  n_int_minus n_int_pidp 3.18e-07 IC=0
+C_hf     n_int_pidp v_int_raw 1e-09 IC=0
+XU_int n_int_plus n_int_minus vcc_buf vee_buf v_int_raw uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+
+* ===== Passive saturator + back-calc anti-windup =====
+* v_int_raw is the integrator's free-swinging output.  v_int (the
+* "clamped" version that drives the LED) is bounded between V_clamp_lo
+* and V_clamp_hi by Schottky diodes through R_aw_out.  e_sat measures
+* how far v_int_raw has wound past the clamp, and R_bc feeds that error
+* back into the integrator summing junction to unwind it quickly.
+.model Dclamp D(Is=10n N=1.0 RS=0.1 BV=40 IBV=0.1m CJO=10p)
+* Clamp range bounds the loop's wind-up.  In the polarity-swapped arch
+* V_int=0 is "max drive" (cold-start state) and V_int_OP > 0; V_clamp_lo
+* is the safety bound that prevents wind-down past the H11F's max-I_F.
+* V_clamp_hi is wind-up safety past the operating point.
+V_clamp_hi v_clamp_hi 0 4.0
+V_clamp_lo v_clamp_lo 0 -0.5
+R_aw_out  v_int_raw v_int 10
+D_aw_hi   v_int     v_clamp_hi Dclamp
+D_aw_lo   v_clamp_lo v_int     Dclamp
+* Back-calc diff amp: e_sat = v_int_raw - v_int (unity-gain difference)
+R_diff1 v_int n_aw_diff_minus 100k
+R_diff2 v_int_raw n_aw_diff_plus 100k
+R_diff3 n_aw_diff_minus e_sat 100k
+R_diff4 n_aw_diff_plus 0 100k
+XU_aw_diff n_aw_diff_plus n_aw_diff_minus vcc_buf vee_buf e_sat uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+* Back-calc resistor: R_bc < R_int gives FASTER unwinding than wind-up,
+* so once the integrator saturates the clamp, anti-windup can pull it
+* back down quickly.  R_bc = R_int / 20 → 20× faster than wind-up.
+R_bc e_sat n_int_minus 5000.0
+
+R_led_set n_v_led n_led_a 270
+
+.tran 50u 15.0 0 uic
+.options reltol=1e-4 abstol=1n vntol=1u
+
+.save v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a)
+.control
+run
+wrdata /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/_regulator/run.data v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a)
+.endc
+.end

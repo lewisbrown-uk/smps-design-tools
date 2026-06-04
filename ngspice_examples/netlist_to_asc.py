@@ -7,16 +7,21 @@ meaningful layout in LTspice once the components are visible on the page.
 
 Usage:
     python3 netlist_to_asc.py [TUBE]
-        TUBE in {iv3, iv6, ilc11_7, ilc11_8} (default: ilc11_7)
+        TUBE in {iv18, iv6, ilc11_7, ilc11_8} (default: ilc11_7)
 
 Writes regulator_<tube>.asc next to this script.
 """
 from __future__ import annotations
-import sys
+import sys, types
 import re
 from pathlib import Path
 
 HERE = Path(__file__).parent
+# Stub matplotlib for hosts without it
+for n in ("matplotlib", "matplotlib.pyplot"):
+    sys.modules.setdefault(n, types.ModuleType(n))
+sys.modules["matplotlib"].use = lambda *a, **kw: None
+sys.modules["matplotlib"].pyplot = sys.modules["matplotlib.pyplot"]
 
 # LTspice grid is 16 pixels per unit. Components are spaced ~256 px apart
 # (16 grid units) so they don't overlap and stubs have room.
@@ -138,7 +143,7 @@ def parse_netlist(netlist: str):
             subckt = "?"
             pin_count = 5
             for k in range(len(parts) - 1, 0, -1):
-                if parts[k].lower() == "uopamp_lvl2":
+                if parts[k].lower().startswith("uopamp_lvl"):
                     subckt = parts[k]
                     pin_count = k - 1
                     break
@@ -193,7 +198,7 @@ def emit_asc(components, out_path: Path, title: str):
             # LTspice expects the form "V=..." or "I=..."
             lines.append(f"SYMATTR Value {comp['expr']}")
         elif ctype == "opamp":
-            lines.append(f"SYMATTR Value uopamp_lvl2")
+            lines.append(f"SYMATTR Value {comp.get('subckt', 'uopamp_lvl2')}")
             if comp.get("subckt_args"):
                 lines.append(f"SYMATTR Value2 {comp['subckt_args']}")
 
@@ -240,25 +245,15 @@ def emit_asc(components, out_path: Path, title: str):
 def main():
     tube = sys.argv[1] if len(sys.argv) > 1 else "ilc11_7"
     sys.path.insert(0, str(HERE))
-    import test_closed_loop as m
+    import regulator as m
     if tube not in m.TUBES:
         print(f"Unknown tube {tube}; available: {list(m.TUBES.keys())}")
         sys.exit(1)
-    spec = m.TUBES[tube]
-    mc = {k: spec[k] for k in ("r_amb", "sigma_eps_A", "c_th",
-                               "r_top_ref", "r_bot_ref", "r_sense")}
-    if spec.get("booster"): mc["booster"] = True
-    if spec.get("c_ap") is not None: mc["c_ap"] = spec["c_ap"]
-    if spec.get("buf_fb1") is not None: mc["buf_fb1"] = spec["buf_fb1"]
-    if spec.get("buf_fb_ap") is not None: mc["buf_fb_ap"] = spec["buf_fb_ap"]
-    if spec.get("v_buf") is not None: mc["v_buf"] = spec["v_buf"]
-    if spec.get("wien_alpha") is not None: mc["wien_alpha"] = spec["wien_alpha"]
-    netlist = m.make_netlist(HERE / f"_unused.data",
-                             v_preset=0.55, t_ramp=0.1,
-                             r_int_scale=spec["r_int_scale"], mc=mc)
+    netlist = m.make_netlist(**m.TUBES[tube])
     components = parse_netlist(netlist)
     out_path = HERE / f"regulator_{tube}.asc"
-    title = f"VFD-filament regulator for {spec['name']} (tube={tube})"
+    name = m.TUBE_NAMES.get(tube, tube)
+    title = f"VFD-filament regulator for {name} (tube={tube})"
     emit_asc(components, out_path, title)
 
 

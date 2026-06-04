@@ -1,10 +1,10 @@
 """Plot the cold-start behaviour of ILC1-1/7 at C_AP=470nF, both V_p variants
 overlaid. Highlights the three distinct phases:
-    1. Slew    (0 -> ~15 ms): integrator ramps from 0 toward +2.5 V clamp
-    2. Pinned  (~15 -> 25-80 ms): V_int_out pinned at +3.34 V by clamp diode,
-                                 filament heating at maximum drive
-    3. Release (release_t -> settle): diode comes out of conduction, V_int
-                                       drifts to OP, bridge balances
+    1. Slew    (0 -> ~12-23 ms): integrator ramps from 0 toward +2.5 V clamp
+    2. Pinned  (~12-23 -> ~470-490 ms): V_int_out pinned at +3.34 V by clamp
+                                       diode, filament heating at maximum
+    3. Release / settle (~470-490 ms onward): diode comes out of conduction,
+                                              V_int drifts to OP, bridge balances
 Reads the .npz files saved by diag_ilc7_peak.py.
 """
 import sys
@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 
 CLAMP_HI = 2.5
 CLAMP_LO = 0.3
-T_END_ZOOM = 0.250   # cold-start window: 0-250 ms
+T_END_ZOOM = 2.000   # cover slew + pinned + release + settle (full cold-start arc)
 
 cases = [("typ", -1.5, "C0"), ("max", -3.0, "C3")]
 runs = {}
@@ -45,7 +45,7 @@ def find_phases(r):
     return float(t[i_first]), float(t[i_last])
 
 
-fig, axes = plt.subplots(4, 1, figsize=(12, 11), sharex=True)
+fig, axes = plt.subplots(5, 1, figsize=(12, 13), sharex=True)
 fig.suptitle("ILC1-1/7  cold-start  (C_AP=470 nF, no soft-start)", fontsize=14)
 
 # Shade the 'pinned' window for the V_p=-1.5 case (slowest release, defines envelope)
@@ -64,6 +64,7 @@ for lbl, v, color in cases:
     axes[1].plot(t_ms[mask], r["v_int_out"][mask], color=color, lw=0.8, label=label)
     axes[2].plot(t_ms[mask], r["i_clamp_hi"][mask]*1e3, color=color, lw=0.8, label=label)
     axes[3].plot(t_ms[mask], r["r_fil"][mask], color=color, lw=0.8, label=label)
+    axes[4].plot(t_ms[mask], r["T_node"][mask], color=color, lw=0.8, label=label)
 
 # Annotate the V_p=-1.5 phase boundaries on row 0
 for ax in axes:
@@ -89,13 +90,17 @@ axes[0].set_ylabel("V_ctl (JFET gate) [V]")
 axes[1].set_ylabel("V_int_out [V]")
 axes[2].set_ylabel("I_clamp_hi [mA]")
 axes[3].set_ylabel("R_fil [Ω]")
-axes[3].set_xlabel("Time [ms]")
+axes[4].set_ylabel("T_filament [K]")
+axes[4].set_xlabel("Time [ms]")
 
 for ax in axes:
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best", fontsize=8)
 axes[3].axhline(25, color="0.4", lw=0.6, ls="--", label="R_op = 25 Ω")
 axes[3].legend(loc="best", fontsize=8)
+axes[4].axhline(800, color="0.4", lw=0.6, ls="--", label="T_op = 800 K")
+axes[4].axhline(300, color="0.4", lw=0.6, ls=":", label="T_amb = 300 K")
+axes[4].legend(loc="best", fontsize=8)
 
 fig.tight_layout(rect=[0, 0, 1, 0.97])
 out = HERE / "ilc7_coldstart_phases.png"

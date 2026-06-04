@@ -1,280 +1,194 @@
 * VFD-filament regulator netlist for IV-6 (tube=iv6)
-* Generated from test_closed_loop.py make_netlist; matches the
-* netlist that the corresponding regulator_iv6.asc was
-* converted from. Use to cross-check LTspice's generated netlist.
+* Generated from regulator.py make_netlist (TUBES['iv6']);
+* matches the netlist that regulator_iv6.asc was converted from.
 
-* Closed-loop VFD-filament regulator with thermal model
-
-.include /home/user/smps-design-tools/ngspice_examples/uopamp.lib
+* Regulator netlist: polarity_swap=False, instrument_power=False, use_split_gain=True
+.include /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/uopamp.lib
+.include /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/spice_models/H11F1.spice.txt
+.model QBC337 NPN (IS=15.6f BF=290 VAF=125 IKF=1.0 ISE=29p NE=1.5 BR=4.65 RB=1 RC=0.41 CJC=12p MJC=0.4 VJC=0.4 CJE=20p MJE=0.4 VJE=0.85)
+.model QBC327 PNP (IS=18.4f BF=215 VAF=80 IKF=1.0 ISE=29p NE=1.7 BR=2.4 RB=1 RC=0.41 CJC=10p MJC=0.4 VJC=0.4 CJE=20p MJE=0.4 VJE=0.85)
+.model Dbias D (IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
 
 .param T_amb=300.0
-.param R_amb=6.16407
+.param R_amb=6.164069e+00
 .param sigma_eps_A=1.245330e-13
 .param C_th=2.550436e-05
-.param fil_exp=1.2000
+.param fil_exp=1.2
 
-Vcc  vcc 0  9.0
-Vee  vee 0 -9.0
-* Buffer rails for the class-AB BJT collectors. Class-H envelope-tracking
-* servo in booster mode (auto-tunes vcc_buf/vee_buf to V_top_pk + 0.3 V),
-* fixed at VCC/VEE in non-booster mode (no buffers to power).
-Vcc_buf vcc_buf 0 1.2
-Vee_buf vee_buf 0 -1.2
-
-* === Wien bridge oscillator (alpha=0.5) ===
-R1   v_osc  ns   10000
-C1   ns     np   1.591500e-08  IC=0
-R2   np     0    10000
-C2   np     0    1.591500e-08  IC=10m
-Rg   nn     0    10k
-Rfa  nn     fb   10k
-Rfb  fb     v_osc  12k
-Q1   fb     b1    v_osc Q2N3904
-Q2   v_osc  b2    fb    Q2N3904
-Rtop1 fb    b1    120000
-Rbot1 b1    v_osc 120000
-Rtop2 v_osc b2    120000
-Rbot2 b2    fb    120000
-XU_osc np nn vcc vee v_osc uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-
-* === JFET-controlled all-pass: V_ap = V_osc * (1 - jwR_DS C)/(1 + jwR_DS C) ===
-* All-pass input is taken from v_drv_atten: when a buffer chain is in use,
-* this is v_drv_atten (low-Z attenuated signal from Buffer 0); otherwise it
-* is v_osc directly. Attenuation keeps V_DS << V_GS-Vto so the JFET stays
-* in its linear region, eliminating the asymmetric V_GS shift caused by the
-* model's drain/source swap when V_DS reverses polarity.
-R_ap1 v_drv_atten n_ap_minus 1590
-R_ap2 v_ap  n_ap_minus 1590
-* JFET R_DS in series from V_drv_atten (or V_osc) to V+ (cap-shunted node).
-* The gate is driven directly by the inverter op-amp's output (v_ctl), so
-* gate-channel forward-conduction current during overshoots is sunk by
-* the inverter's output stage with no DC offset on V_GS. The bootstrap AC
-* signal is summed into the inverter's non-inverting input -- see the
-* inverter section below.
-J_var v_drv_atten v_ctl n_ap_plus JMMBFJ113
-C_ap n_ap_plus 0 1.000000e-07    IC=0
-XU_ap n_ap_plus n_ap_minus vcc vee v_ap uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-.model JMMBFJ113 NJF(Vto=-1.5000 Beta=2.2000e-03 Lambda=0)
-
-* === Tube filament thermal-electrical macromodel ===
-* The filament behaves as a non-linear resistor R(T) = R_amb*(T/T_amb)^fil_exp
-* with thermal capacity C_th and radiative cooling sigma*eps*A*(T^4-T_amb^4).
-* Encapsulated as a subcircuit so the controller netlist doesn't carry
-* behavioural sources directly -- this is a model of the tube itself.
-*   Terminals: v_top, v_bot   (filament endpoints, AC drive across these)
-*              T_node          (internal thermal node, exposed for monitoring)
-*              r_fil           (instantaneous R(T) as voltage, for monitoring)
-* All physical parameters are global .params (R_amb, sigma_eps_A, C_th,
-* T_amb, fil_exp) so a single instantiation is enough.
 .subckt filament v_top v_bot T_node r_fil
-B_fil   v_top v_bot I = (V(v_top) - V(v_bot)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
-B_pelec 0 T_node    I = (V(v_top)-V(v_bot))*(V(v_top)-V(v_bot)) / (R_amb * (V(T_node)/T_amb)^fil_exp)
-B_prad  T_node 0    I = sigma_eps_A * (V(T_node)^4 - T_amb^4)
+B_fil   v_top v_bot I = (V(v_top) - V(v_bot)) / (R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp)
+B_pelec 0 T_node    I = (V(v_top)-V(v_bot))*(V(v_top)-V(v_bot)) / (R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp)
+B_prad  T_node 0    I = sigma_eps_A * (max(V(T_node),T_amb)^4 - T_amb^4)
 C_th    T_node 0    {C_th} IC=300.0
-B_R     r_fil 0     V = R_amb * (V(T_node)/T_amb)^fil_exp
-.ends filament
-
-* === AC Wheatstone bridge ===
-* Filament arm: V_osc -> filament(thermal) -> node_A -> R_sense -> V_ap
-X_filament v_osc_drive node_A T_node r_fil filament
-R_sen node_A v_ap_drive 5
-* Reference arm: V_osc -> R_top_ref -> node_B -> R_bot_ref -> V_ap.
-* Bridge balance R_top_ref / R_bot_ref = R_op / R_sen targets R_op exactly.
-R_top_ref v_osc_drive node_B 2000
-R_bot_ref node_B v_ap_drive  500
-
-* === Difference amp (1-op-amp subtractor, gain 1) ===
-R_a1 node_A n_diff_minus 1e+06
-R_a2 n_diff_minus n_diff 1e+06
-R_b1 node_B n_diff_plus 1e+06
-R_b2 n_diff_plus 0 1e+06
-XU_diff n_diff_plus n_diff_minus vcc vee n_diff uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-
-* === Comparator (behavioural sign of V_osc) ===
-* Comparator: open-loop op-amp (one channel of the second TLV9154 quad).
-* V+/V- swapped from the natural "sign of V_osc" connection ONLY when the
-* booster is on -- the booster's inverting Buffer 2 flips the loop's
-* polarity, so we have to flip the demodulator reference to compensate.
-* Without the booster (IV-3), Buffer 2 doesn't exist and Buffer-1's
-* non-inverting output preserves the old polarity, so the comparator
-* must stay unswapped.
-XU_cmp 0 v_osc vcc vee n_cmp uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-
-* === Polarity-switching demodulator ===
-.model swMod SW(VT=0 VH=0.1 RON=10 ROFF=1G)
-S1 n_diff vplus n_cmp 0 swMod
-S2 0      vplus 0     n_cmp swMod
-R_bias vplus 0 1Meg
-R_din n_diff n_dem_minus 10k
-R_dfb n_demout n_dem_minus 10k
-XU_dem vplus n_dem_minus vcc vee n_demout uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=5.000000e-06
-
-* === Integrator -> V_ctl (loop amp) ===
-* V_ctl_raw = -1/(R*C) * integral(V_demout). Cold filament: V_demout < 0,
-* so V_ctl_raw integrates positive. We want V_ctl negative when cold so
-* the JFET stays pinched off. Wire B_invert to flip sign.
-* PID compensator (single-op-amp form):
-*   Input: R_INT || C_PID  (the parallel cap adds derivative action)
-*   Feedback: R_PID in series with C_INT (the series R adds proportional)
-* Transfer function: H(s) = -(R_PID + 1/sC_INT)(1 + sR_INT*C_PID) / R_INT
-*   Ki = 1/(R_INT * C_INT)         integrator (DC dominates)
-*   Kp = R_PID/R_INT + C_PID/C_INT proportional (mid-band)
-*   Kd = R_PID * C_PID             derivative (HF, fights overshoot)
-R_intin  n_demout n_int_minus 30000
-C_intin  n_demout n_int_minus 1.000000e-09
-R_intfb  n_int_pidp v_int_out 300000
-* Realistic startup: cap begins uncharged (no IC). Loop self-starts from
-* the intentional 1% bridge mismatch above + Vos drift in the demod and
-* integrator op-amps.
-C_intfb  n_int_minus n_int_pidp 3.183099e-07  IC=0
-* HF rolloff cap: in parallel with R_PID to limit HF gain and suppress
-* the f0 ripple from V_demod that the D term would otherwise pump
-* through to V_ctl.
-C_hf     n_int_pidp v_int_out 1.000000e-08     IC=0
-XU_int 0 n_int_minus vcc vee v_int_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=5.000000e-06
-
-* Anti-windup: real-circuit clamp on V_int_out using two silicon diodes
-* referenced to precision voltage sources. Sized for the 2N5457 V_to=-2.5V
-* operating range: V_int_out ~= -V_ctl, so the loop needs V_int_out in
-* [0, 2.5] to span the JFET's useful R_DS range. Clamp range chosen as
-* [-0.3, +2.5] V (small negative margin keeps the gate reverse-biased).
-* The diodes forward-conduct when V_int_out exceeds +2.5 V (Vf ~0.7V over
-* the +1.8V reference) or goes below -0.3 V (Vf ~0.7V under the +0.3V
-* reference). In production the precision references would be Zeners +
-* dividers off the +/-9 V rails, or band-gap parts (TL431, REF03 etc.).
-* Anti-windup clamp rails. The asymmetric range [+0.3, +1.8] V also
-* acts implicitly as the integrator's overshoot limiter during the
-* slow thermal cold-start (~1-2 s for ILC1-1/7's 1 W filament). The
-* range bounds the loop's accessible v_int operating points, which
-* in turn bounds the JFET V_p range the loop can handle:
-*
-*   V_p too low (e.g., -6 V): loop wants v_int > +1.8 V to pinch off
-*     the JFET, but clamp prevents it -> V_op underdelivered.
-*   V_p OK (-0.5 to -2.5 V): loop settles within the clamp range,
-*     V_op delivered to within 0.2%.
-*
-* Widening the upper clamp (tested at +6 V) doesn't help: the
-* integrator then overshoots during cold-start to +6 V and gets
-* stuck (small steady-state error -> slow recovery from rail).
-*
-* The clean fix would be back-calculation anti-windup (an extra
-* op-amp + resistor network so the integrator's gain drops near
-* the rails), which is a real circuit redesign. Without that, the
-* practical solution is to specify a JFET whose V_p range fits the
-* clamp: MMBFJ113 (Diodes Inc.) datasheet V_p = -0.5 to -3 V is a
-* better match than 2N5457 (-0.5 to -6 V).
-*
-* See diag_clamp_activity.py and sweep_jfet_vp.py for the data this
-* analysis is based on.
-V_clamp_hi v_clamp_hi 0  2.5
-V_clamp_lo v_clamp_lo 0  0.3
-D_aw_hi    v_int_out  v_clamp_hi Dclamp
-D_aw_lo    v_clamp_lo v_int_out  Dclamp
-.model Dclamp D(Is=2.52n Rs=0.568 N=1.752 Cjo=4p M=0.4 tt=20n)
-
-* Inverter + JFET-gate bootstrap: V_ctl is the op-amp output that drives
-* the JFET gate directly. At DC, n_inv_plus is held to 0 by R_btp, so
-* V_ctl = -V_int_out (existing inverter behaviour). At AC the bootstrap
-* path R_btd/C_btd and R_bts/C_bts inject (V_drain + V_source) into
-* n_inv_plus through R_btp to ground; the op-amp's non-inverting summer
-* arrangement gives V_ctl_AC = 2*V(n_inv_plus) = 2*R_btp/(2*R_b + R_btp) *
-* (V_d + V_s). With R_b = 100k, R_btp = 18k that's V_ctl_AC = 0.265*(V_d+V_s),
-* close to the optimal alpha ~ 0.275 for our topology where the C_ap
-* divider gives V_source ~ 0.38*V_drain at f0. Cancels the V_DS-dependent
-* term in 1/R_DS = 2*beta*(V_GS - V_to - V_DS/2), reducing JFET-induced
-* H2 at v_ap from ~6% to ~3%. The C_b caps block DC so the inverter still
-* cleanly tracks V_int_out.
-R_inv1 v_int_out  n_inv_minus 100k
-R_inv2 n_inv_minus v_ctl       100k
-R_btd  v_drv_atten n_btd_mid  100k
-C_btd  n_btd_mid   n_inv_plus  10u IC=0
-R_bts  n_ap_plus   n_bts_mid   100k
-C_bts  n_bts_mid   n_inv_plus  10u IC=0
-R_btp  n_inv_plus  0           18k
-XU_inv n_inv_plus  n_inv_minus vcc vee v_ctl uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+B_R     r_fil 0     V = R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp
+.ends
 
 
-* Buffer 0: passive attenuator on V_osc, then op-amp follower to feed JFET
-* with low-Z attenuated drive. R_atten_top:R_atten_bot = 56k:9.1k -> k_atten
-* ~ 7.15, so V_drv_atten ~= V_osc / 7.15 (peak ~0.5 V at V_osc 3.6 V_pk),
-* keeping V_DS in the JFET's linear region.
-R_atten_top  v_osc          v_atten_input 56k
-R_atten_bot  v_atten_input  0             9.1k
-XU_buf0      v_atten_input  v_drv_atten   vcc vee v_drv_atten uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
+* Power supplies with optional ramp.  Real PSUs charge their output cap
+* over ~ms; with t_rail_ramp=0 the rails step instantly (sim-only case).
+* All rails ramp together so the relative timing matches hardware.
+V_vcc vcc_top 0 DC 10
+V_vee vee_top 0 DC -10
+V_led_supply n_v_led 0 DC 5.0
+R_sense_vcc vcc_top vcc_buf 0.1
+R_sense_vee vee_top vee_buf 0.1
 
-* Buffer 1 (CE complementary push-pull): v_drv_atten -> v_osc_drive
-* Op-amp + and - inputs SWAPPED relative to standard inverting amp because
-* the CE BJT stage is itself inverting -- if we used standard inverting amp
-* (signals into V-), the loop would have positive feedback and latch up.
-* With signals into V+, the BJT inversion provides the second sign flip
-* needed for negative feedback overall.
-XU_buf_osc n_buf_osc_sum 0 vcc vee n_buf_osc_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-R_buf1_in   v_drv_atten n_buf_osc_sum 1k
-R_buf1_fb   v_osc_drive n_buf_osc_sum 2000
-R_obb_top   vcc_buf       q_o_bp_top    200
-D_obb_top   q_o_bp_top    n_buf_osc_out Dbias
-D_obb_bot   n_buf_osc_out q_o_bn_bot   Dbias
-R_obb_bot   q_o_bn_bot    vee_buf       200
-V_im_o_pmos vcc_buf vcc_buf_o_pmos 0
-R_gd_o_pmos q_o_bp_top g_o_pmos 1k
-XM_o_pmos v_osc_drive g_o_pmos vcc_buf_o_pmos DMP3098L
-V_im_o_nmos vee_buf_o_nmos vee_buf 0
-R_gd_o_nmos q_o_bn_bot g_o_nmos 1k
-XM_o_nmos v_osc_drive g_o_nmos vee_buf_o_nmos DMN3404L
 
-* Buffer 2 (CE complementary push-pull): v_ap -> v_ap_drive
-* DC-block cap on v_ap to kill the JFET-rectification offset before the
-* gain stage. C must be sized so the HPF corner against R_buf2_in (1k,
-* the AC load at n_buf2_ac since op-amp summing junction is virtual GND)
-* is well below f0 = 1 kHz. C = 10 uF gives fc = 16 Hz; smaller caps
-* attenuate the carrier (100 nF would have fc = 1.6 kHz, killing 60% of
-* the signal at f0).
-C_buf2_dcblock v_ap         n_buf2_ac    10u IC=0
-R_buf2_dcref   n_buf2_ac    0            100k
-* Inverting amp summing junction takes both v_drv_atten (via cap-coupled v_ap)
-* and v_ap_drive feedback. R_buf2_in is from n_buf2_ac (AC-coupled v_ap).
-XU_buf_ap   n_buf_ap_sum 0 vcc vee n_buf_ap_out uopamp_lvl2 Avol=10meg GBW=4.5meg Rin=100g Rout=10 Iq=600u Ilimit=1 Vrail=100m Vmax=40 Vos=2.500000e-03
-R_buf2_in   n_buf2_ac   n_buf_ap_sum  1k
-R_buf2_fb   v_ap_drive  n_buf_ap_sum  2000
-R_abb_top   vcc_buf       q_a_bp_top    200
-D_abb_top   q_a_bp_top    n_buf_ap_out  Dbias
-D_abb_bot   n_buf_ap_out q_a_bn_bot    Dbias
-R_abb_bot   q_a_bn_bot    vee_buf       200
-V_im_a_pmos vcc_buf vcc_buf_a_pmos 0
-R_gd_a_pmos q_a_bp_top g_a_pmos 1k
-XM_a_pmos v_ap_drive g_a_pmos vcc_buf_a_pmos DMP3098L
-V_im_a_nmos vee_buf_a_nmos vee_buf 0
-R_gd_a_nmos q_a_bn_bot g_a_nmos 1k
-XM_a_nmos v_ap_drive g_a_nmos vee_buf_a_nmos DMN3404L
-.model Dbias  D(IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
-* Schottky (BAT54-class): V_F ~0.3V at 1mA. Used as bias-chain diode for
-* sub-threshold class-C operation: 2*V_d_schottky = 0.6V offset between
-* BJT bases puts V_BE_quiescent ~0.3V (below 0.6V on threshold), so the
-* BJTs only pulse-conduct at AC peaks.
-.model Dschottky D(IS=10n N=1.0 RS=0.1 BV=20 IBV=0.1m CJO=10p)
-.model QBC337 NPN(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
-+ CJC=11p CJE=20p VAF=100)
-.model QBC327 PNP(IS=1e-14 BF=300 BR=10 RB=10 RC=0.5 RE=0.1 IKF=0.8
-+ CJC=11p CJE=20p VAF=100)
-* Logic-level complementary MOSFET pair: DMP3098L (PMOS) / DMN3404L (NMOS),
-* Diodes Inc., SOT-23. Manufacturer subcircuit models (LEVEL=3 internal,
-* with junction caps + body diodes) loaded from spice_models/. Terminals
-* are 3-pin: drain, gate, source (no external body).
-.include /home/user/smps-design-tools/ngspice_examples/spice_models/DMP3098L.spice.txt
-.include /home/user/smps-design-tools/ngspice_examples/spice_models/DMN3404L.spice.txt
 
-* === 2N3904 ===
-.model Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
-+ ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
-+ CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p MJE=.2593 VJE=.75
-+ TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
+* V_src models the Wien oscillator output.  In real hardware, a Wien
+* with AGC takes ~τ to ramp from 0 to settled amplitude — typically
+* 50-500 ms for the amplitude-clamp loop.  Modelled here as a sine
+* with exponentially-growing envelope, τ = t_src_ramp.  With
+* t_src_ramp ≥ τ_thermal (filament thermal τ), the filament tracks
+* V_src quasi-statically and there's no thermal overshoot at cold-start.
+B_src v_src 0 V = 0.0282843 * (1 - exp(-time/0.6)) * sin(2*3.141592653589793*1000.0*time)
 
-.options reltol=1e-4 abstol=1p chgtol=1f
-.tran 10u 5.0 UIC
+R_atten_top v_src n_atten_raw 12000
+R_atten_bot n_atten_raw 0 1000
+XU_atten_buf n_atten_raw v_atten vcc_buf vee_buf v_atten uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
 
+* Split-gain Stage 1: H11F in feedback || R_max, R_in_s1 input
+* H11F channel between n_h11f_inv (= virtual ground) and v_drv1
+* LED bias inverted: V_LED supply → R_LED → LED anode, cathode → v_int
+R_in_vgain v_atten n_h11f_inv 10
+R_max_s1   n_h11f_inv v_drv1 24
+X_h11f     n_led_a v_int n_h11f_inv v_drv1 H11F1
+XU_vgain   0 n_h11f_inv vcc_buf vee_buf v_drv1 uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+* DC coupling between Stage 1 and Stage 2.  AC coupling caused
+* slow settling artifacts during cold-start; Stage 1's Vos (10µV)
+* through G2=201 gives only ~2mV at v_drv, negligible.
+R_dc_couple v_drv1 n_s2_in 0
+* Stage 2: fixed-gain non-inverting amp, G2 = 1 + R_fb/R_gnd
+R_gnd_s2   n_minus_s2 0 100
+R_fb_s2    v_drv n_minus_s2 2400.0
+XU_s2      n_s2_in n_minus_s2 vcc_buf vee_buf v_drv uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+
+* AC-couple between Stage 2 output (v_drv) and the buffer input.
+* Blocks DC propagated through the Stage 1/Stage 2 gain chain (the dominant
+* DC source is Stage 2's Vos × G2=201 ≈ 1V worst-case for non-chopper op-amps).
+* C × R = 16ms gives 10 Hz corner; 0.57° phase shift at the 1 kHz carrier.
+* The HP filter sits in the SIGNAL (carrier) chain only — the loop's DC
+* sensing path runs through the chopper+integrator and is unaffected.
+C_couple_buf v_drv     v_buf_in  1u  IC=0
+R_bias_buf   v_buf_in  0         16k
+XU_buf       v_buf_in  n_fb_buf vcc_buf vee_buf n_buf_o uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+R_fb_buf v_osc_drive n_fb_buf 13000
+R_in_buf n_fb_buf 0 1k
+R_bbo_ta vcc_buf     mid_bbo_t   1100
+R_bbo_tb mid_bbo_t    q_o_bn      1100
+* Bootstrap caps tie bias chain to the BJT emitter node (n_buf_emi), NOT
+* the post-R_cs load (v_osc_drive).  If they bootstrap to v_osc_drive,
+* the I·R_cs drop reduces V_BE on the output BJTs and they collapse at
+* peak current — destroys THD and defeats the current limit.
+C_bbo_t  mid_bbo_t    n_buf_emi   4.7u IC=0
+D_bbo_t1 q_o_bn       n_bbo_t1    Dbias
+D_bbo_t2 n_bbo_t1     n_buf_o     Dbias
+D_bbo_b1 n_buf_o      n_bbo_b1    Dbias
+D_bbo_b2 n_bbo_b1     q_o_bp      Dbias
+R_bbo_bb q_o_bp       mid_bbo_b   1100
+R_bbo_ba mid_bbo_b    vee_buf     1100
+C_bbo_b  mid_bbo_b    n_buf_emi   4.7u IC=0
+Q_o_drv_n   vcc_buf q_o_bn      n_o_pair_n   QBC337
+Q_o_out_n   vcc_buf n_o_pair_n  n_buf_emi    QBC337
+R_o_bleed_n n_o_pair_n n_buf_emi 5k
+Q_o_drv_p   vee_buf q_o_bp      n_o_pair_p   QBC327
+Q_o_out_p   vee_buf n_o_pair_p  n_buf_emi    QBC327
+R_o_bleed_p n_o_pair_p n_buf_emi 5k
+* Current-sense resistor between output BJT emitters and the load.
+* Current limit threshold = V_BE_on / R_cs ≈ 0.6V / R_cs.
+R_cs        n_buf_emi   v_osc_drive   0.01
+* current limit disabled
+
+* Series R between buffer output and the bridge top.  Limits cold-start
+* current (since R_fil is small when cold and dominates the bridge
+* impedance).  Bridge balance is unchanged because both arms tap the
+* same v_bridge_top node — the R_series voltage drop is common-mode.
+R_series v_osc_drive v_bridge_top 0.01
+X_filament v_bridge_top node_A T_node r_fil filament
+R_sense  node_A      v_ap_drive 5.0
+R_topref v_bridge_top node_B    2000.0
+R_botref node_B      v_ap_drive 500.0
+R_ap_gnd v_ap_drive  0          0.01
+
+XU_buf_A  node_A n_node_A_buf vcc_buf vee_buf n_node_A_buf uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+XU_buf_B  node_B n_node_B_buf vcc_buf vee_buf n_node_B_buf uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+
+R_da_inA  n_node_A_buf n_da_minus 1000
+R_da_inB  n_node_B_buf n_da_plus  1000
+R_da_gB   n_da_plus 0       30000
+R_da_fb   v_diff_amp n_da_minus 30000
+XU_da     n_da_plus n_da_minus vcc_buf vee_buf v_diff_amp uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+
+B_demod n_demod 0 V = V(v_diff_amp) * (V(v_osc_drive) >= 0 ? 1 : -1)
+R_lp_demod n_demod n_demod_dc 100000.0
+C_lp_demod n_demod_dc 0 1e-06
+
+* ===== Log demod / soft saturator =====
+* Non-inverting op-amp with R_fb=10k and R_gnd sized for gain log_gain_K.
+* Anti-parallel BAT54 Schottkys clip output at ±V_F ≈ ±0.3V → at cold
+* start when bridge error is ~12V × demod gain, the integrator input
+* is clipped to ±0.3V so the wind-up rate is bounded.  Small-signal:
+* linear gain log_gain_K = 20.0, faster settling at OP.
+R_gnd_log   n_log_minus 0 526.3157894736842
+R_fb_log    n_log_minus n_log_dem 10k
+* Schottky clip diodes removed (2026-05-25).  With small SS bridge error
+* the clip kept the op-amp at current-limit continuously → asymmetric rail
+* current.  Now linear at SS; op-amp only saturates at its rails (-9.9V)
+* briefly during cold-start while the loop catches up.
+XU_log      n_demod_dc n_log_minus vcc_buf vee_buf n_log_dem uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+
+V_set n_setpoint 0 DC 0
+R_int_p n_setpoint n_int_plus 100000.0
+R_int_pg n_int_plus 0 1G
+* PID compensator with HF rolloff (matches the tuned compensator from the
+* old test_closed_loop.py architecture).
+*   Input branch (parallel):  R_int || C_pid (adds Kd through input)
+*   Feedback branch (series): (R_pid || C_hf) + C_int
+*   H(s) = -((R_pid || 1/sC_hf) + 1/sC_int) · (1 + sR_int·C_pid) / R_int
+*   Integrator zero: f_zi = 1/(2π·R_pid·C_int) ≈ 5 Hz
+*   HF rolloff: f_hf = 1/(2π·R_pid·C_hf) ≈ 160 Hz
+R_intin  n_log_dem n_int_minus 100000.0
+C_intin  n_log_dem n_int_minus 1e-09
+R_pid    n_int_pidp v_int_raw 1000000.0
+C_intfb  n_int_minus n_int_pidp 3.18e-07 IC=0
+C_hf     n_int_pidp v_int_raw 1e-09 IC=0
+XU_int n_int_plus n_int_minus vcc_buf vee_buf v_int_raw uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+
+* ===== Passive saturator + back-calc anti-windup =====
+* v_int_raw is the integrator's free-swinging output.  v_int (the
+* "clamped" version that drives the LED) is bounded between V_clamp_lo
+* and V_clamp_hi by Schottky diodes through R_aw_out.  e_sat measures
+* how far v_int_raw has wound past the clamp, and R_bc feeds that error
+* back into the integrator summing junction to unwind it quickly.
+.model Dclamp D(Is=10n N=1.0 RS=0.1 BV=40 IBV=0.1m CJO=10p)
+* Clamp range bounds the loop's wind-up.  In the polarity-swapped arch
+* V_int=0 is "max drive" (cold-start state) and V_int_OP > 0; V_clamp_lo
+* is the safety bound that prevents wind-down past the H11F's max-I_F.
+* V_clamp_hi is wind-up safety past the operating point.
+V_clamp_hi v_clamp_hi 0 4.0
+V_clamp_lo v_clamp_lo 0 -0.5
+R_aw_out  v_int_raw v_int 10
+D_aw_hi   v_int     v_clamp_hi Dclamp
+D_aw_lo   v_clamp_lo v_int     Dclamp
+* Back-calc diff amp: e_sat = v_int_raw - v_int (unity-gain difference)
+R_diff1 v_int n_aw_diff_minus 100k
+R_diff2 v_int_raw n_aw_diff_plus 100k
+R_diff3 n_aw_diff_minus e_sat 100k
+R_diff4 n_aw_diff_plus 0 100k
+XU_aw_diff n_aw_diff_plus n_aw_diff_minus vcc_buf vee_buf e_sat uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
+* Back-calc resistor: R_bc < R_int gives FASTER unwinding than wind-up,
+* so once the integrator saturates the clamp, anti-windup can pull it
+* back down quickly.  R_bc = R_int / 20 → 20× faster than wind-up.
+R_bc e_sat n_int_minus 5000.0
+
+R_led_set n_v_led n_led_a 270
+
+.tran 50u 15.0 0 uic
+.options reltol=1e-4 abstol=1n vntol=1u
+
+.save v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a)
 .control
 run
-wrdata /home/user/smps-design-tools/ngspice_examples/_iv6_unused.data v(v_osc_drive) v(v_ap_drive) v(node_A) v(node_B) v(n_diff) v(n_demout) v(v_ctl) v(v_int_out) v(T_node) v(r_fil)
-.endcontrol
-
+wrdata /home/lewisbrown/claude-code/smps-design-tools/ngspice_examples/_regulator/run.data v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a)
+.endc
 .end

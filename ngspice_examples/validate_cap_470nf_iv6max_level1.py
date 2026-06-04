@@ -20,19 +20,24 @@ LEVEL1_MODELS = """.model PMOS_LL PMOS(LEVEL=1 VTO=-0.7 KP=100u L=1u W=55600u LA
 
 
 def swap_to_level1(netlist_text):
-    """Post-process a netlist string: replace manufacturer MOSFET subcircuit
-    instances and includes with Level 1 .model + M instances."""
-    # Strip the .include lines for DMP3098L / DMN3404L
+    """Post-process a netlist string: replace BRIDGE-DRIVER manufacturer MOSFET
+    instances with Level 1 .model + M instances for runtime speed. The
+    variable-R MOSFETs (M_var1, M_var2) and the V_TO-tracking reference
+    (M_ref) are left at manufacturer model: the V_TO-tracking circuit
+    relies on Q_ref's V_TO matching Q_var1/Q_var2's V_TO, and the Level-1
+    placeholder has V_TO=+0.7 V (vs DMN3404L ~+1.7 V effective) which would
+    both break the tracking and stall the loop. .include lines for the
+    manufacturer models are retained for that reason."""
+    PRESERVE = {"M_var1", "M_var2", "M_ref"}
     lines_out = []
     for line in netlist_text.splitlines():
-        if re.match(r"^\.include\s+\S*(DMP3098L|DMN3404L)\.spice\.txt\s*$", line):
-            continue
         # Replace X-instances. Match e.g.
         #   XM_o_pmos v_osc_drive g_o_pmos vcc_buf_o_pmos DMP3098L
         # with
         #   M_o_pmos v_osc_drive g_o_pmos vcc_buf_o_pmos vcc_buf_o_pmos PMOS_LL
+        # Skip the variable-R FETs.
         m = re.match(r"^X(M_\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(DMP3098L|DMN3404L)\s*$", line)
-        if m:
+        if m and m.group(1) not in PRESERVE:
             instname, d, g, s, mfg = m.groups()
             model_name = "PMOS_LL" if mfg == "DMP3098L" else "NMOS_LL"
             lines_out.append(f"{instname} {d} {g} {s} {s} {model_name}")

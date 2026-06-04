@@ -22,7 +22,7 @@ from check_power import power_specs
 T_END_HF = 0.100
 SS_WIN   = 0.005   # last 5 ms = 500 cycles at 100 kHz
 
-V_INT_SETTLED = {"iv6": 2.13, "ilc11_7": 2.10, "ilc11_8": 2.10, "iv3": 0.50}
+V_INT_SETTLED = {"iv6": 2.13, "ilc11_7": 2.10, "ilc11_8": 2.10, "iv18": 0.50}
 
 
 def run(tube_key: str):
