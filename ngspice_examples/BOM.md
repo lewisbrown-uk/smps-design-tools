@@ -144,6 +144,39 @@ Verified 2026-06-04, all four tubes: regulation on target, +3–5 K startup
 overshoot, THD −52 to −59 dB. (V_A/Early voltage is irrelevant here; the
 BCX54 IKF = 0.45 A causes only mild rolloff at the ILC1-1/7 peak.)
 
+> **⚠ PCB thermal — copper pour required on the output-device tabs.** SOT-89
+> sheds heat through the collector tab into the PCB pad, so R_th(j-a) is
+> copper-dependent (Nexperia BCX54): **250 K/W bare footprint → 132 K/W at a
+> 1 cm² collector pad → 93 K/W at 6 cm²**; R_th(j-sp) = 16 K/W, Tj(max) 150 °C.
+> The worst device is ILC1-1/8 at ~0.58 W/device, which **exceeds the 0.50 W
+> bare-footprint rating** — on a bare pad Tj would blow past 150 °C. So pour
+> **≥ 1 cm² copper** under the output-pair collector tabs (then Tj ≈ 101 °C @
+> 25 °C / 126 °C @ 50 °C ambient — safe). ILC1-1/7 (~0.31 W) is OK on a bare
+> footprint but give it a small pad for margin; IV-6/IV-18 are fine bare.
+> Mount the two V_BE-multiplier transistors against the output tabs for thermal
+> tracking. **(This requirement is driven by the uniform ±10 V rails; see the
+> rail-scaling note — per-tube rails would relax it.)**
+
+> **Rail-scaling option (per-tube `v_buf`).** The output dissipation above is
+> driven by the uniform ±10 V rails: the low-voltage tubes swing far below the
+> rail, so the linear class-AB stage burns the headroom. Per-tube rails recover
+> it (verified 2026-06-04, all regulate):
+>
+> | tube | rail | P/device | Tj @ 50 °C bare | THD |
+> |---|---|---|---|---|
+> | ILC1-1/7 | ±10 V (needs it for 7 V drive) | 0.31 W | 128 °C | −56 dB |
+> | ILC1-1/8 | **±5 V** (vs 0.58 W / 194 °C at ±10 V) | **0.23 W** | **107 °C** | −49 dB |
+> | IV-6 | ±5 V | 0.08 W | 71 °C | −50 dB |
+> | IV-18 | ±5 V | 0.02 W | 55 °C | −51 dB |
+>
+> At ±5 V the low-voltage tubes are **bare-footprint-safe (no copper pour
+> needed)** and ~60 % cooler; THD degrades ~3 dB but stays well inside spec.
+> Floor is ~±4.5 V (the integrator output reaches ~+3.5 V and needs rail
+> headroom). Cost: a per-tube rail voltage (LM317/337 set per tube — the
+> retired all-pass design did this). **Not yet implemented** — uniform ±10 V is
+> the current `regulator.py` default; this documents the trade vs. the copper
+> pour above.
+
 ---
 
 ## Gain chain (identical all tubes)
