@@ -2,9 +2,9 @@
 
 Real-part mapping for the **canonical `regulator.py` design** (H11F
 variable-gain + BJT class-AB push-pull). Target ≤ $20/tube, **no
-build-time trimming**, all parts stocked at DigiKey/Mouser. SMD where
-convenient (SOIC/SOT-23/0805); every part has a through-hole equivalent
-for forum builders.
+build-time trimming**, all parts stocked at DigiKey/Mouser. **This is a
+surface-mount build** — every part is specified in its SMD package
+(SOIC / SOT-23 / SOT-89 / SOD-323 / 0805); no through-hole.
 
 Reference designators follow the `regulator_<tube>.cir` element names.
 
@@ -76,7 +76,7 @@ The 10 op-amp channels collapse into **3 quad packages** (12 channels,
 | **U2 (OPA4277)** | `XU_buf_A`, `XU_buf_B`, `XU_da`, `XU_log` | two bridge buffers + diff amp + log demod |
 | **U3 (OPA4277)** | `XU_int`, `XU_aw_diff`, +2 spare | PID integrator + anti-windup diff amp; spares buffer the V_clamp refs |
 
-- **OPA4277UA** (SOIC-14) or **OPA4277PA** (PDIP-14 through-hole).
+- **OPA4277UA** (SOIC-14).
   Precision bipolar, OP07-class: Vos ~10 µV typ (~50 µV max), drift
   ±0.1 µV/°C, **GBW 1 MHz**, A_OL 134 dB, CMRR ~140 dB, **PSRR ~130 dB**,
   channel separation **±1 µV/V**, BJT class-AB output (no LM358 crossover).
@@ -113,11 +113,11 @@ sourcing, no trimming.
 
 | RefDes | element | part | notes |
 |--------|---------|------|-------|
-| **Q1 (Q_o_out_n)** | top NPN output | **BC337-40** (NPN, TO-92, 800 mA) or BC817-40 (SOT-23) | delivers up to ~280 mA_pk (ILC1-1/7) |
-| **Q2 (Q_o_out_p)** | bottom PNP output | **BC327-40** (PNP, TO-92) or BC807-40 (SOT-23) | complementary to Q1 |
-| **Q3 (Q_o_drv_n)** | top NPN driver | BC337-40 / BC817 | pre-driver |
-| **Q4 (Q_o_drv_p)** | bottom PNP driver | BC327-40 / BC807 | pre-driver |
-| `D_bbo_t1/t2/b1/b2` | class-AB bias string (4×) | **1N4148** (DO-35) / 1N4148WS (SOD-323) | V_BE-multiplier-style bias |
+| **Q1 (Q_o_out_n)** | top NPN output | **BC868** (NPN, SOT-89, 1 A) | delivers ~340 mA_pk (ILC1-1/7). SOT-89 thermal headroom. |
+| **Q2 (Q_o_out_p)** | bottom PNP output | **BC869** (PNP, SOT-89, 1 A) | complementary to Q1 |
+| **Q3 (Q_o_drv_n)** | top NPN driver | BC868 (or small-signal BC847) | pre-driver |
+| **Q4 (Q_o_drv_p)** | bottom PNP driver | BC869 (or small-signal BC857) | pre-driver |
+| `D_bbo_t1/t2/b1/b2` | class-AB bias string (4×) | **1N4148WS** (SOD-323) | V_BE-multiplier-style bias |
 | `R_bbo_ta/tb/ba/bb` | bias-chain resistors (4×) | 1.1 kΩ, 5 %, 0805 | |
 | `R_o_bleed_n/p` | output-pair bleed (2×) | 5 kΩ, 5 %, 0805 | |
 | `R_cs` | current-sense / series limit | 0.01–0.1 Ω (model 0.01) | low-value; a short PCB trace or 0.1 Ω 1 % is fine. (`R_series` 0.01 Ω likewise — cold-start current limit.) |
@@ -131,10 +131,14 @@ sourcing, no trimming.
 > or tantalum anyway, so this is a "don't accidentally spec Y5V" note. All
 > other caps: Y5V-safe (zero effect on regulation, stability, or THD).
 
-For ILC1-1/7 (≈5.5 V_pk drive, output devices dissipate ~100 mW each),
-use SOT-89 (e.g. BCX-class) or TO-92 with a little lead length for
-thermal headroom. The low-power tubes (≤±2 V_pk) are comfortable in
-SOT-23.
+**Why BC868/BC869 (not BC817/BC807):** their beta knee (IKF ≈ 4.8 A / 1.6 A)
+is far above the ~340 mA peak, so there's no hFE rolloff (BC817/807's 0.28 A
+knee cost ~5 dB THD at ILC1-1/7); the SOT-89 package gives thermal headroom
+(~100 mW/device at ILC1-1/7); and the devices' RE swamps V_BE mismatch — a
+one-sided 40 mV V_BE offset is benign (THD −59.2 → −59.0, no bias-tracking
+circuitry needed). Verified 2026-06-04 with the Nexperia SPICE models, all
+four tubes. **Note V_CEO = 20 V**: on ±10 V rails the off-device sees ~17 V
+peak — adequate (~15 % margin) but don't raise the rails much.
 
 ---
 
@@ -177,7 +181,7 @@ two-NPN symmetric-clamp Wien oscillator (`wien_oscillator.py`).
 | `R1`, `R2` (frequency) | 10 kΩ, 1 % | f0 = 1/(2πRC) = 1 kHz |
 | `C1`, `C2` (frequency) | 16 nF (15.9 nF), 5 % **C0G/NP0 or PP film** | frequency-setting — keep stable dielectric |
 | gain net (Rfa/Rfb/Rg) | 10 k / 12 k / 10 k, 1 % | sets loop gain just > 3 |
-| clamp transistors | 2× **MMBT3904** (SOT-23) / 2N3904 (TO-92) | matched anti-parallel NPN amplitude clamp (kills H2) |
+| clamp transistors | 2× **MMBT3904** (SOT-23) | matched anti-parallel NPN amplitude clamp (kills H2) |
 | base-bias dividers | 120 kΩ, 5 % | set clamp threshold (α = 0.5) |
 
 > **Bench-check (flagged):** the matched-NPN clamp is clean (THD ~2.3 %,
@@ -205,7 +209,7 @@ two-NPN symmetric-clamp Wien oscillator (`wien_oscillator.py`).
 |------|--------|
 | 3× OPA4277 quad (U1–U3) | ~6.0–9.0 |
 | 1× H11F1M (U4) + R_led_set | ~0.9 |
-| 4× BJT (BC337/BC327 pair ×2) + 4× 1N4148 bias | ~0.6 |
+| 4× BJT (BC868/BC869 pair ×2, SOT-89) + 4× 1N4148WS bias | ~0.8 |
 | 2× 4.7 µF bootstrap (tantalum/electrolytic) | ~0.3 |
 | CD74HC4053 + SN74HC14 (chopper demod) | ~0.9 |
 | Wien: 2× MMBT3904 + C0G/film freq caps + R | ~0.6 |

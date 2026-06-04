@@ -23,8 +23,11 @@ UOPAMP = (HERE / "uopamp.lib").as_posix()
 H11F_LIB = (HERE / "spice_models" / "H11F1.spice.txt").as_posix()
 
 QMODELS = """\
-.model QBC337 NPN (IS=15.6f BF=290 VAF=125 IKF=1.0 ISE=29p NE=1.5 BR=4.65 RB=1 RC=0.41 CJC=12p MJC=0.4 VJC=0.4 CJE=20p MJE=0.4 VJE=0.85)
-.model QBC327 PNP (IS=18.4f BF=215 VAF=80 IKF=1.0 ISE=29p NE=1.7 BR=2.4 RB=1 RC=0.41 CJC=10p MJC=0.4 VJC=0.4 CJE=20p MJE=0.4 VJE=0.85)
+* Output class-AB push-pull: Nexperia BC868 (NPN) / BC869 (PNP), SOT-89, 1 A.
+* Beta-knee (IKF 4.8 A / 1.6 A) sits far above peak filament current, and the
+* devices' RE swamps V_BE mismatch -> robust (verified 2026-06-04).
+.model BC868 NPN (IS=2.474E-13 NF=0.9998 ISE=4.403E-14 NE=1.4 BF=196.2 IKF=4.836 VAF=127.5 NR=0.9995 ISC=2.009E-13 NC=1.5 BR=30.57 IKR=0.3264 VAR=17.26 RB=1 IRB=1E-6 RBM=1 RE=0.1021 RC=0.0252 XTB=0 EG=1.11 XTI=3 CJE=2.226E-10 VJE=0.8011 MJE=0.3833 TF=6.469E-10 XTF=1.257 VTF=1.735 ITF=0.3542 PTF=0 CJC=8.735E-11 VJC=0.5995 MJC=0.4009 XCJC=0.5 TR=1E-32 CJS=0 VJS=0.75 MJS=0.333 FC=0.6153)
+.model BC869 PNP (IS=3.544E-13 NF=1 ISE=2.267E-14 NE=1.469 BF=335 IKF=1.609 VAF=26.54 NR=0.9997 ISC=1.009E-13 NC=1.392 BR=132 IKR=0.325 VAR=25 RB=14 IRB=0.0016 RBM=0.84 RE=0.07813 RC=0.06422 XTB=1.486 EG=1.11 XTI=5.477 CJE=2.038E-10 VJE=0.6498 MJE=0.3364 TF=9E-10 XTF=3.015 VTF=2 ITF=1.19 PTF=0 CJC=8.843E-11 VJC=0.5379 MJC=0.3165 XCJC=1 TR=1.1E-8 CJS=0 VJS=0.75 MJS=0.333 FC=0.9597)
 .model Dbias D (IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
 """
 
@@ -183,8 +186,8 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
     # steady-state requirement so the limit doesn't engage at OP.
     if I_limit_enable:
         current_limit_block = (
-            "Q_cl_n n_o_pair_n n_buf_emi v_osc_drive QBC337\n"
-            "Q_cl_p n_o_pair_p n_buf_emi v_osc_drive QBC327"
+            "Q_cl_n n_o_pair_n n_buf_emi v_osc_drive BC868\n"
+            "Q_cl_p n_o_pair_p n_buf_emi v_osc_drive BC869"
         )
     else:
         current_limit_block = "* current limit disabled"
@@ -344,11 +347,11 @@ D_bbo_b2 n_bbo_b1     q_o_bp      Dbias
 R_bbo_bb q_o_bp       mid_bbo_b   {Rb_half:.6g}
 R_bbo_ba mid_bbo_b    vee_buf     {Rb_half:.6g}
 C_bbo_b  mid_bbo_b    n_buf_emi   4.7u IC=0
-Q_o_drv_n   {bjt_o_drv_n_C} q_o_bn      n_o_pair_n   QBC337
-Q_o_out_n   {bjt_o_out_n_C} n_o_pair_n  n_buf_emi    QBC337
+Q_o_drv_n   {bjt_o_drv_n_C} q_o_bn      n_o_pair_n   BC868
+Q_o_out_n   {bjt_o_out_n_C} n_o_pair_n  n_buf_emi    BC868
 R_o_bleed_n n_o_pair_n n_buf_emi 5k
-Q_o_drv_p   {bjt_o_drv_p_C} q_o_bp      n_o_pair_p   QBC327
-Q_o_out_p   {bjt_o_out_p_C} n_o_pair_p  n_buf_emi    QBC327
+Q_o_drv_p   {bjt_o_drv_p_C} q_o_bp      n_o_pair_p   BC869
+Q_o_out_p   {bjt_o_out_p_C} n_o_pair_p  n_buf_emi    BC869
 R_o_bleed_p n_o_pair_p n_buf_emi 5k
 * Current-sense resistor between output BJT emitters and the load.
 * Current limit threshold = V_BE_on / R_cs ≈ 0.6V / R_cs.
