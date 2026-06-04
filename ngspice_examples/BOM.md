@@ -113,12 +113,13 @@ sourcing, no trimming.
 
 | RefDes | element | part | notes |
 |--------|---------|------|-------|
-| **Q1 (Q_o_out_n)** | top NPN output | **BC868** (NPN, SOT-89, 1 A) | delivers ~340 mA_pk (ILC1-1/7). SOT-89 thermal headroom. |
-| **Q2 (Q_o_out_p)** | bottom PNP output | **BC869** (PNP, SOT-89, 1 A) | complementary to Q1 |
-| **Q3 (Q_o_drv_n)** | top NPN driver | BC868 (or small-signal BC847) | pre-driver |
-| **Q4 (Q_o_drv_p)** | bottom PNP driver | BC869 (or small-signal BC857) | pre-driver |
-| `D_bbo_t1/t2/b1/b2` | class-AB bias string (4×) | **1N4148WS** (SOD-323) | V_BE-multiplier-style bias |
-| `R_bbo_ta/tb/ba/bb` | bias-chain resistors (4×) | 1.1 kΩ, 5 %, 0805 | |
+| **Q1 (Q_o_out_n)** | top NPN output | **BCX54** (NPN, SOT-89, 1 A, VCEO 45 V) | delivers ~340 mA_pk (ILC1-1/7) |
+| **Q2 (Q_o_out_p)** | bottom PNP output | **BCX51** (PNP, SOT-89, 1 A, VCEO 45 V) | complementary to Q1 |
+| **Q3 (Q_o_drv_n)** | top NPN driver | BCX54 | pre-driver |
+| **Q4 (Q_o_drv_p)** | bottom PNP driver | BCX51 | pre-driver |
+| **Q_vbm_t, Q_vbm_b** | V_BE-multiplier bias (2×) | **BCX54** (NPN), thermally coupled to the output pair | sets/tracks the class-AB quiescent current (Iq ~20 mA). Small-signal BC847 also works but BCX54 best-matches the output V_BE tempco. |
+| `R_vbm_t1/b1`, `R_vbm_t2/b2` | V_BE-multiplier dividers (4×) | 680 Ω / 1.0 kΩ, 1 %, 0805 | ratio 1.68 → ~2 V_BE per half → Iq ~20 mA |
+| `R_bbo_ta/tb/ba/bb` | bias-chain current feed (4×) | 1.1 kΩ, 5 %, 0805 | feeds ~4 mA through the multipliers; bootstrapped via C_bbo |
 | `R_o_bleed_n/p` | output-pair bleed (2×) | 5 kΩ, 5 %, 0805 | |
 | `R_cs` | current-sense / series limit | 0.01–0.1 Ω (model 0.01) | low-value; a short PCB trace or 0.1 Ω 1 % is fine. (`R_series` 0.01 Ω likewise — cold-start current limit.) |
 | **C_bbo_t, C_bbo_b** | bias-rail bootstrap (2×) | **4.7 µF — electrolytic / tantalum / film. *NOT* Y5V ceramic.** | ⚠ **See dielectric rule.** These are the only THD-critical caps. |
@@ -131,14 +132,17 @@ sourcing, no trimming.
 > or tantalum anyway, so this is a "don't accidentally spec Y5V" note. All
 > other caps: Y5V-safe (zero effect on regulation, stability, or THD).
 
-**Why BC868/BC869 (not BC817/BC807):** their beta knee (IKF ≈ 4.8 A / 1.6 A)
-is far above the ~340 mA peak, so there's no hFE rolloff (BC817/807's 0.28 A
-knee cost ~5 dB THD at ILC1-1/7); the SOT-89 package gives thermal headroom
-(~100 mW/device at ILC1-1/7); and the devices' RE swamps V_BE mismatch — a
-one-sided 40 mV V_BE offset is benign (THD −59.2 → −59.0, no bias-tracking
-circuitry needed). Verified 2026-06-04 with the Nexperia SPICE models, all
-four tubes. **Note V_CEO = 20 V**: on ±10 V rails the off-device sees ~17 V
-peak — adequate (~15 % margin) but don't raise the rails much.
+**Why BCX54/BCX51 + a V_BE-multiplier bias:** SOT-89 1 A complementary pair
+with **VCEO = 45 V** — on ±10 V rails the off-device sees ~17 V pk, giving
+>2.5× margin (vs only ~15 % for BC868/869's 20 V, and far better than the
+SOT-23 BC817/807). The class-AB bias **must** be a V_BE multiplier, not the
+fixed diode string: with a fixed bias, a power output device's lower V_BE
+over-conducts badly — the original 4-diode string drove Iq to **242 mA /
+~1.9 W per device**. The V_BE multiplier (Q_vbm, thermally coupled) sets and
+tracks Iq at ~20 mA → **~0.05–0.58 W/device** (worst ILC1-1/8), SOT-89-safe.
+Verified 2026-06-04, all four tubes: regulation on target, +3–5 K startup
+overshoot, THD −52 to −59 dB. (V_A/Early voltage is irrelevant here; the
+BCX54 IKF = 0.45 A causes only mild rolloff at the ILC1-1/7 peak.)
 
 ---
 
@@ -209,7 +213,7 @@ two-NPN symmetric-clamp Wien oscillator (`wien_oscillator.py`).
 |------|--------|
 | 3× OPA4277 quad (U1–U3) | ~6.0–9.0 |
 | 1× H11F1M (U4) + R_led_set | ~0.9 |
-| 4× BJT (BC868/BC869 pair ×2, SOT-89) + 4× 1N4148WS bias | ~0.8 |
+| 6× BJT (BCX54/BCX51 ×2 output + 2× BCX54 V_BE-mult, SOT-89) | ~1.0 |
 | 2× 4.7 µF bootstrap (tantalum/electrolytic) | ~0.3 |
 | CD74HC4053 + SN74HC14 (chopper demod) | ~0.9 |
 | Wien: 2× MMBT3904 + C0G/film freq caps + R | ~0.6 |
