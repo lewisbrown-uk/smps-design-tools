@@ -132,7 +132,7 @@ XU_da     n_da_plus n_da_minus vcc_buf vee_buf v_diff_amp uopamp_lvl3 Avol=5meg 
 
 B_demod n_demod 0 V = V(v_diff_amp) * (V(v_osc_drive) >= 0 ? 1 : -1)
 R_lp_demod n_demod n_demod_dc 100000.0
-C_lp_demod n_demod_dc 0 1e-06
+C_lp_demod n_demod_dc 0 2.2e-07
 
 * ===== Log demod / soft saturator =====
 * Non-inverting op-amp with R_fb=10k and R_gnd sized for gain log_gain_K.
@@ -149,7 +149,7 @@ R_fb_log    n_log_minus n_log_dem 10k
 XU_log      n_demod_dc n_log_minus vcc_buf vee_buf n_log_dem uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1
 
 V_set n_setpoint 0 DC 0
-R_int_p n_setpoint n_int_plus 100000.0
+R_int_p n_setpoint n_int_plus 300000.0
 R_int_pg n_int_plus 0 1G
 * PID compensator with HF rolloff (matches the tuned compensator from the
 * old test_closed_loop.py architecture).
@@ -158,7 +158,12 @@ R_int_pg n_int_plus 0 1G
 *   H(s) = -((R_pid || 1/sC_hf) + 1/sC_int) · (1 + sR_int·C_pid) / R_int
 *   Integrator zero: f_zi = 1/(2π·R_pid·C_int) ≈ 5 Hz
 *   HF rolloff: f_hf = 1/(2π·R_pid·C_hf) ≈ 160 Hz
-R_intin  n_log_dem n_int_minus 100000.0
+* Damping (2026-06-05): R_int 100k->300k (lower loop gain) + demod LP sped up
+* (C_lp 1u->0.22u, 1.6->7.2 Hz, out of the crossover region) raise phase margin
+* ~42->58 deg, collapsing the cold-start clamp-release ring to one bump. THD,
+* regulation, startup unchanged. C_int/R_pid don't affect PM (crossover sits in
+* the proportional region). R_int also scales R_bc -> softer anti-windup release.
+R_intin  n_log_dem n_int_minus 300000.0
 C_intin  n_log_dem n_int_minus 1e-09
 R_pid    n_int_pidp v_int_raw 1000000.0
 C_intfb  n_int_minus n_int_pidp 3.18e-07 IC=0
@@ -190,7 +195,7 @@ XU_aw_diff n_aw_diff_plus n_aw_diff_minus vcc_buf vee_buf e_sat uopamp_lvl3 Avol
 * Back-calc resistor: R_bc < R_int gives FASTER unwinding than wind-up,
 * so once the integrator saturates the clamp, anti-windup can pull it
 * back down quickly.  R_bc = R_int / 20 → 20× faster than wind-up.
-R_bc e_sat n_int_minus 5000.0
+R_bc e_sat n_int_minus 15000.0
 
 R_led_set n_v_led n_led_a 270
 

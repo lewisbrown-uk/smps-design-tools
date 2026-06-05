@@ -67,11 +67,11 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
                   use_split_gain=True,
                   R_in_s1=10, R_max_s1=24,
                   C_couple_s1s2=22e-6, R_fb_s2=2.4e3, R_gnd_s2=100,
-                  K_diff=30, R_lp=100e3, C_lp=1e-6,
+                  K_diff=30, R_lp=100e3, C_lp=0.22e-6,
                   use_notch_filter=False,
                   R_tt=8e3, C_tt=10e-9,
                   R_lp_post=100e3, C_lp_post=50e-9,
-                  R_int=100e3, C_int=318e-9, R_pid=1e6, C_pid=1e-9, C_hf=1e-9,
+                  R_int=300e3, C_int=318e-9, R_pid=1e6, C_pid=1e-9, C_hf=1e-9,
                   log_gain_K=20.0,
                   V_clamp_hi=4.0, V_clamp_lo=-0.5,
                   R_led_set=270,
@@ -412,6 +412,11 @@ R_int_pg n_int_plus 0 1G
 *   H(s) = -((R_pid || 1/sC_hf) + 1/sC_int) · (1 + sR_int·C_pid) / R_int
 *   Integrator zero: f_zi = 1/(2π·R_pid·C_int) ≈ 5 Hz
 *   HF rolloff: f_hf = 1/(2π·R_pid·C_hf) ≈ 160 Hz
+* Damping (2026-06-05): R_int 100k->300k (lower loop gain) + demod LP sped up
+* (C_lp 1u->0.22u, 1.6->7.2 Hz, out of the crossover region) raise phase margin
+* ~42->58 deg, collapsing the cold-start clamp-release ring to one bump. THD,
+* regulation, startup unchanged. C_int/R_pid don't affect PM (crossover sits in
+* the proportional region). R_int also scales R_bc -> softer anti-windup release.
 R_intin  n_log_dem n_int_minus {R_int}
 C_intin  n_log_dem n_int_minus {C_pid}
 R_pid    n_int_pidp v_int_raw {R_pid}

@@ -200,9 +200,9 @@ BCX54 IKF = 0.45 A causes only mild rolloff at the ILC1-1/7 peak.)
 | Bridge buffers | `XU_buf_A`, `XU_buf_B` | — | 2 OPA4277 channels (high-Z taps of node_A / node_B) |
 | Diff amp | `R_da_inA`,`R_da_inB`,`R_da_fb`,`R_da_gB` | 1 k, 1 k, 30 k, 30 k | K_diff = 30; 1 % thin-film (match the two 1 k and two 30 k) |
 | **Sync demod** | `B_demod` (behavioural) | — | **hardware = chopper:** 1 ch of **CD74HC4053** analog switch + 1 stage of **SN74HC14** Schmitt to square up V_osc into a clean 0/+rail gate. Ron ≈ 100 Ω ≪ R_lp_demod 100 k → negligible error. |
-| Demod LP | `R_lp_demod` / `C_lp_demod` | 100 kΩ / 1 µF | ~1.6 Hz post-demod LP; C may be X7R (Y5V-safe) |
+| Demod LP | `R_lp_demod` / `C_lp_demod` | 100 kΩ / **0.22 µF** | **~7.2 Hz** post-demod LP — moved up from 1.6 Hz for phase margin (out of the loop-crossover region); still ~49 dB rejection at the 2 kHz demod ripple. C may be X7R (Y5V-safe) |
 | Log demod | `XU_log`, `R_fb_log`, `R_gnd_log` | 10 kΩ / 526 Ω | K = 1 + 10k/526 ≈ **20, uniform all tubes**. (No Schottky clip — removed; the op-amp rails bound cold-start.) |
-| PID integrator | `XU_int`, `R_intin`, `C_intin`, `C_intfb`, `R_pid`, `C_hf`, `R_int_p` | 100 k, 1 nF, **330 nF (use for 318 nF)**, 1 MΩ, 1 nF, 100 k | integrator zero ~5 Hz, HF pole ~160 Hz. `C_intfb` = film/C0G preferred (Y5V-safe but value-stable is nice for the dominant pole); `C_intin`/`C_hf` C0G. `R_int_pg` 1 GΩ is a model leak path — omit in hardware. |
+| PID integrator | `XU_int`, `R_intin`, `C_intin`, `C_intfb`, `R_pid`, `C_hf`, `R_int_p` | **300 k**, 1 nF, **330 nF (use for 318 nF)**, 1 MΩ, 1 nF, **300 k** | `R_int` raised 100 k→300 k (lower loop gain → phase margin). `C_intfb` = film/C0G preferred (value-stable for the dominant pole); `C_intin`/`C_hf` C0G. `R_int_pg` 1 GΩ is a model leak path — omit in hardware. (`R_bc` = R_int/20 = 15 k, anti-windup back-calc.) |
 | Anti-windup | `R_diff1–4`, `R_bc`, `R_aw_out`, `D_aw_hi`, `D_aw_lo` | 100 k ×4, 5 k, 10 Ω, 2× clamp diode | back-calc unwind; clamp diodes = 1N4148 or BAT54 (low-V_F). |
 | Clamp refs | `V_clamp_hi`, `V_clamp_lo` | +4.0 V, −0.5 V | resistor dividers off the rails, buffered by U3's 2 spare OPA4277 channels (or LM4040 shunt refs). Recommend wider [−3, +6] for headroom at corners/low-power tubes. |
 
