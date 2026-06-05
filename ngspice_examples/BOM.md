@@ -2,9 +2,9 @@
 
 Real-part mapping for the **canonical `regulator.py` design** (H11F
 variable-gain + BJT class-AB push-pull). Target ≤ $20/tube, **no
-build-time trimming**, all parts stocked at DigiKey/Mouser. SMD where
-convenient (SOIC/SOT-23/0805); every part has a through-hole equivalent
-for forum builders.
+build-time trimming**, all parts stocked at DigiKey/Mouser. **This is a
+surface-mount build** — every part is specified in its SMD package
+(SOIC / SOT-23 / SOT-89 / SOD-323 / 0805); no through-hole.
 
 Reference designators follow the `regulator_<tube>.cir` element names.
 
@@ -76,7 +76,7 @@ The 10 op-amp channels collapse into **3 quad packages** (12 channels,
 | **U2 (OPA4277)** | `XU_buf_A`, `XU_buf_B`, `XU_da`, `XU_log` | two bridge buffers + diff amp + log demod |
 | **U3 (OPA4277)** | `XU_int`, `XU_aw_diff`, +2 spare | PID integrator + anti-windup diff amp; spares buffer the V_clamp refs |
 
-- **OPA4277UA** (SOIC-14) or **OPA4277PA** (PDIP-14 through-hole).
+- **OPA4277UA** (SOIC-14).
   Precision bipolar, OP07-class: Vos ~10 µV typ (~50 µV max), drift
   ±0.1 µV/°C, **GBW 1 MHz**, A_OL 134 dB, CMRR ~140 dB, **PSRR ~130 dB**,
   channel separation **±1 µV/V**, BJT class-AB output (no LM358 crossover).
@@ -113,12 +113,13 @@ sourcing, no trimming.
 
 | RefDes | element | part | notes |
 |--------|---------|------|-------|
-| **Q1 (Q_o_out_n)** | top NPN output | **BC337-40** (NPN, TO-92, 800 mA) or BC817-40 (SOT-23) | delivers up to ~280 mA_pk (ILC1-1/7) |
-| **Q2 (Q_o_out_p)** | bottom PNP output | **BC327-40** (PNP, TO-92) or BC807-40 (SOT-23) | complementary to Q1 |
-| **Q3 (Q_o_drv_n)** | top NPN driver | BC337-40 / BC817 | pre-driver |
-| **Q4 (Q_o_drv_p)** | bottom PNP driver | BC327-40 / BC807 | pre-driver |
-| `D_bbo_t1/t2/b1/b2` | class-AB bias string (4×) | **1N4148** (DO-35) / 1N4148WS (SOD-323) | V_BE-multiplier-style bias |
-| `R_bbo_ta/tb/ba/bb` | bias-chain resistors (4×) | 1.1 kΩ, 5 %, 0805 | |
+| **Q1 (Q_o_out_n)** | top NPN output | **BCX54** (NPN, SOT-89, 1 A, VCEO 45 V) | delivers ~340 mA_pk (ILC1-1/7) |
+| **Q2 (Q_o_out_p)** | bottom PNP output | **BCX51** (PNP, SOT-89, 1 A, VCEO 45 V) | complementary to Q1 |
+| **Q3 (Q_o_drv_n)** | top NPN driver | BCX54 | pre-driver |
+| **Q4 (Q_o_drv_p)** | bottom PNP driver | BCX51 | pre-driver |
+| **Q_vbm_t, Q_vbm_b** | V_BE-multiplier bias (2×) | **BCX54** (NPN), thermally coupled to the output pair | sets/tracks the class-AB quiescent current (Iq ~20 mA). Small-signal BC847 also works but BCX54 best-matches the output V_BE tempco. |
+| `R_vbm_t1/b1`, `R_vbm_t2/b2` | V_BE-multiplier dividers (4×) | 680 Ω / 1.0 kΩ, 1 %, 0805 | ratio 1.68 → ~2 V_BE per half → Iq ~20 mA |
+| `R_bbo_ta/tb/ba/bb` | bias-chain current feed (4×) | 1.1 kΩ, 5 %, 0805 | feeds ~4 mA through the multipliers; bootstrapped via C_bbo |
 | `R_o_bleed_n/p` | output-pair bleed (2×) | 5 kΩ, 5 %, 0805 | |
 | `R_cs` | current-sense / series limit | 0.01–0.1 Ω (model 0.01) | low-value; a short PCB trace or 0.1 Ω 1 % is fine. (`R_series` 0.01 Ω likewise — cold-start current limit.) |
 | **C_bbo_t, C_bbo_b** | bias-rail bootstrap (2×) | **4.7 µF — electrolytic / tantalum / film. *NOT* Y5V ceramic.** | ⚠ **See dielectric rule.** These are the only THD-critical caps. |
@@ -131,10 +132,50 @@ sourcing, no trimming.
 > or tantalum anyway, so this is a "don't accidentally spec Y5V" note. All
 > other caps: Y5V-safe (zero effect on regulation, stability, or THD).
 
-For ILC1-1/7 (≈5.5 V_pk drive, output devices dissipate ~100 mW each),
-use SOT-89 (e.g. BCX-class) or TO-92 with a little lead length for
-thermal headroom. The low-power tubes (≤±2 V_pk) are comfortable in
-SOT-23.
+**Why BCX54/BCX51 + a V_BE-multiplier bias:** SOT-89 1 A complementary pair
+with **VCEO = 45 V** — on ±10 V rails the off-device sees ~17 V pk, giving
+>2.5× margin (vs only ~15 % for BC868/869's 20 V, and far better than the
+SOT-23 BC817/807). The class-AB bias **must** be a V_BE multiplier, not the
+fixed diode string: with a fixed bias, a power output device's lower V_BE
+over-conducts badly — the original 4-diode string drove Iq to **242 mA /
+~1.9 W per device**. The V_BE multiplier (Q_vbm, thermally coupled) sets and
+tracks Iq at ~20 mA → **~0.05–0.58 W/device** (worst ILC1-1/8), SOT-89-safe.
+Verified 2026-06-04, all four tubes: regulation on target, +3–5 K startup
+overshoot, THD −52 to −59 dB. (V_A/Early voltage is irrelevant here; the
+BCX54 IKF = 0.45 A causes only mild rolloff at the ILC1-1/7 peak.)
+
+> **⚠ PCB thermal — copper pour required on the output-device tabs.** SOT-89
+> sheds heat through the collector tab into the PCB pad, so R_th(j-a) is
+> copper-dependent (Nexperia BCX54): **250 K/W bare footprint → 132 K/W at a
+> 1 cm² collector pad → 93 K/W at 6 cm²**; R_th(j-sp) = 16 K/W, Tj(max) 150 °C.
+> The worst device is ILC1-1/8 at ~0.58 W/device, which **exceeds the 0.50 W
+> bare-footprint rating** — on a bare pad Tj would blow past 150 °C. So pour
+> **≥ 1 cm² copper** under the output-pair collector tabs (then Tj ≈ 101 °C @
+> 25 °C / 126 °C @ 50 °C ambient — safe). ILC1-1/7 (~0.31 W) is OK on a bare
+> footprint but give it a small pad for margin; IV-6/IV-18 are fine bare.
+> Mount the two V_BE-multiplier transistors against the output tabs for thermal
+> tracking. **(This requirement is driven by the uniform ±10 V rails; see the
+> rail-scaling note — per-tube rails would relax it.)**
+
+> **Rail-scaling option (per-tube `v_buf`).** The output dissipation above is
+> driven by the uniform ±10 V rails: the low-voltage tubes swing far below the
+> rail, so the linear class-AB stage burns the headroom. Per-tube rails recover
+> it (verified 2026-06-04, all regulate):
+>
+> | tube | rail | P/device | Tj @ 50 °C bare | THD |
+> |---|---|---|---|---|
+> | ILC1-1/7 | ±10 V (needs it for 7 V drive) | 0.31 W | 128 °C | −56 dB |
+> | ILC1-1/8 | **±5 V** (vs 0.58 W / 194 °C at ±10 V) | **0.23 W** | **107 °C** | −49 dB |
+> | IV-6 | ±5 V | 0.08 W | 71 °C | −50 dB |
+> | IV-18 | ±5 V | 0.02 W | 55 °C | −51 dB |
+>
+> At ±5 V the low-voltage tubes are **bare-footprint-safe (no copper pour
+> needed)** and ~60 % cooler; THD degrades ~3 dB but stays well inside spec.
+> Floor is ~±4.5 V (the integrator output reaches ~+3.5 V and needs rail
+> headroom). Cost: a per-tube rail voltage (LM317/337 set per tube — the
+> retired all-pass design did this). **Not yet implemented** — uniform ±10 V is
+> the current `regulator.py` default; this documents the trade vs. the copper
+> pour above.
 
 ---
 
@@ -159,9 +200,9 @@ SOT-23.
 | Bridge buffers | `XU_buf_A`, `XU_buf_B` | — | 2 OPA4277 channels (high-Z taps of node_A / node_B) |
 | Diff amp | `R_da_inA`,`R_da_inB`,`R_da_fb`,`R_da_gB` | 1 k, 1 k, 30 k, 30 k | K_diff = 30; 1 % thin-film (match the two 1 k and two 30 k) |
 | **Sync demod** | `B_demod` (behavioural) | — | **hardware = chopper:** 1 ch of **CD74HC4053** analog switch + 1 stage of **SN74HC14** Schmitt to square up V_osc into a clean 0/+rail gate. Ron ≈ 100 Ω ≪ R_lp_demod 100 k → negligible error. |
-| Demod LP | `R_lp_demod` / `C_lp_demod` | 100 kΩ / 1 µF | ~1.6 Hz post-demod LP; C may be X7R (Y5V-safe) |
+| Demod LP | `R_lp_demod` / `C_lp_demod` | 100 kΩ / **0.22 µF** | **~7.2 Hz** post-demod LP — moved up from 1.6 Hz for phase margin (out of the loop-crossover region); still ~49 dB rejection at the 2 kHz demod ripple. C may be X7R (Y5V-safe) |
 | Log demod | `XU_log`, `R_fb_log`, `R_gnd_log` | 10 kΩ / 526 Ω | K = 1 + 10k/526 ≈ **20, uniform all tubes**. (No Schottky clip — removed; the op-amp rails bound cold-start.) |
-| PID integrator | `XU_int`, `R_intin`, `C_intin`, `C_intfb`, `R_pid`, `C_hf`, `R_int_p` | 100 k, 1 nF, **330 nF (use for 318 nF)**, 1 MΩ, 1 nF, 100 k | integrator zero ~5 Hz, HF pole ~160 Hz. `C_intfb` = film/C0G preferred (Y5V-safe but value-stable is nice for the dominant pole); `C_intin`/`C_hf` C0G. `R_int_pg` 1 GΩ is a model leak path — omit in hardware. |
+| PID integrator | `XU_int`, `R_intin`, `C_intin`, `C_intfb`, `R_pid`, `C_hf`, `R_int_p` | **300 k**, 1 nF, **330 nF (use for 318 nF)**, 1 MΩ, 1 nF, **300 k** | `R_int` raised 100 k→300 k (lower loop gain → phase margin). `C_intfb` = film/C0G preferred (value-stable for the dominant pole); `C_intin`/`C_hf` C0G. `R_int_pg` 1 GΩ is a model leak path — omit in hardware. (`R_bc` = R_int/20 = 15 k, anti-windup back-calc.) |
 | Anti-windup | `R_diff1–4`, `R_bc`, `R_aw_out`, `D_aw_hi`, `D_aw_lo` | 100 k ×4, 5 k, 10 Ω, 2× clamp diode | back-calc unwind; clamp diodes = 1N4148 or BAT54 (low-V_F). |
 | Clamp refs | `V_clamp_hi`, `V_clamp_lo` | +4.0 V, −0.5 V | resistor dividers off the rails, buffered by U3's 2 spare OPA4277 channels (or LM4040 shunt refs). Recommend wider [−3, +6] for headroom at corners/low-power tubes. |
 
@@ -177,7 +218,7 @@ two-NPN symmetric-clamp Wien oscillator (`wien_oscillator.py`).
 | `R1`, `R2` (frequency) | 10 kΩ, 1 % | f0 = 1/(2πRC) = 1 kHz |
 | `C1`, `C2` (frequency) | 16 nF (15.9 nF), 5 % **C0G/NP0 or PP film** | frequency-setting — keep stable dielectric |
 | gain net (Rfa/Rfb/Rg) | 10 k / 12 k / 10 k, 1 % | sets loop gain just > 3 |
-| clamp transistors | 2× **MMBT3904** (SOT-23) / 2N3904 (TO-92) | matched anti-parallel NPN amplitude clamp (kills H2) |
+| clamp transistors | 2× **MMBT3904** (SOT-23) | matched anti-parallel NPN amplitude clamp (kills H2) |
 | base-bias dividers | 120 kΩ, 5 % | set clamp threshold (α = 0.5) |
 
 > **Bench-check (flagged):** the matched-NPN clamp is clean (THD ~2.3 %,
@@ -205,7 +246,7 @@ two-NPN symmetric-clamp Wien oscillator (`wien_oscillator.py`).
 |------|--------|
 | 3× OPA4277 quad (U1–U3) | ~6.0–9.0 |
 | 1× H11F1M (U4) + R_led_set | ~0.9 |
-| 4× BJT (BC337/BC327 pair ×2) + 4× 1N4148 bias | ~0.6 |
+| 6× BJT (BCX54/BCX51 ×2 output + 2× BCX54 V_BE-mult, SOT-89) | ~1.0 |
 | 2× 4.7 µF bootstrap (tantalum/electrolytic) | ~0.3 |
 | CD74HC4053 + SN74HC14 (chopper demod) | ~0.9 |
 | Wien: 2× MMBT3904 + C0G/film freq caps + R | ~0.6 |

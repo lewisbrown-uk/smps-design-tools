@@ -23,9 +23,14 @@ UOPAMP = (HERE / "uopamp.lib").as_posix()
 H11F_LIB = (HERE / "spice_models" / "H11F1.spice.txt").as_posix()
 
 QMODELS = """\
-.model QBC337 NPN (IS=15.6f BF=290 VAF=125 IKF=1.0 ISE=29p NE=1.5 BR=4.65 RB=1 RC=0.41 CJC=12p MJC=0.4 VJC=0.4 CJE=20p MJE=0.4 VJE=0.85)
-.model QBC327 PNP (IS=18.4f BF=215 VAF=80 IKF=1.0 ISE=29p NE=1.7 BR=2.4 RB=1 RC=0.41 CJC=10p MJC=0.4 VJC=0.4 CJE=20p MJE=0.4 VJE=0.85)
-.model Dbias D (IS=2.52n N=1.752 RS=0.568 BV=80 IBV=0.1m CJO=4p)
+* Output class-AB push-pull: Nexperia BCX54 (NPN) / BCX51 (PNP), SOT-89, 1 A,
+* VCEO 45 V (~2.5x margin on +-10 V rails; off-device sees ~17 V pk).
+* Class-AB bias is a V_BE multiplier (Q_vbm_t/b, also BCX54, thermally coupled),
+* tuned for Iq ~20 mA -> ~0.05-0.58 W/device.  Replaced BCX54/869 (VCEO 20 V) +
+* the old 4-diode bias string, which over-biased the power devices to Iq=242 mA
+* / ~1.9 W/device (verified 2026-06-04, all 4 tubes).
+.model BCX54 NPN (IS=7.905E-14 NF=0.9948 ISE=6.507E-15 NE=1.302 BF=143 IKF=0.45 VAF=8 NR=0.9943 ISC=2.266E-14 NC=1.361 BR=35.83 IKR=1.8 VAR=81 RB=10.4 IRB=0.0011 RBM=2.5 RE=0.0864 RC=0.1173 XTB=0 EG=1.11 XTI=3 CJE=1.442E-10 VJE=0.7013 MJE=0.3245 TF=7.8E-10 XTF=7 VTF=5 ITF=2 PTF=0 CJC=2.052E-11 VJC=0.5 MJC=0.4015 XCJC=1 TR=2.3E-8 CJS=0 VJS=0.75 MJS=0.333 FC=0.9)
+.model BCX51 PNP (IS=1.01E-13 NF=1.006 ISE=7.054E-15 NE=1.3 BF=157.5 IKF=1 VAF=15.62 NR=1.006 ISC=1.406E-14 NC=1.325 BR=13.46 IKR=0.86 VAR=80 RB=10 IRB=0.001 RBM=2.5 RE=0.1363 RC=0.006969 XTB=1.779 EG=1.11 XTI=5.698 CJE=1.049E-10 VJE=0.7623 MJE=0.3879 TF=1.115E-9 XTF=2.02 VTF=3.118 ITF=0.759 PTF=0 CJC=4.998E-11 VJC=0.9968 MJC=0.4942 XCJC=1 TR=6.5E-8 CJS=0 VJS=0.75 MJS=0.333 FC=0.8944)
 """
 
 # Defaults below are for ILC1-1/7; per-tube values live in TUBES.
@@ -62,11 +67,11 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
                   use_split_gain=True,
                   R_in_s1=10, R_max_s1=24,
                   C_couple_s1s2=22e-6, R_fb_s2=2.4e3, R_gnd_s2=100,
-                  K_diff=30, R_lp=100e3, C_lp=1e-6,
+                  K_diff=30, R_lp=100e3, C_lp=0.22e-6,
                   use_notch_filter=False,
                   R_tt=8e3, C_tt=10e-9,
                   R_lp_post=100e3, C_lp_post=50e-9,
-                  R_int=100e3, C_int=318e-9, R_pid=1e6, C_pid=1e-9, C_hf=1e-9,
+                  R_int=300e3, C_int=318e-9, R_pid=1e6, C_pid=1e-9, C_hf=1e-9,
                   log_gain_K=20.0,
                   V_clamp_hi=4.0, V_clamp_lo=-0.5,
                   R_led_set=270,
@@ -183,8 +188,8 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
     # steady-state requirement so the limit doesn't engage at OP.
     if I_limit_enable:
         current_limit_block = (
-            "Q_cl_n n_o_pair_n n_buf_emi v_osc_drive QBC337\n"
-            "Q_cl_p n_o_pair_p n_buf_emi v_osc_drive QBC327"
+            "Q_cl_n n_o_pair_n n_buf_emi v_osc_drive BCX54\n"
+            "Q_cl_p n_o_pair_p n_buf_emi v_osc_drive BCX51"
         )
     else:
         current_limit_block = "* current limit disabled"
@@ -337,18 +342,24 @@ R_bbo_tb mid_bbo_t    q_o_bn      {Rb_half:.6g}
 * the I·R_cs drop reduces V_BE on the output BJTs and they collapse at
 * peak current — destroys THD and defeats the current limit.
 C_bbo_t  mid_bbo_t    n_buf_emi   4.7u IC=0
-D_bbo_t1 q_o_bn       n_bbo_t1    Dbias
-D_bbo_t2 n_bbo_t1     n_buf_o     Dbias
-D_bbo_b1 n_buf_o      n_bbo_b1    Dbias
-D_bbo_b2 n_bbo_b1     q_o_bp      Dbias
+* V_BE-multiplier class-AB spreader (replaces the old 4-diode string): one
+* multiplier per half, op-amp still drives the n_buf_o midpoint.  Each sets
+* ~2 V_BE via R_vbm1/R_vbm2 (ratio 1.68 -> Iq ~20 mA).  Q_vbm are BCX54
+* thermally coupled to the output pair (tracks V_BE over temperature, sets Iq).
+Q_vbm_t  q_o_bn  vbm_t_b  n_buf_o  BCX54
+R_vbm_t1 q_o_bn  vbm_t_b  680
+R_vbm_t2 vbm_t_b n_buf_o  1000
+Q_vbm_b  n_buf_o vbm_b_b  q_o_bp   BCX54
+R_vbm_b1 n_buf_o vbm_b_b  680
+R_vbm_b2 vbm_b_b q_o_bp   1000
 R_bbo_bb q_o_bp       mid_bbo_b   {Rb_half:.6g}
 R_bbo_ba mid_bbo_b    vee_buf     {Rb_half:.6g}
 C_bbo_b  mid_bbo_b    n_buf_emi   4.7u IC=0
-Q_o_drv_n   {bjt_o_drv_n_C} q_o_bn      n_o_pair_n   QBC337
-Q_o_out_n   {bjt_o_out_n_C} n_o_pair_n  n_buf_emi    QBC337
+Q_o_drv_n   {bjt_o_drv_n_C} q_o_bn      n_o_pair_n   BCX54
+Q_o_out_n   {bjt_o_out_n_C} n_o_pair_n  n_buf_emi    BCX54
 R_o_bleed_n n_o_pair_n n_buf_emi 5k
-Q_o_drv_p   {bjt_o_drv_p_C} q_o_bp      n_o_pair_p   QBC327
-Q_o_out_p   {bjt_o_out_p_C} n_o_pair_p  n_buf_emi    QBC327
+Q_o_drv_p   {bjt_o_drv_p_C} q_o_bp      n_o_pair_p   BCX51
+Q_o_out_p   {bjt_o_out_p_C} n_o_pair_p  n_buf_emi    BCX51
 R_o_bleed_p n_o_pair_p n_buf_emi 5k
 * Current-sense resistor between output BJT emitters and the load.
 * Current limit threshold = V_BE_on / R_cs ≈ 0.6V / R_cs.
@@ -401,6 +412,11 @@ R_int_pg n_int_plus 0 1G
 *   H(s) = -((R_pid || 1/sC_hf) + 1/sC_int) · (1 + sR_int·C_pid) / R_int
 *   Integrator zero: f_zi = 1/(2π·R_pid·C_int) ≈ 5 Hz
 *   HF rolloff: f_hf = 1/(2π·R_pid·C_hf) ≈ 160 Hz
+* Damping (2026-06-05): R_int 100k->300k (lower loop gain) + demod LP sped up
+* (C_lp 1u->0.22u, 1.6->7.2 Hz, out of the crossover region) raise phase margin
+* ~42->58 deg, collapsing the cold-start clamp-release ring to one bump. THD,
+* regulation, startup unchanged. C_int/R_pid don't affect PM (crossover sits in
+* the proportional region). R_int also scales R_bc -> softer anti-windup release.
 R_intin  n_log_dem n_int_minus {R_int}
 C_intin  n_log_dem n_int_minus {C_pid}
 R_pid    n_int_pidp v_int_raw {R_pid}
