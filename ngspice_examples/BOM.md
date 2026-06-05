@@ -44,7 +44,7 @@ properties* used to calibrate the thermal model — not parts to buy.)
 |-------------|-------|------|----------|----------|-------|
 | `R_topref`  | 1 kΩ  | 2 kΩ | 5 kΩ     | 800 Ω    | bridge top ref; 1 % thin-film 0805 |
 | `R_botref`  | 100 Ω | 500 Ω| 1 kΩ     | 200 Ω    | bridge bottom ref; 1 % thin-film |
-| `R_sense`   | 10 Ω  | 5 Ω  | 5 Ω      | 2 Ω      | bridge sense leg; 1 % (ILC1-1/7 carries ~1 W RMS → ½ W part) |
+| `R_sense`   | 10 Ω  | 5 Ω  | 5 Ω      | 2 Ω      | bridge sense leg, in series with the filament (carries the load current); 1 %. Per-element dissipation (full power audit): **ILC1-1/7 ~166 mW → ½ W part**; ILC1-1/8 ~45 mW → ¼ W (0805 marginal); IV-6 ~12 mW and IV-18 ~1 mW → plain 0805. |
 | oscillator level | ↓ | ↓ | ↓ | ↓ | set by the attenuator divider so the carrier into Stage 1 matches the tube; in sim = `V_src_rms` 0.018 / 0.020 / 0.100 / 0.024 |
 | target R_fil | 100 Ω | 20 Ω | 25 Ω | 8 Ω | = R_sense·R_topref/R_botref (held by the loop) |
 
