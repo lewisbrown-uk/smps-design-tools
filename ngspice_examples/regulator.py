@@ -75,6 +75,7 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
                   log_gain_K=20.0,
                   V_clamp_hi=4.0, V_clamp_lo=-0.5,
                   R_led_set=270,
+                  fault_supervisor=False, v_fault_arm=1.5, v_fault_trip=1.2,
                   polarity_swap=False):
     """Cold-start netlist for the SE Darlington + H11F variable-gain regulator.
 
@@ -154,6 +155,38 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
                       " v(q_o_bn) v(q_o_bp) v(n_o_pair_n) v(n_o_pair_p)")
     else:
         save_extra = ""
+
+    # ---- Optional V_int fault supervisor (passive-FMEA over-temp protection) ----
+    # A forward-gain passive failure (e.g. a gain-setting resistor open) drives
+    # the regulator out of authority and rails V_int to its low clamp while the
+    # filament overheats ~+70 K (see passive FMEA).  A healthy loop never sits at
+    # a clamp, so V_int dropping below v_fault_trip is an unambiguous fault flag.
+    # The supervisor ARMS once the loop has captured (V_int first > v_fault_arm,
+    # so the cold-start ramp doesn't false-trip), LATCHES on V_int < v_fault_trip,
+    # and gates the oscillator off → filament cools to a safe state while the
+    # latch drives a fault indicator.  Sim: detects in ~10 ms, filament peaks
+    # +10 K then cools, no cold-start false trip.  Real hw: one dual comparator +
+    # reference + diode-cap latch + LED; cutoff = a transistor disabling the Wien
+    # oscillator.  Set fault_supervisor=True to include it.
+    if fault_supervisor:
+        supervisor_block = (
+            "* ---- V_int fault supervisor (arm-after-capture, latch, drive cutoff) ----\n"
+            f"B_arm n_arm_drv 0 V = (V(v_int) > {v_fault_arm:.4g}) ? 5 : 0\n"
+            "D_arm n_arm_drv n_armed Dlatch\n"
+            "C_arm n_armed 0 1u IC=0\n"
+            "R_arm n_armed 0 1e9\n"
+            f"B_tr n_tr_drv 0 V = (V(n_armed) > 2.5)*(V(v_int) < {v_fault_trip:.4g})*5\n"
+            "D_tr n_tr_drv n_latch Dlatch\n"
+            "C_lat n_latch 0 1u IC=0\n"
+            "R_lat n_latch 0 1e9\n"
+            ".model Dlatch D(IS=1e-12 N=1)"
+        )
+        src_gate = " * (V(n_latch) < 2.5 ? 1 : 0)"
+        supervisor_save = " v(n_latch) v(n_armed)"
+    else:
+        supervisor_block = "* fault supervisor disabled"
+        src_gate = ""
+        supervisor_save = ""
 
     # ---- PSU rail definitions ----
     # Ramp from 0V at t=0 to full rail at t_rail_ramp, then hold flat.
@@ -316,7 +349,7 @@ R_sense_vee vee_top vee_buf 0.1
 * with exponentially-growing envelope, τ = t_src_ramp.  With
 * t_src_ramp ≥ τ_thermal (filament thermal τ), the filament tracks
 * V_src quasi-statically and there's no thermal overshoot at cold-start.
-B_src v_src 0 V = {V_src_pk:.6g} * (1 - exp(-time/{t_src_ramp})) * sin(2*3.141592653589793*{F0}*time)
+B_src v_src 0 V = {V_src_pk:.6g} * (1 - exp(-time/{t_src_ramp})) * sin(2*3.141592653589793*{F0}*time){src_gate}
 
 R_atten_top v_src n_atten_raw {R_atten_top}
 R_atten_bot n_atten_raw 0 {R_atten_bot}
@@ -453,13 +486,15 @@ R_bc e_sat n_int_minus {R_int / 20}
 
 {r_led_line}
 
+{supervisor_block}
+
 .tran 50u {T_end} 0 uic
 .options reltol=1e-4 abstol=1n vntol=1u
 
-.save v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a){save_extra}
+.save v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a){save_extra}{supervisor_save}
 .control
 run
-wrdata {WORK.as_posix()}/run.data v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a){save_extra}
+wrdata {WORK.as_posix()}/run.data v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a){save_extra}{supervisor_save}
 .endc
 .end
 """
