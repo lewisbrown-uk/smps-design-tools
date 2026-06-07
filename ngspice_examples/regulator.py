@@ -80,8 +80,8 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
                   log_gain_K=20.0,
                   V_clamp_hi=4.0, V_clamp_lo=-0.5,
                   R_led_set=270,
-                  fault_supervisor=False, v_fault_arm=1.5, v_fault_trip=1.2,
-                  v_fault_trip_hi=3.7, t_fault_hi=3.0,
+                  fault_supervisor=False, v_fault_arm=1.5, v_fault_trip=0.5,
+                  v_fault_trip_hi=3.7, t_fault_hi=3.0, t_fault_lo=0.001,
                   polarity_swap=False):
     """Cold-start netlist for the SE Darlington + H11F variable-gain regulator.
 
@@ -178,6 +178,7 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
     # cutoff = a transistor disabling the Wien oscillator.
     if fault_supervisor:
         R_hiq = t_fault_hi / 1e-6  # with C_hiq = 1µF → τ = t_fault_hi
+        R_loq = t_fault_lo / 1e-6  # with C_loq = 1µF → τ = t_fault_lo
         supervisor_block = (
             "* ---- Dual-sided V_int fault supervisor (arm, latch, drive cutoff) ----\n"
             ".model Dlatch D(IS=1e-12 N=1)\n"
@@ -186,8 +187,18 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
             "D_arm n_arm_drv n_armed Dlatch\n"
             "C_arm n_armed 0 1u IC=0\n"
             "R_arm n_armed 0 1e9\n"
-            "* LOW-side trip: V_int below v_fault_trip (forward-gain / loss-of-authority)\n"
-            f"B_tr n_tr_drv 0 V = (V(n_armed) > 2.5)*(V(v_int) < {v_fault_trip:.4g})*5\n"
+            "* LOW-side trip: V_int below v_fault_trip (forward-gain / loss-of-authority).\n"
+            "* Threshold is set WELL BELOW any startup undershoot: a cold-start / restart\n"
+            "* transiently swings V_int down (to ~0.9V at the fastest physical Wien AGC\n"
+            "* ramp), but the dangerous forward-gain faults rail V_int hard to ~-0.85V, so\n"
+            "* v_fault_trip=0.5 cleanly separates them. Detection is kept FAST (t_fault_lo\n"
+            "* ~1ms qual, for glitch immunity only) because these faults bypass the loop\n"
+            "* authority and over-drive ~50x -> the filament heats far faster than the\n"
+            "* thermal time constant (50ms delay -> 1679K; 1ms -> ~940K).\n"
+            f"B_lo n_lo_drv 0 V = (V(v_int) < {v_fault_trip:.4g}) ? 1 : 0\n"
+            f"R_loq n_lo_drv n_lo_int {R_loq:.6g}\n"
+            "C_loq n_lo_int 0 1u IC=0\n"
+            "B_tr n_tr_drv 0 V = (V(n_armed) > 2.5)*(V(n_lo_int) > 0.6)*5\n"
             "D_tr n_tr_drv n_latch Dlatch\n"
             "* HIGH-side trip: V_int above v_fault_trip_hi SUSTAINED (time-qualified\n"
             "* via the R_hiq/C_hiq integrator so cold-start / restart rides don't trip)\n"
@@ -201,7 +212,7 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
             "R_lat n_latch 0 1e9"
         )
         src_gate = " * (V(n_latch) < 2.5 ? 1 : 0)"
-        supervisor_save = " v(n_latch) v(n_armed) v(n_hi_int)"
+        supervisor_save = " v(n_latch) v(n_armed) v(n_hi_int) v(n_lo_int)"
     else:
         supervisor_block = "* fault supervisor disabled"
         src_gate = ""
