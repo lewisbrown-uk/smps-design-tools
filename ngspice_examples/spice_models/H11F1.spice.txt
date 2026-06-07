@@ -30,33 +30,27 @@
 *   R_4-6 = R_6-4 (bilateral)   Table p3          symmetric by construction
 *   Non-linearity 2% typ @       Table p3          ~0.6 % @ this OP — well
 *     I_F=16mA, 25µA RMS, 1kHz                    inside the 2 % spec
-*   R(I_F) shape                Fig 1              Three-piece fit to
-*                                                  precision-digitised user
-*                                                  data.  At low I_F a slope
-*                                                  steeper than 1/I; at
-*                                                  4-16 mA a slope of -0.59
-*                                                  in log-log; flat above
-*                                                  16 mA (the real curve
-*                                                  has a shallow ~5 % dip at
-*                                                  I_F=30 mA and recovery at
-*                                                  60 mA, NOT modelled —
-*                                                  small effect, far from
-*                                                  regulator OP):
-*                                                    I_F < 4 mA   : R/R_typ
-*                                                       = 12·(I_F_mA)^-1.20
-*                                                    4 ≤ I_F < 16 : R/R_typ
-*                                                       = (16/I_F)^0.59
-*                                                    I_F ≥ 16 mA  : R = R_typ
-*                                                  Fit vs digitised data
-*                                                  (target ; model):
+*   R(I_F) shape                Fig 1              Smooth log-space quadratic
+*                                                  (2026-06-07, replaced the
+*                                                  old 3-piece power-law PWL):
+*                                                    ln(R/R_typ) =
+*                                                      0.23117·u² − 1.54689·u
+*                                                      + 2.51325,  u=ln(I_F_mA)
+*                                                  C-infinity; even degree (a>0)
+*                                                  so R/R_typ→∞ as I_F→0 (safe
+*                                                  at the starved-LED clamp).
+*                                                  Fits all 21 digitised points
+*                                                  to ≤2.9 % AND reproduces the
+*                                                  shallow dip to 0.94 at 30 mA
+*                                                  the old fit ignored.  Fit vs
+*                                                  digitised (target ; model):
 *                                                    I_F=1 mA   : 12.0 ; 12.0
-*                                                    I_F=2 mA   : 4.76 ; 5.22
-*                                                    I_F=4 mA   : 2.27 ; 2.27
-*                                                    I_F=10 mA  : 1.20 ; 1.36
+*                                                    I_F=2 mA   : 4.76 ; 4.72
+*                                                    I_F=4 mA   : 2.27 ; 2.26
+*                                                    I_F=10 mA  : 1.20 ; 1.19
 *                                                    I_F=16 mA  : 1.00 ; 1.00
-*                                                    I_F=60 mA  : 1.04 ; 1.00
-*                                                  within ~15 % across the
-*                                                  whole range.
+*                                                    I_F=30 mA  : 0.94 ; 0.93
+*                                                    I_F=60 mA  : 1.04 ; 1.06
 *   I_46 vs V_46 (output curves) Fig 2             Tanh saturation:
 *                                                    I(V) = G_typ·V_char
 *                                                           · tanh(V/V_char)
@@ -194,31 +188,21 @@ D_LED 1A 2 D_H11F_LED
 * This matches Fig 1.  Fig 2 saturation is matched separately by the
 * V_CHAR(I_F) table below — V_CHAR varies with I_F such that
 * I_sat = G(I_F)·V_CHAR(I_F) reproduces the user's Fig 2 saturation level.
+* Smooth C-infinity replacement for the 21-point R(I_F) PWL (2026-06-07): a
+* log-space quadratic  ln(R/R_typ) = a*u^2 + b*u + c,  u = ln(I_F in mA).  Fits all
+* 21 digitised Fig-1 points to <= 2.9 % (vs the PWL's own ~15 % tolerance) AND
+* reproduces the shallow dip to 0.94 at ~30 mA that the old 3-piece power-law fit
+* ignored.  Must be EVEN degree with a > 0 so R/R_typ -> +inf as I_F -> 0 (channel
+* off, R_dark dominates); the odd-degree fits send R/R_typ -> 0 there, blowing the
+* channel conductance up at the starved-LED anti-windup clamp -- so the quadratic is
+* the only numerically safe fit.  u squared as u*u (pow(neg,2) NaNs in ngspice for
+* I_F < 1 mA where u < 0).  G_target = BETA/R_TYP * exp(-Q(u)).
+B_h11f_u   n_h11f_u 0 V = ln(max(i(V_LED_SENSE),1e-9)*1e3)
 B_G_target n_G_tgt 0 V =
-+   H11F_BETA_SCALE / R_TYP_16MA / pwl(i(V_LED_SENSE),
-+   1e-9,    12.000,
-+   1.0e-3,  12.000,
-+   1.37e-3,  7.820,
-+   1.82e-3,  5.401,
-+   2.23e-3,  4.209,
-+   3.01e-3,  3.020,
-+   3.99e-3,  2.268,
-+   5.02e-3,  1.869,
-+   6.01e-3,  1.613,
-+   7.62e-3,  1.352,
-+   9.46e-3,  1.199,
-+   11.82e-3, 1.098,
-+   14.66e-3, 1.029,
-+   17.82e-3, 0.967,
-+   22.79e-3, 0.948,
-+   29.97e-3, 0.941,
-+   33.81e-3, 0.943,
-+   37.65e-3, 0.952,
-+   42.09e-3, 0.968,
-+   48.87e-3, 0.992,
-+   54.99e-3, 1.027,
-+   60.24e-3, 1.044,
-+   100e-3,   1.044)
++   H11F_BETA_SCALE / R_TYP_16MA
++   * exp(-( 0.231170*V(n_h11f_u)*V(n_h11f_u)
++           -1.546890*V(n_h11f_u)
++           +2.513250 ))
 *
 * V_CHAR(I_F) table.  Derived from V_CHAR = I_sat_Fig2(I_F)·R_Fig1(I_F)
 * at the 5 I_F values where the user provided Fig 2 data; extrapolated
