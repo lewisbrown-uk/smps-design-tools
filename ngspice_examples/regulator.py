@@ -48,10 +48,10 @@ TAU_TH = 0.1
 # regulator_<key>.{cir,asc} artifact filenames.  Each dict is directly
 # splattable into make_netlist(**TUBES[key]).
 TUBES = {
-    "ilc11_7": dict(R_op=25.0,  V_op=5.0, T_op=800.0, R_sense=5.0,  R_top_ref=5.0e3, R_bot_ref=1.0e3, V_src_rms=0.100),
-    "iv6":     dict(R_op=20.0,  V_op=1.0, T_op=800.0, R_sense=5.0,  R_top_ref=2.0e3, R_bot_ref=500.0, V_src_rms=0.020),
-    "iv18":    dict(R_op=100.0, V_op=1.0, T_op=800.0, R_sense=10.0, R_top_ref=1.0e3, R_bot_ref=100.0, V_src_rms=0.018),
-    "ilc11_8": dict(R_op=8.0,   V_op=1.2, T_op=800.0, R_sense=2.0,  R_top_ref=800.0, R_bot_ref=200.0, V_src_rms=0.024),
+    "ilc11_7": dict(R_op=25.0,  V_op=5.0, T_op=800.0, R_sense=5.0,  R_top_ref=5.0e3, R_bot_ref=1.0e3, V_src_rms=0.088),
+    "iv6":     dict(R_op=20.0,  V_op=1.0, T_op=800.0, R_sense=5.0,  R_top_ref=2.0e3, R_bot_ref=503.0, V_src_rms=0.019),
+    "iv18":    dict(R_op=100.0, V_op=1.0, T_op=800.0, R_sense=10.0, R_top_ref=1.0e3, R_bot_ref=102.0, V_src_rms=0.0115, R_in_s1=28.0),
+    "ilc11_8": dict(R_op=8.0,   V_op=1.2, T_op=800.0, R_sense=2.0,  R_top_ref=800.0, R_bot_ref=201.0, V_src_rms=0.0224),
 }
 TUBE_NAMES = {"ilc11_7": "ILC1-1/7", "iv6": "IV-6", "iv18": "IV-18", "ilc11_8": "ILC1-1/8"}
 
@@ -65,7 +65,7 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
                   R_sense=R_SENSE, R_top_ref=R_TOP_REF, R_bot_ref=R_BOT_REF,
                   R_fb_vgain=100000, R_atten_top=12000, R_atten_bot=1000,
                   use_split_gain=True,
-                  R_in_s1=10, R_max_s1=24,
+                  R_in_s1=40, R_max_s1=140,
                   C_couple_s1s2=22e-6, R_fb_s2=2.4e3, R_gnd_s2=100,
                   K_diff=30, R_lp=100e3, C_lp=0.22e-6,
                   use_notch_filter=False,
@@ -122,7 +122,7 @@ B_R     r_fil 0     V = R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp
     # the GBW sweep (≥3 MHz degrades THD + hunts under Vos).  Quad packaging
     # is safe here (channel sep ±1 µV/V; coupling sim showed ≤0.14 dB penalty).
     op = ("uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 "
-          "Iq=800u Ilimit=500m Vos=50u Vmax=30 Vrail=0.1")
+          "Iq=800u Ilimit=25m Vos=50u Vmax=30 Vrail=0.1")
     R_diff_in = 1000
     R_diff_fb = int(K_diff * R_diff_in)
     # Power instrumentation: insert 0-V current-sense sources in series with
