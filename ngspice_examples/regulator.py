@@ -48,10 +48,15 @@ TAU_TH = 0.1
 # regulator_<key>.{cir,asc} artifact filenames.  Each dict is directly
 # splattable into make_netlist(**TUBES[key]).
 TUBES = {
+    # Re-cal 2026-06-07 for the buffered-LED + differencing-in-demod sense topology
+    # (removes the standing demod error → gain-invariant setpoint).  Removing the
+    # standing error raised effective loop gain, so R_int was raised 300k→1e6 to
+    # restore phase margin (esp. ilc11_7, the highest-gain tube).  Only R_bot trims
+    # re-centre T (V_src unchanged from the original constant-V cal).
     "ilc11_7": dict(R_op=25.0,  V_op=5.0, T_op=800.0, R_sense=5.0,  R_top_ref=5.0e3, R_bot_ref=1.0e3, V_src_rms=0.088),
-    "iv6":     dict(R_op=20.0,  V_op=1.0, T_op=800.0, R_sense=5.0,  R_top_ref=2.0e3, R_bot_ref=503.0, V_src_rms=0.019),
-    "iv18":    dict(R_op=100.0, V_op=1.0, T_op=800.0, R_sense=10.0, R_top_ref=1.0e3, R_bot_ref=102.0, V_src_rms=0.0115, R_in_s1=28.0),
-    "ilc11_8": dict(R_op=8.0,   V_op=1.2, T_op=800.0, R_sense=2.0,  R_top_ref=800.0, R_bot_ref=201.0, V_src_rms=0.0224),
+    "iv6":     dict(R_op=20.0,  V_op=1.0, T_op=800.0, R_sense=5.0,  R_top_ref=2.0e3, R_bot_ref=500.0, V_src_rms=0.019),
+    "iv18":    dict(R_op=100.0, V_op=1.0, T_op=800.0, R_sense=10.0, R_top_ref=1.0e3, R_bot_ref=100.0, V_src_rms=0.0115, R_in_s1=28.0),
+    "ilc11_8": dict(R_op=8.0,   V_op=1.2, T_op=800.0, R_sense=2.0,  R_top_ref=800.0, R_bot_ref=200.0, V_src_rms=0.0224),
 }
 TUBE_NAMES = {"ilc11_7": "ILC1-1/7", "iv6": "IV-6", "iv18": "IV-18", "ilc11_8": "ILC1-1/8"}
 
@@ -71,11 +76,12 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
                   use_notch_filter=False,
                   R_tt=8e3, C_tt=10e-9,
                   R_lp_post=100e3, C_lp_post=50e-9,
-                  R_int=300e3, C_int=318e-9, R_pid=1e6, C_pid=1e-9, C_hf=1e-9,
+                  R_int=1e6, C_int=318e-9, R_pid=1e6, C_pid=1e-9, C_hf=1e-9,
                   log_gain_K=20.0,
                   V_clamp_hi=4.0, V_clamp_lo=-0.5,
                   R_led_set=270,
                   fault_supervisor=False, v_fault_arm=1.5, v_fault_trip=1.2,
+                  v_fault_trip_hi=3.7, t_fault_hi=3.0,
                   polarity_swap=False):
     """Cold-start netlist for the SE Darlington + H11F variable-gain regulator.
 
@@ -123,8 +129,6 @@ B_R     r_fil 0     V = R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp
     # is safe here (channel sep ±1 µV/V; coupling sim showed ≤0.14 dB penalty).
     op = ("uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 "
           "Iq=800u Ilimit=25m Vos=50u Vmax=30 Vrail=0.1")
-    R_diff_in = 1000
-    R_diff_fb = int(K_diff * R_diff_in)
     # Power instrumentation: insert 0-V current-sense sources in series with
     # key devices.  When instrument_power=False we omit them to keep the
     # cold-start simulation fast/small.
@@ -156,33 +160,48 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
     else:
         save_extra = ""
 
-    # ---- Optional V_int fault supervisor (passive-FMEA over-temp protection) ----
-    # A forward-gain passive failure (e.g. a gain-setting resistor open) drives
-    # the regulator out of authority and rails V_int to its low clamp while the
-    # filament overheats ~+70 K (see passive FMEA).  A healthy loop never sits at
-    # a clamp, so V_int dropping below v_fault_trip is an unambiguous fault flag.
-    # The supervisor ARMS once the loop has captured (V_int first > v_fault_arm,
-    # so the cold-start ramp doesn't false-trip), LATCHES on V_int < v_fault_trip,
-    # and gates the oscillator off → filament cools to a safe state while the
-    # latch drives a fault indicator.  Sim: detects in ~10 ms, filament peaks
-    # +10 K then cools, no cold-start false trip.  Real hw: one dual comparator +
-    # reference + diode-cap latch + LED; cutoff = a transistor disabling the Wien
-    # oscillator.  Set fault_supervisor=True to include it.
+    # ---- Optional DUAL-SIDED V_int fault supervisor (over-temp protection) ----
+    # With the buffered-LED + differencing-in-demod sense topology, EVERY single
+    # passive fault that overheats the filament rails V_int to a clamp (FMEA:
+    # silent-hot = 0 on all 4 tubes).  So watching V_int both ways catches them all:
+    #   LOW side  (V_int < v_fault_trip):  catastrophic forward-gain faults (atten/
+    #     buffer) that bypass the H11F authority → loop fights to the low rail.
+    #     Trips fast (~ms) — a healthy loop never sits this low.
+    #   HIGH side (V_int > v_fault_trip_hi sustained): sense/setpoint/bridge-ref
+    #     faults that wind the loop up to max drive.  TIME-QUALIFIED (must stay high
+    #     for ~t_fault_hi) because a healthy cold-start / oscillator restart
+    #     transiently rides V_int up too — a real fault holds it forever, a startup
+    #     ride clears in ~1 s.  RC integrator (R_hiq·C_hiq = t_fault_hi) discriminates.
+    # Both arm only after capture (V_int first > v_fault_arm) and latch (diode-cap)
+    # → gate the oscillator off → filament cools to a safe state + drive a fault LED.
+    # Real hw: a dual window comparator + reference + RC + diode-cap latch + LED;
+    # cutoff = a transistor disabling the Wien oscillator.
     if fault_supervisor:
+        R_hiq = t_fault_hi / 1e-6  # with C_hiq = 1µF → τ = t_fault_hi
         supervisor_block = (
-            "* ---- V_int fault supervisor (arm-after-capture, latch, drive cutoff) ----\n"
+            "* ---- Dual-sided V_int fault supervisor (arm, latch, drive cutoff) ----\n"
+            ".model Dlatch D(IS=1e-12 N=1)\n"
+            "* arm once the loop captures (V_int first exceeds v_fault_arm)\n"
             f"B_arm n_arm_drv 0 V = (V(v_int) > {v_fault_arm:.4g}) ? 5 : 0\n"
             "D_arm n_arm_drv n_armed Dlatch\n"
             "C_arm n_armed 0 1u IC=0\n"
             "R_arm n_armed 0 1e9\n"
+            "* LOW-side trip: V_int below v_fault_trip (forward-gain / loss-of-authority)\n"
             f"B_tr n_tr_drv 0 V = (V(n_armed) > 2.5)*(V(v_int) < {v_fault_trip:.4g})*5\n"
             "D_tr n_tr_drv n_latch Dlatch\n"
+            "* HIGH-side trip: V_int above v_fault_trip_hi SUSTAINED (time-qualified\n"
+            "* via the R_hiq/C_hiq integrator so cold-start / restart rides don't trip)\n"
+            f"B_hi n_hi_drv 0 V = (V(v_int) > {v_fault_trip_hi:.4g}) ? 1 : 0\n"
+            f"R_hiq n_hi_drv n_hi_int {R_hiq:.6g}\n"
+            "C_hiq n_hi_int 0 1u IC=0\n"
+            "B_tr_hi n_tr_hi_drv 0 V = (V(n_armed) > 2.5)*(V(n_hi_int) > 0.6)*5\n"
+            "D_tr_hi n_tr_hi_drv n_latch Dlatch\n"
+            "* shared set-dominant latch (either trip latches it)\n"
             "C_lat n_latch 0 1u IC=0\n"
-            "R_lat n_latch 0 1e9\n"
-            ".model Dlatch D(IS=1e-12 N=1)"
+            "R_lat n_latch 0 1e9"
         )
         src_gate = " * (V(n_latch) < 2.5 ? 1 : 0)"
-        supervisor_save = " v(n_latch) v(n_armed)"
+        supervisor_save = " v(n_latch) v(n_armed) v(n_hi_int)"
     else:
         supervisor_block = "* fault supervisor disabled"
         src_gate = ""
@@ -257,21 +276,15 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
             f"C_lp_demod n_demod_dc 0 {C_lp}"
         )
 
-    # ---- H11F LED bias and diff-amp polarity ----
+    # ---- H11F LED bias ----
     # polarity_swap=True: LED biased between V_LED supply and v_int (op-amp
     # sinks current).  V_int=0 → I_F=max → max H11F gain → max drive at
-    # cold start.  Diff-amp inputs swapped so loop polarity is consistent.
-    # When use_split_gain=True, inverted LED bias is mandatory (cold-start
-    # low drive comes from max I_F at V_int=0).  But the loop polarity for
-    # split-gain (V_int up → gain up → drive up) is OPPOSITE to legacy
-    # polarity-swap mode (V_int up → gain down), so we keep the diff amp
-    # in its NORMAL (un-swapped) wiring while still using the inverted LED.
+    # cold start.  When use_split_gain=True, inverted LED bias is mandatory
+    # (cold-start low drive comes from max I_F at V_int=0).
     if use_split_gain:
         invert_led_bias = True
-        swap_diff_amp = False
     else:
         invert_led_bias = polarity_swap
-        swap_diff_amp = polarity_swap
 
     if invert_led_bias:
         # R_led_set in series between V_LED supply and H11F LED anode.
@@ -282,17 +295,6 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
     else:
         h11f_line   = "X_h11f n_led_a 0 v_atten n_h11f_out H11F1"
         r_led_line  = f"R_led_set v_int n_led_a {R_led_set}"
-
-    if swap_diff_amp:
-        da_in_lines = (
-            f"R_da_inA  n_node_A_buf n_da_plus  {R_diff_in}\n"
-            f"R_da_inB  n_node_B_buf n_da_minus {R_diff_in}"
-        )
-    else:
-        da_in_lines = (
-            f"R_da_inA  n_node_A_buf n_da_minus {R_diff_in}\n"
-            f"R_da_inB  n_node_B_buf n_da_plus  {R_diff_in}"
-        )
 
     # ---- Variable-gain stage topology ----
     # use_split_gain=False (legacy): H11F as input-R of single inverting amp,
@@ -306,10 +308,16 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
         vgain_stage_block = (
             "* Split-gain Stage 1: H11F in feedback || R_max, R_in_s1 input\n"
             "* H11F channel between n_h11f_inv (= virtual ground) and v_drv1\n"
-            "* LED bias inverted: V_LED supply → R_LED → LED anode, cathode → v_int\n"
+            "* LED bias inverted: V_LED supply → R_LED → LED anode, cathode → v_int_buf.\n"
+            "* The LED is driven from a UNITY BUFFER of v_int (not v_int directly) so\n"
+            "* the LED current does NOT flow through the anti-windup R_aw_out.  That\n"
+            "* removes the standing demod error (e_sat = I_LED·R_aw_out) that otherwise\n"
+            "* makes the setpoint depend on forward gain (the 'T tracks V_src' effect\n"
+            "* and the Set-B gain-fault sensitivity).  Clamp still acts on v_int.\n"
             f"R_in_vgain v_atten n_h11f_inv {R_in_s1}\n"
             f"R_max_s1   n_h11f_inv v_drv1 {R_max_s1}\n"
-            f"X_h11f     n_led_a v_int n_h11f_inv v_drv1 H11F1\n"
+            f"X_h11f     n_led_a v_int_buf n_h11f_inv v_drv1 H11F1\n"
+            f"XU_led_buf v_int v_int_buf vcc_buf vee_buf v_int_buf {op}\n"
             f"XU_vgain   0 n_h11f_inv vcc_buf vee_buf v_drv1 {op}\n"
             "* DC coupling between Stage 1 and Stage 2.  AC coupling caused\n"
             "* slow settling artifacts during cold-start; Stage 1's Vos (10µV)\n"
@@ -413,12 +421,17 @@ R_ap_gnd v_ap_drive  0          0.01
 XU_buf_A  node_A n_node_A_buf vcc_buf vee_buf n_node_A_buf {op}
 XU_buf_B  node_B n_node_B_buf vcc_buf vee_buf n_node_B_buf {op}
 
-{da_in_lines}
-R_da_gB   n_da_plus 0       {R_diff_fb}
-R_da_fb   v_diff_amp n_da_minus {R_diff_fb}
-XU_da     n_da_plus n_da_minus vcc_buf vee_buf v_diff_amp {op}
-
-B_demod n_demod 0 V = V(v_diff_amp) * (V(v_osc_drive) >= 0 ? 1 : -1)
+* Differencing-in-demod (replaces the old 1-op-amp difference amplifier).
+* The bridge differential (node_B_buf - node_A_buf) is chopped by the drive
+* sign directly, with gain K_diff.  Removing the pre-demod high-gain op-amp
+* removes its single-fault failure modes: at balance it sat at ~0 output, so a
+* feedback-open / input-short sent it open-loop and RAILED, forcing the loop to
+* regulate to a ~5% bridge imbalance (the Set-B diff-amp overheat faults).  With
+* the gain now POST-demod (gain-invariant setpoint from the buffered LED), those
+* faults no longer exist.  Hardware: an analog-switch synchronous detector across
+* the two buffered bridge nodes + a post-demod gain stage (this B-source is the
+* behavioural stand-in, same abstraction level as the previous single-ended chopper).
+B_demod n_demod 0 V = {K_diff}*(V(n_node_B_buf) - V(n_node_A_buf)) * (V(v_osc_drive) >= 0 ? 1 : -1)
 {demod_filter_block}
 
 * ===== Log demod / soft saturator =====

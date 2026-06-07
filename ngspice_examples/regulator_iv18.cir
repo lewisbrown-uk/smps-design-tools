@@ -54,10 +54,16 @@ XU_atten_buf n_atten_raw v_atten vcc_buf vee_buf v_atten uopamp_lvl3 Avol=5meg G
 
 * Split-gain Stage 1: H11F in feedback || R_max, R_in_s1 input
 * H11F channel between n_h11f_inv (= virtual ground) and v_drv1
-* LED bias inverted: V_LED supply → R_LED → LED anode, cathode → v_int
+* LED bias inverted: V_LED supply → R_LED → LED anode, cathode → v_int_buf.
+* The LED is driven from a UNITY BUFFER of v_int (not v_int directly) so
+* the LED current does NOT flow through the anti-windup R_aw_out.  That
+* removes the standing demod error (e_sat = I_LED·R_aw_out) that otherwise
+* makes the setpoint depend on forward gain (the 'T tracks V_src' effect
+* and the Set-B gain-fault sensitivity).  Clamp still acts on v_int.
 R_in_vgain v_atten n_h11f_inv 28.0
 R_max_s1   n_h11f_inv v_drv1 140
-X_h11f     n_led_a v_int n_h11f_inv v_drv1 H11F1
+X_h11f     n_led_a v_int_buf n_h11f_inv v_drv1 H11F1
+XU_led_buf v_int v_int_buf vcc_buf vee_buf v_int_buf uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=25m Vos=50u Vmax=30 Vrail=0.1
 XU_vgain   0 n_h11f_inv vcc_buf vee_buf v_drv1 uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=25m Vos=50u Vmax=30 Vrail=0.1
 * DC coupling between Stage 1 and Stage 2.  AC coupling caused
 * slow settling artifacts during cold-start; Stage 1's Vos (10µV)
@@ -118,19 +124,23 @@ R_series v_osc_drive v_bridge_top 0.01
 X_filament v_bridge_top node_A T_node r_fil filament
 R_sense  node_A      v_ap_drive 10.0
 R_topref v_bridge_top node_B    1000.0
-R_botref node_B      v_ap_drive 102.0
+R_botref node_B      v_ap_drive 100.0
 R_ap_gnd v_ap_drive  0          0.01
 
 XU_buf_A  node_A n_node_A_buf vcc_buf vee_buf n_node_A_buf uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=25m Vos=50u Vmax=30 Vrail=0.1
 XU_buf_B  node_B n_node_B_buf vcc_buf vee_buf n_node_B_buf uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=25m Vos=50u Vmax=30 Vrail=0.1
 
-R_da_inA  n_node_A_buf n_da_minus 1000
-R_da_inB  n_node_B_buf n_da_plus  1000
-R_da_gB   n_da_plus 0       30000
-R_da_fb   v_diff_amp n_da_minus 30000
-XU_da     n_da_plus n_da_minus vcc_buf vee_buf v_diff_amp uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=25m Vos=50u Vmax=30 Vrail=0.1
-
-B_demod n_demod 0 V = V(v_diff_amp) * (V(v_osc_drive) >= 0 ? 1 : -1)
+* Differencing-in-demod (replaces the old 1-op-amp difference amplifier).
+* The bridge differential (node_B_buf - node_A_buf) is chopped by the drive
+* sign directly, with gain K_diff.  Removing the pre-demod high-gain op-amp
+* removes its single-fault failure modes: at balance it sat at ~0 output, so a
+* feedback-open / input-short sent it open-loop and RAILED, forcing the loop to
+* regulate to a ~5% bridge imbalance (the Set-B diff-amp overheat faults).  With
+* the gain now POST-demod (gain-invariant setpoint from the buffered LED), those
+* faults no longer exist.  Hardware: an analog-switch synchronous detector across
+* the two buffered bridge nodes + a post-demod gain stage (this B-source is the
+* behavioural stand-in, same abstraction level as the previous single-ended chopper).
+B_demod n_demod 0 V = 30*(V(n_node_B_buf) - V(n_node_A_buf)) * (V(v_osc_drive) >= 0 ? 1 : -1)
 R_lp_demod n_demod n_demod_dc 100000.0
 C_lp_demod n_demod_dc 0 2.2e-07
 
@@ -149,7 +159,7 @@ R_fb_log    n_log_minus n_log_dem 10k
 XU_log      n_demod_dc n_log_minus vcc_buf vee_buf n_log_dem uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 Iq=800u Ilimit=25m Vos=50u Vmax=30 Vrail=0.1
 
 V_set n_setpoint 0 DC 0
-R_int_p n_setpoint n_int_plus 300000.0
+R_int_p n_setpoint n_int_plus 1000000.0
 R_int_pg n_int_plus 0 1G
 * PID compensator with HF rolloff (matches the tuned compensator from the
 * old test_closed_loop.py architecture).
@@ -163,7 +173,7 @@ R_int_pg n_int_plus 0 1G
 * ~42->58 deg, collapsing the cold-start clamp-release ring to one bump. THD,
 * regulation, startup unchanged. C_int/R_pid don't affect PM (crossover sits in
 * the proportional region). R_int also scales R_bc -> softer anti-windup release.
-R_intin  n_log_dem n_int_minus 300000.0
+R_intin  n_log_dem n_int_minus 1000000.0
 C_intin  n_log_dem n_int_minus 1e-09
 R_pid    n_int_pidp v_int_raw 1000000.0
 C_intfb  n_int_minus n_int_pidp 3.18e-07 IC=0
@@ -195,7 +205,7 @@ XU_aw_diff n_aw_diff_plus n_aw_diff_minus vcc_buf vee_buf e_sat uopamp_lvl3 Avol
 * Back-calc resistor: R_bc < R_int gives FASTER unwinding than wind-up,
 * so once the integrator saturates the clamp, anti-windup can pull it
 * back down quickly.  R_bc = R_int / 20 → 20× faster than wind-up.
-R_bc e_sat n_int_minus 15000.0
+R_bc e_sat n_int_minus 50000.0
 
 R_led_set n_v_led n_led_a 270
 
