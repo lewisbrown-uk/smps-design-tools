@@ -23,9 +23,12 @@ Signal flow: **Wien oscillator (1 kHz)** → attenuator → **H11F
 variable-gain Stage 1** (H11F photo-FET in the feedback, ∥ R_max) →
 **Stage 2** (fixed gain G2 = 25) → AC-couple → **BJT class-AB push-pull
 buffer** → series sense → **AC bridge** (filament vs reference) →
-bridge buffers → **diff amp** → **synchronous demod** (chopper) → LP →
-**log demod** → **PID integrator** with back-calc anti-windup → drives
-the **H11F LED** (via `R_led_set`), closing the loop. The H11F's
+bridge buffers → **commutating-switch synchronous demod** (CD4053B chopper
+that differences the two buffered bridge nodes *and* chops them, gain
+post-chop — no separate pre-demod diff amp) → LP → **log demod** → **PID
+integrator** with back-calc anti-windup → drives the **H11F LED** (via
+`R_led_set`, off a unity buffer `XU_led_buf` of v_int so LED current does
+not flow through the anti-windup resistor), closing the loop. The H11F's
 LED-current-controlled resistance sets Stage-1 gain → filament drive →
 filament temperature, regulated against the bridge reference.
 
@@ -65,16 +68,26 @@ E96 resistor chosen per tube — a build-time *selection*, not a trim).
 
 ---
 
-## Op-amps — 3 × OPA4277 quad (all 10 positions)
+## Op-amps — 3 × OPA4277 quad + 1 comparator
 
-The 10 op-amp channels collapse into **3 quad packages** (12 channels,
-2 spare). Quad packaging is verified safe here (see "Coupling").
+The **11 op-amp channels** collapse into **3 quad packages** (12 channels,
+1 spare), plus **one comparator** for the demod chopper reference. Quad
+packaging is verified safe here (see "Coupling").
 
 | pkg | channels (netlist) | function |
 |-----|--------------------|----------|
 | **U1 (OPA4277)** | `XU_atten_buf`, `XU_vgain`, `XU_s2`, `XU_buf` | source attenuator buffer + H11F Stage-1 + Stage-2 gain + class-AB driver |
-| **U2 (OPA4277)** | `XU_buf_A`, `XU_buf_B`, `XU_da`, `XU_log` | two bridge buffers + diff amp + log demod |
-| **U3 (OPA4277)** | `XU_int`, `XU_aw_diff`, +2 spare | PID integrator + anti-windup diff amp; spares buffer the V_clamp refs |
+| **U2 (OPA4277)** | `XU_buf_A`, `XU_buf_B`, `XU_demod_da`, `XU_log` | two bridge buffers + post-chop demod difference amp + log demod |
+| **U3 (OPA4277)** | `XU_int`, `XU_aw_diff`, `XU_led_buf`, +1 spare | PID integrator + anti-windup diff amp + H11F-LED unity buffer; spare for a V_clamp buffer |
+| **U5 (comparator)** | `XU_demod_comp` | demod chopper reference: squares v_osc into the CD4053B switch gate — **LM393** (dual, 1 ch used) or **TLV3201**. (Modeled as an open-loop op-amp in sim.) (U4 = H11F1M.) |
+
+Topology note: the old single-op-amp **diff amp** (`XU_da`) is gone — the
+commutating-switch demod differences the bridge nodes directly. Two channels
+are new vs. the pre-2026-06-07 design: `XU_led_buf` (buffers v_int to the LED
+so its current bypasses the anti-windup resistor) and `XU_demod_da` (the
+post-chop difference amp). Net op-amp channels 10 → 11; the comparator is the
+one added discrete. V_clamp refs: 1 quad spare covers one; use **LM4040 shunt
+refs** for both to stay at 3 quads (else buffered dividers need a 4th quad).
 
 - **OPA4277UA** (SOIC-14).
   Precision bipolar, OP07-class: Vos ~10 µV typ (~50 µV max), drift
@@ -193,18 +206,18 @@ BCX54 IKF = 0.45 A causes only mild rolloff at the ILC1-1/7 peak.)
 
 ---
 
-## Bridge sense, diff amp, demodulator, compensator, anti-windup
+## Bridge sense, demodulator, compensator, anti-windup
 
 | block | elements | values | part / note |
 |-------|----------|--------|-------------|
 | Bridge buffers | `XU_buf_A`, `XU_buf_B` | — | 2 OPA4277 channels (high-Z taps of node_A / node_B) |
-| Diff amp | `R_da_inA`,`R_da_inB`,`R_da_fb`,`R_da_gB` | 1 k, 1 k, 30 k, 30 k | K_diff = 30; 1 % thin-film (match the two 1 k and two 30 k) |
-| **Sync demod** | `B_demod` (behavioural) | — | **hardware = chopper:** 1 ch of **CD74HC4053** analog switch + 1 stage of **SN74HC14** Schmitt to square up V_osc into a clean 0/+rail gate. Ron ≈ 100 Ω ≪ R_lp_demod 100 k → negligible error. |
+| **Sync demod (chopper)** | `XU_demod_comp`, `S_dp1/2`, `S_dm1/2` | — | **Commutating analog-switch demod** (no separate pre-demod diff amp). A complementary SPDT pair — **CD4053B** (±5 V bipolar, takes the ±1.45 V worst-case bridge-tap directly; **not 74HC4053**, which is 6 V-class/marginal; premium = DG419/ADG419 ±15 V, lower charge injection on ilc11_7) — swaps `node_A_buf`/`node_B_buf` onto the +/− lines on alternate half-cycles. Gate = comparator `XU_demod_comp` (**LM393**/TLV3201) squaring v_osc. SPDT complement gate from a logic inverter (e.g. SN74HC14). Charge injection (~1–20 pC) is a small DC offset the loop absorbs. |
+| Post-chop diff amp | `XU_demod_da`, `R_dda_inp/inm`, `R_dda_g1/g2`, `R_dda_fb` | 1 k, 1 k, **15 k + 15 k**, 30 k | Gain = R_dda_fb/R_dda_in = K_diff = **30**; balanced (R_dda_g = R_dda_fb). **R_dda_g is split into two series 15 k halves** so a single-resistor SHORT leaves 15 k to ground (diff-amp keeps rejection) instead of 0 (single-ended → +23 K silent overheat). Closes the one residual demod-component fault (FMEA). 1 % thin-film, match the pairs. Switch R_on (~60–300 Ω) is common-mode (both arms) → negligible; raise R_dda_in to 10 k (R_dda_fb 300 k) for extra margin if desired. |
 | Demod LP | `R_lp_demod` / `C_lp_demod` | 100 kΩ / **0.22 µF** | **~7.2 Hz** post-demod LP — moved up from 1.6 Hz for phase margin (out of the loop-crossover region); still ~49 dB rejection at the 2 kHz demod ripple. C may be X7R (Y5V-safe) |
 | Log demod | `XU_log`, `R_fb_log`, `R_gnd_log` | 10 kΩ / 526 Ω | K = 1 + 10k/526 ≈ **20, uniform all tubes**. (No Schottky clip — removed; the op-amp rails bound cold-start.) |
-| PID integrator | `XU_int`, `R_intin`, `C_intin`, `C_intfb`, `R_pid`, `C_hf`, `R_int_p` | **300 k**, 1 nF, **330 nF (use for 318 nF)**, 1 MΩ, 1 nF, **300 k** | `R_int` raised 100 k→300 k (lower loop gain → phase margin). `C_intfb` = film/C0G preferred (value-stable for the dominant pole); `C_intin`/`C_hf` C0G. `R_int_pg` 1 GΩ is a model leak path — omit in hardware. (`R_bc` = R_int/20 = 15 k, anti-windup back-calc.) |
-| Anti-windup | `R_diff1–4`, `R_bc`, `R_aw_out`, `D_aw_hi`, `D_aw_lo` | 100 k ×4, 5 k, 10 Ω, 2× clamp diode | back-calc unwind; clamp diodes = 1N4148 or BAT54 (low-V_F). |
-| Clamp refs | `V_clamp_hi`, `V_clamp_lo` | +4.0 V, −0.5 V | resistor dividers off the rails, buffered by U3's 2 spare OPA4277 channels (or LM4040 shunt refs). Recommend wider [−3, +6] for headroom at corners/low-power tubes. |
+| PID integrator | `XU_int`, `R_intin`, `C_intin`, `C_intfb`, `R_pid`, `C_hf`, `R_int_p` | **1 MΩ**, 1 nF, **330 nF (use for 318 nF)**, 1 MΩ, 1 nF, **1 MΩ** | `R_int` raised 300 k→1 MΩ with the differencing-in-demod topology: removing the standing demod error raised effective loop gain, so ilc11_7 hunted — 1 MΩ lowers loop gain and restores phase margin. `C_intfb` = film/C0G preferred (value-stable for the dominant pole); `C_intin`/`C_hf` C0G. `R_int_pg` 1 GΩ is a model leak path — omit in hardware. (`R_bc` = R_int/20 = **50 k**, anti-windup back-calc.) |
+| Anti-windup | `R_diff1–4`, `R_bc`, `R_aw_out`, `D_aw_hi`, `D_aw_lo` | 100 k ×4, **50 k**, 10 Ω, 2× clamp diode | back-calc unwind (`R_bc` = R_int/20); clamp diodes = 1N4148 or BAT54 (low-V_F). |
+| Clamp refs | `V_clamp_hi`, `V_clamp_lo` | +4.0 V, −0.5 V | resistor dividers off the rails, buffered by U3's spare OPA4277 channel + one more (or **LM4040 shunt refs** to stay at 3 quads). Recommend wider [−3, +6] for headroom at corners/low-power tubes. |
 
 ---
 
@@ -248,7 +261,7 @@ two-NPN symmetric-clamp Wien oscillator (`wien_oscillator.py`).
 | 1× H11F1M (U4) + R_led_set | ~0.9 |
 | 6× BJT (BCX54/BCX51 ×2 output + 2× BCX54 V_BE-mult, SOT-89) | ~1.0 |
 | 2× 4.7 µF bootstrap (tantalum/electrolytic) | ~0.3 |
-| CD74HC4053 + SN74HC14 (chopper demod) | ~0.9 |
+| CD4053B + LM393 comparator + SN74HC14 inverter (chopper demod) | ~1.0 |
 | Wien: 2× MMBT3904 + C0G/film freq caps + R | ~0.6 |
 | anti-windup / clamp diodes (1N4148 / BAT54) | ~0.3 |
 | 2× LDO (±10 V) + 78L05 + decoupling | ~1.4 |

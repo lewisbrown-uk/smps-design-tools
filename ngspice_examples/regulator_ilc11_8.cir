@@ -138,8 +138,9 @@ XU_buf_B  node_B n_node_B_buf vcc_buf vee_buf n_node_B_buf uopamp_lvl3 Avol=5meg
 * regulate to a ~5% bridge imbalance (the Set-B diff-amp overheat faults).  With
 * the gain now POST-demod (gain-invariant setpoint from the buffered LED), those
 * faults no longer exist.  Hardware: an analog-switch synchronous detector across
-* the two buffered bridge nodes + a post-demod gain stage (this B-source is the
-* behavioural stand-in, same abstraction level as the previous single-ended chopper).
+* the two buffered bridge nodes + a post-demod gain stage.  See the switch_demod
+* flag above: False = this behavioural B-source (default, fast); True = the real
+* commutating CD4053B chopper with split-R_dda_g (hardware-faithful, slower).
 B_demod n_demod 0 V = 30*(V(n_node_B_buf) - V(n_node_A_buf)) * (V(v_osc_drive) >= 0 ? 1 : -1)
 R_lp_demod n_demod n_demod_dc 100000.0
 C_lp_demod n_demod_dc 0 2.2e-07

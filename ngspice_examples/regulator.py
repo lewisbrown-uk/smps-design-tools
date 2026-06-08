@@ -73,6 +73,7 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
                   R_in_s1=40, R_max_s1=140,
                   C_couple_s1s2=22e-6, R_fb_s2=2.4e3, R_gnd_s2=100,
                   K_diff=30, R_lp=100e3, C_lp=0.22e-6,
+                  switch_demod=False, R_dda_in=1e3,
                   use_notch_filter=False,
                   R_tt=8e3, C_tt=10e-9,
                   R_lp_post=100e3, C_lp_post=50e-9,
@@ -257,6 +258,54 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
     else:
         current_limit_block = "* current limit disabled"
 
+    # ---- Synchronous demodulator ----
+    # switch_demod=False (default, fast): behavioural sign-multiply stand-in.
+    #   B_demod = K_diff·(node_B_buf - node_A_buf)·sign(v_osc).  This is the
+    #   abstraction used for routine sweeps — it's a clean B-source so it sims
+    #   fast and is numerically robust.
+    # switch_demod=True (hardware-faithful, slower): the real commutating
+    #   analog-switch chopper that the behavioural source stands in for.  A
+    #   comparator squares v_osc into the switch gate; a complementary SPDT pair
+    #   (CD4053B) swaps the two buffered bridge nodes onto the +/- lines of a
+    #   post-chop difference amp (so the switch BOTH differences and chops, with
+    #   the gain after the chop).  Validated to regulate identically to the
+    #   behavioural source (iv6 799.8/-47.5dB, ilc11_7 799.9/-34.7dB).
+    #   R_dda_g is split into two series halves (R_dda_g1/g2): a single-resistor
+    #   SHORT then leaves R_dda_in_g/2 to ground instead of 0, so the diff-amp
+    #   keeps differential rejection instead of going single-ended.  This closes
+    #   the one residual demod-component fault the FMEA found (a full R_dda_g
+    #   short = +22.7K silent on iv6 / hunting on ilc11_7); split = benign on
+    #   both.  Gain = R_dda_fb/R_dda_in = K_diff (balanced diff amp, R_dda_g =
+    #   R_dda_fb for CM rejection).  Hardware switch = CD4053B (±5V bipolar, the
+    #   ±1.45V worst-case bridge-tap signal fits with margin); NOT 74HC4053
+    #   (6V-class, marginal).  Comparator = LM393/TLV3201.
+    if switch_demod:
+        R_dda_fb = K_diff * R_dda_in
+        R_dda_g_half = R_dda_fb / 2.0
+        demod_block = (
+            "* Hardware commutating-switch synchronous demodulator (CD4053B chopper).\n"
+            f"XU_demod_comp v_osc_drive 0 vcc_buf vee_buf n_demod_ref {op}\n"
+            "B_demod_refn n_demod_refn 0 V = -V(n_demod_ref)\n"
+            ".model SW_demod SW(Ron=60 Roff=1e9 Vt=0 Vh=0.5)\n"
+            "S_dp1 n_demod_plus  n_node_B_buf n_demod_ref  0 SW_demod\n"
+            "S_dp2 n_demod_plus  n_node_A_buf n_demod_refn 0 SW_demod\n"
+            "S_dm1 n_demod_minus n_node_A_buf n_demod_ref  0 SW_demod\n"
+            "S_dm2 n_demod_minus n_node_B_buf n_demod_refn 0 SW_demod\n"
+            "R_dp_gnd n_demod_plus 0 1Meg\n"
+            "R_dm_gnd n_demod_minus 0 1Meg\n"
+            f"R_dda_inp n_demod_plus  n_dda_p {R_dda_in}\n"
+            f"R_dda_g1  n_dda_p n_dda_gmid {R_dda_g_half}\n"
+            f"R_dda_g2  n_dda_gmid 0 {R_dda_g_half}\n"
+            f"R_dda_inm n_demod_minus n_dda_m {R_dda_in}\n"
+            f"R_dda_fb  n_demod n_dda_m {R_dda_fb}\n"
+            f"XU_demod_da n_dda_p n_dda_m vcc_buf vee_buf n_demod {op}"
+        )
+    else:
+        demod_block = (
+            f"B_demod n_demod 0 V = {K_diff}*(V(n_node_B_buf) - V(n_node_A_buf))"
+            " * (V(v_osc_drive) >= 0 ? 1 : -1)"
+        )
+
     # ---- Demod output filter ----
     # use_notch_filter=True: twin-T notch at 2 kHz (= 2× carrier, the chopper
     # output's primary ripple component) + buffer + 1st-order LP at ~30 Hz.
@@ -440,9 +489,10 @@ XU_buf_B  node_B n_node_B_buf vcc_buf vee_buf n_node_B_buf {op}
 * regulate to a ~5% bridge imbalance (the Set-B diff-amp overheat faults).  With
 * the gain now POST-demod (gain-invariant setpoint from the buffered LED), those
 * faults no longer exist.  Hardware: an analog-switch synchronous detector across
-* the two buffered bridge nodes + a post-demod gain stage (this B-source is the
-* behavioural stand-in, same abstraction level as the previous single-ended chopper).
-B_demod n_demod 0 V = {K_diff}*(V(n_node_B_buf) - V(n_node_A_buf)) * (V(v_osc_drive) >= 0 ? 1 : -1)
+* the two buffered bridge nodes + a post-demod gain stage.  See the switch_demod
+* flag above: False = this behavioural B-source (default, fast); True = the real
+* commutating CD4053B chopper with split-R_dda_g (hardware-faithful, slower).
+{demod_block}
 {demod_filter_block}
 
 * ===== Log demod / soft saturator =====
