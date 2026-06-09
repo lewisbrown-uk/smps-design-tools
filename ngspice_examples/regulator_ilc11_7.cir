@@ -40,13 +40,17 @@ R_sense_vee vee_top vee_buf 0.1
 
 
 
-* V_src models the Wien oscillator output.  In real hardware, a Wien
-* with AGC takes ~τ to ramp from 0 to settled amplitude — typically
-* 50-500 ms for the amplitude-clamp loop.  Modelled here as a sine
-* with exponentially-growing envelope, τ = t_src_ramp.  With
-* t_src_ramp ≥ τ_thermal (filament thermal τ), the filament tracks
-* V_src quasi-statically and there's no thermal overshoot at cold-start.
-B_src v_src 0 V = 0.124451 * (1 - exp(-time/0.6)) * sin(2*3.141592653589793*1000.0*time)
+* V_src models the Wien oscillator output.  We use a 2-NPN/diode CLAMP Wien
+* (NOT an integrator-driven JFET AGC), which limits amplitude by clipping the
+* loop gain and settles in a FEW CYCLES.  Its amplitude GROWS exponentially
+* (loop gain >1) from the power-on kick to the clamp level over t_src_ramp
+* (~17ms / ~17 cycles, measured from wien_oscillator.py) -- a concave-UP
+* build-up, NOT the old concave-down 1-exp (which described a slow JFET AGC we
+* don't use).  This fast rise is why cold-start needs the clamp-ceiling ramp
+* (t_clamp_ramp) to keep the drive from slamming max gain before V_int responds.
+* env(t) = exp((t - t_src_ramp)*g/t_src_ramp), g=3.4 so env(0) ~ 3% (the kick),
+* env(t_src_ramp) = 1, clamped at 1 thereafter.
+B_src v_src 0 V = 0.124451 * (time < 0.017 ? exp((time-0.017)*200) : 1) * sin(2*3.141592653589793*1000.0*time)
 
 R_atten_top v_src n_atten_raw 12000
 R_atten_bot n_atten_raw 0 1000
@@ -187,12 +191,12 @@ XU_int n_int_plus n_int_minus vcc_buf vee_buf v_int_raw uopamp_lvl3 Avol=5meg GB
 * and V_clamp_hi by Schottky diodes through R_aw_out.  e_sat measures
 * how far v_int_raw has wound past the clamp, and R_bc feeds that error
 * back into the integrator summing junction to unwind it quickly.
-.model Dclamp D(Is=10n N=1.0 RS=0.1 BV=40 IBV=0.1m CJO=10p)
+.model Dclamp D(Is=1e-7 N=0.05 RS=0.01 BV=40)
 * Clamp range bounds the loop's wind-up.  In the polarity-swapped arch
 * V_int=0 is "max drive" (cold-start state) and V_int_OP > 0; V_clamp_lo
 * is the safety bound that prevents wind-down past the H11F's max-I_F.
 * V_clamp_hi is wind-up safety past the operating point.
-V_clamp_hi v_clamp_hi 0 4.0
+B_clamp_hi v_clamp_hi 0 V = 4.0*(1-exp(-time/0.4))
 V_clamp_lo v_clamp_lo 0 -0.5
 R_aw_out  v_int_raw v_int 10
 D_aw_hi   v_int     v_clamp_hi Dclamp

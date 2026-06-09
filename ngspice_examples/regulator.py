@@ -53,17 +53,20 @@ TUBES = {
     # standing error raised effective loop gain, so R_int was raised 300k→1e6 to
     # restore phase margin (esp. ilc11_7, the highest-gain tube).  Only R_bot trims
     # re-centre T (V_src unchanged from the original constant-V cal).
-    "ilc11_7": dict(R_op=25.0,  V_op=5.0, T_op=800.0, R_sense=5.0,  R_top_ref=5.0e3, R_bot_ref=1.0e3, V_src_rms=0.088),
-    "iv6":     dict(R_op=20.0,  V_op=1.0, T_op=800.0, R_sense=5.0,  R_top_ref=2.0e3, R_bot_ref=500.0, V_src_rms=0.019),
-    "iv18":    dict(R_op=100.0, V_op=1.0, T_op=800.0, R_sense=10.0, R_top_ref=1.0e3, R_bot_ref=100.0, V_src_rms=0.0115, R_in_s1=28.0),
-    "ilc11_8": dict(R_op=8.0,   V_op=1.2, T_op=800.0, R_sense=2.0,  R_top_ref=800.0, R_bot_ref=200.0, V_src_rms=0.0224),
+    # t_clamp_ramp: per-tube smallest clamp-ceiling RC ramp (real-Wien cold-start
+    # sweep, 2026-06-09) that holds drive overshoot <=8% and temp overshoot <=8K;
+    # stiff_clamp makes the anti-windup diode bite during the fast windup slam.
+    "ilc11_7": dict(R_op=25.0,  V_op=5.0, T_op=800.0, R_sense=5.0,  R_top_ref=5.0e3, R_bot_ref=1.0e3, V_src_rms=0.088,  t_clamp_ramp=0.4, stiff_clamp=True),
+    "iv6":     dict(R_op=20.0,  V_op=1.0, T_op=800.0, R_sense=5.0,  R_top_ref=2.0e3, R_bot_ref=500.0, V_src_rms=0.019,  t_clamp_ramp=0.5, stiff_clamp=True),
+    "iv18":    dict(R_op=100.0, V_op=1.0, T_op=800.0, R_sense=10.0, R_top_ref=1.0e3, R_bot_ref=100.0, V_src_rms=0.0115, R_in_s1=28.0, t_clamp_ramp=0.4, stiff_clamp=True),
+    "ilc11_8": dict(R_op=8.0,   V_op=1.2, T_op=800.0, R_sense=2.0,  R_top_ref=800.0, R_bot_ref=200.0, V_src_rms=0.0224, t_clamp_ramp=0.5, stiff_clamp=True),
 }
 TUBE_NAMES = {"ilc11_7": "ILC1-1/7", "iv6": "IV-6", "iv18": "IV-18", "ilc11_8": "ILC1-1/8"}
 
 
 def make_netlist(*, instrument_power=False, T_end=15.0,
                   v_buf=10, V_led=5.0, t_rail_ramp=0.0,
-                  R_bias=2200, k_buf=14, V_src_rms=0.1, t_src_ramp=0.6,
+                  R_bias=2200, k_buf=14, V_src_rms=0.1, t_src_ramp=0.017,
                   R_cs=0.01, I_limit_enable=False,
                   R_series=0.01,
                   R_op=R_OP, V_op=V_OP, T_op=T_OP,
@@ -80,6 +83,7 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
                   R_int=1e6, C_int=318e-9, R_pid=1e6, C_pid=1e-9, C_hf=1e-9,
                   log_gain_K=20.0,
                   V_clamp_hi=4.0, V_clamp_lo=-0.5,
+                  t_clamp_ramp=0.0, stiff_clamp=False,
                   R_led_set=270,
                   fault_supervisor=False, v_fault_arm=1.5, v_fault_trip=0.5,
                   v_fault_trip_hi=3.7, t_fault_hi=3.0, t_fault_lo=0.001,
@@ -396,6 +400,22 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
             f"XU_vgain 0 n_h11f_out vcc_buf vee_buf v_drv {op}"
         )
 
+    # ---- Anti-windup high clamp: optional cold-start trajectory shaping ----
+    # stiff_clamp: sharp-knee, low-Rs clamp diode so it holds V_int hard during a
+    #   fast windup slam (the soft default diode's V_F balloons under the slam and
+    #   lets V_int overshoot the reference).
+    # t_clamp_ramp>0: ramp the clamp CEILING up from ~0 to V_clamp_hi over this RC
+    #   time constant (a cap on the clamp-reference divider).  At cold-start the
+    #   ceiling is low, so the loop's drive rises GENTLY with the filament warm-up
+    #   (drive tracks dT/dt) instead of slamming max drive and overshooting; the
+    #   ceiling relaxes to its full V_clamp_hi safety value once warm.  This SCALES
+    #   the drive amplitude (gain control) -- it does NOT clip the drive waveform,
+    #   so no clipped-RMS heating and no startup/fault ambiguity for the supervisor.
+    dclamp_model = (".model Dclamp D(Is=1e-7 N=0.05 RS=0.01 BV=40)" if stiff_clamp
+                    else ".model Dclamp D(Is=10n N=1.0 RS=0.1 BV=40 IBV=0.1m CJO=10p)")
+    v_clamp_hi_src = (f"B_clamp_hi v_clamp_hi 0 V = {V_clamp_hi}*(1-exp(-time/{t_clamp_ramp:.6g}))"
+                      if t_clamp_ramp > 0 else f"V_clamp_hi v_clamp_hi 0 {V_clamp_hi}")
+
     return f"""* Regulator netlist: polarity_swap={polarity_swap}, instrument_power={instrument_power}, use_split_gain={use_split_gain}
 .include {UOPAMP}
 .include {H11F_LIB}
@@ -411,13 +431,17 @@ R_sense_vee vee_top vee_buf 0.1
 
 {instr}
 
-* V_src models the Wien oscillator output.  In real hardware, a Wien
-* with AGC takes ~τ to ramp from 0 to settled amplitude — typically
-* 50-500 ms for the amplitude-clamp loop.  Modelled here as a sine
-* with exponentially-growing envelope, τ = t_src_ramp.  With
-* t_src_ramp ≥ τ_thermal (filament thermal τ), the filament tracks
-* V_src quasi-statically and there's no thermal overshoot at cold-start.
-B_src v_src 0 V = {V_src_pk:.6g} * (1 - exp(-time/{t_src_ramp})) * sin(2*3.141592653589793*{F0}*time){src_gate}
+* V_src models the Wien oscillator output.  We use a 2-NPN/diode CLAMP Wien
+* (NOT an integrator-driven JFET AGC), which limits amplitude by clipping the
+* loop gain and settles in a FEW CYCLES.  Its amplitude GROWS exponentially
+* (loop gain >1) from the power-on kick to the clamp level over t_src_ramp
+* (~17ms / ~17 cycles, measured from wien_oscillator.py) -- a concave-UP
+* build-up, NOT the old concave-down 1-exp (which described a slow JFET AGC we
+* don't use).  This fast rise is why cold-start needs the clamp-ceiling ramp
+* (t_clamp_ramp) to keep the drive from slamming max gain before V_int responds.
+* env(t) = exp((t - t_src_ramp)*g/t_src_ramp), g=3.4 so env(0) ~ 3% (the kick),
+* env(t_src_ramp) = 1, clamped at 1 thereafter.
+B_src v_src 0 V = {V_src_pk:.6g} * (time < {t_src_ramp} ? exp((time-{t_src_ramp})*{3.4/t_src_ramp:.6g}) : 1) * sin(2*3.141592653589793*{F0}*time){src_gate}
 
 R_atten_top v_src n_atten_raw {R_atten_top}
 R_atten_bot n_atten_raw 0 {R_atten_bot}
@@ -537,12 +561,12 @@ XU_int n_int_plus n_int_minus vcc_buf vee_buf v_int_raw {op}
 * and V_clamp_hi by Schottky diodes through R_aw_out.  e_sat measures
 * how far v_int_raw has wound past the clamp, and R_bc feeds that error
 * back into the integrator summing junction to unwind it quickly.
-.model Dclamp D(Is=10n N=1.0 RS=0.1 BV=40 IBV=0.1m CJO=10p)
+{dclamp_model}
 * Clamp range bounds the loop's wind-up.  In the polarity-swapped arch
 * V_int=0 is "max drive" (cold-start state) and V_int_OP > 0; V_clamp_lo
 * is the safety bound that prevents wind-down past the H11F's max-I_F.
 * V_clamp_hi is wind-up safety past the operating point.
-V_clamp_hi v_clamp_hi 0 {V_clamp_hi}
+{v_clamp_hi_src}
 V_clamp_lo v_clamp_lo 0 {V_clamp_lo}
 R_aw_out  v_int_raw v_int 10
 D_aw_hi   v_int     v_clamp_hi Dclamp
