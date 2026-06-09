@@ -87,6 +87,7 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
                   R_led_set=270,
                   fault_supervisor=False, v_fault_arm=1.5, v_fault_trip=0.5,
                   v_fault_trip_hi=3.7, t_fault_hi=3.0, t_fault_lo=0.001,
+                  overpower_protect=False, k_overpower=1.3, k_clamp=1.5, t_relay=0.007,
                   polarity_swap=False):
     """Cold-start netlist for the SE Darlington + H11F variable-gain regulator.
 
@@ -103,6 +104,11 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
       memory note for why this gives bigger overshoot.
     """
     V_src_pk = V_src_rms * np.sqrt(2)
+    # The over-power disconnect reuses the supervisor's V_int-rail signals
+    # (n_lo_int / n_hi_int / n_armed) for fault/warm-up discrimination, so it
+    # requires the supervisor to be present.
+    if overpower_protect:
+        fault_supervisor = True
 
     # Per-tube filament thermal macromodel, derived from the operating point.
     # Calibrated so driving the filament at V_op (RMS) holds it at T_op.
@@ -222,6 +228,57 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
         supervisor_block = "* fault supervisor disabled"
         src_gate = ""
         supervisor_save = ""
+
+    # ---- Optional over-power protection: flat-clamp + authority-gated disconnect ----
+    # Discriminator (vs the old 2s duration integrator): legitimate filament
+    # over-power is loop-COMMANDED (V_int high); a loss-of-authority fault (e.g.
+    # XU_buf stuck at rail) is over-power the loop is FIGHTING (V_int railed low).
+    # So DISCONNECT = independent_over_power AND (V_int low [fast] OR high [slow])
+    # AND armed -- reusing the supervisor's n_lo_int/n_hi_int/n_armed rail signals.
+    # The flat-clamp bounds the INSTANTANEOUS drive so the peak is independent of
+    # the relay's actuation lag (t_relay); the series relay disconnect then gives
+    # cold-safe isolation (the actuation the supervisor lacks -- its own cutoff hits
+    # the oscillator UPSTREAM of a stuck output buffer).  Validated 4 tubes: fault
+    # bounded <=937K (clamp+disconnect compound: clamp caps rate, disconnect caps
+    # time), zero false trips on cold-start / restart.
+    # Real hw: bidirectional flat-clamp (TLV431 active shunt, per-tube ref) on
+    # v_osc_drive + precision FWR + window comparators + SR latch + latching relay.
+    if overpower_protect:
+        V_cl = k_clamp * V_op * np.sqrt(2) * (R_op + R_sense) / R_op  # drive-node ref
+        V_thop = k_overpower * V_op
+        R_coil = t_relay / 1e-6  # with C_coil=1µF -> contact opens ~0.69*t_relay after latch
+        overpower_block = (
+            "* flat drive clamp (TLV431 active shunt / flat-clamp TVS), +/- V_cl\n"
+            ".model Dcl_op D(Is=1e-7 N=0.08 RS=0.02 BV=60)\n"
+            f"V_clp_op n_clp_op 0 {V_cl:.4g}\nV_cln_op n_cln_op 0 {-V_cl:.4g}\n"
+            "D_clp_op v_osc_drive n_clp_op Dcl_op\nD_cln_op n_cln_op v_osc_drive Dcl_op\n"
+            "* independent over-power sense: precision FWR on the filament-side drive\n"
+            ".model DSch_op D(IS=1e-8 N=1.0 RS=2 BV=30 CJO=10p)\n"
+            "R1op v_bridge_top nAop 10k\nR2op nAop nBop 10k\n"
+            "D1op nO1op nBop DSch_op\nD2op nAop nO1op DSch_op\n"
+            f"XA1op 0 nAop vcc_buf vee_buf nO1op {op}\n"
+            "R3op v_bridge_top nCop 10k\nR4op nBop nCop 5k\nR5op nCop nAbsop 10k\n"
+            f"XA2op 0 nCop vcc_buf vee_buf nAbsop {op}\n"
+            "R_envop nAbsop n_envop 100k\nC_envop n_envop 0 0.1u IC=0\n"
+            f"B_opf n_opf 0 V = (-V(n_envop) > {V_thop:.4g}) ? 1 : 0\n"
+            "* authority-gated disconnect latch (over-power AND V_int railed AND armed)\n"
+            ".model Dlat_op D(IS=1e-12 N=1)\n"
+            ".model SWdisc_op SW(Ron=0.05 Roff=1e12 Vt=2.5 Vh=0.5)\n"
+            "B_discset_op n_discset_op 0 V = (V(n_armed)>2.5)*(V(n_opf)>0.5)"
+            "*(((V(n_lo_int)>0.6)+(V(n_hi_int)>0.6))>0.5 ? 1:0)*5\n"
+            "D_disc_op n_discset_op n_disc_op Dlat_op\n"
+            "C_disc_op n_disc_op 0 1u IC=0\nR_disc_op n_disc_op 0 1e9\n"
+            "* relay contact drive: RC models actuation lag; cap starts closed (5V)\n"
+            "B_coil_op n_coil_op 0 V = (V(n_disc_op) > 2.5) ? 0 : 5\n"
+            f"R_coil_op n_coil_op n_discctl_op {R_coil:.6g}\n"
+            "C_coil_op n_discctl_op 0 1u IC=5"
+        )
+        series_element = "S_disc_op v_osc_drive v_bridge_top n_discctl_op 0 SWdisc_op"
+        overpower_save = " v(n_disc_op) v(n_opf) v(v_bridge_top)"
+    else:
+        overpower_block = "* over-power protection disabled"
+        series_element = f"R_series v_osc_drive v_bridge_top {R_series}"
+        overpower_save = ""
 
     # ---- PSU rail definitions ----
     # Ramp from 0V at t=0 to full rail at t_rail_ramp, then hold flat.
@@ -488,7 +545,8 @@ R_cs        n_buf_emi   v_osc_drive   {R_cs}
 * current (since R_fil is small when cold and dominates the bridge
 * impedance).  Bridge balance is unchanged because both arms tap the
 * same v_bridge_top node — the R_series voltage drop is common-mode.
-R_series v_osc_drive v_bridge_top {R_series}
+* With overpower_protect this R is replaced by the latching-relay disconnect.
+{series_element}
 X_filament v_bridge_top node_A T_node r_fil filament
 R_sense  node_A      v_ap_drive {R_sense}
 R_topref v_bridge_top node_B    {R_top_ref}
@@ -575,13 +633,15 @@ R_bc e_sat n_int_minus {R_int / 20}
 
 {supervisor_block}
 
+{overpower_block}
+
 .tran 50u {T_end} 0 uic
 .options reltol=1e-4 abstol=1n vntol=1u
 
-.save v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a){save_extra}{supervisor_save}
+.save v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a){save_extra}{supervisor_save}{overpower_save}
 .control
 run
-wrdata {WORK.as_posix()}/run.data v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a){save_extra}{supervisor_save}
+wrdata {WORK.as_posix()}/run.data v(v_osc_drive) v(node_A) v(n_demod_dc) v(v_int) v(T_node) v(r_fil) v(n_led_a){save_extra}{supervisor_save}{overpower_save}
 .endc
 .end
 """

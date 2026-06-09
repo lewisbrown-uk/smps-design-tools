@@ -126,6 +126,7 @@ R_cs        n_buf_emi   v_osc_drive   0.01
 * current (since R_fil is small when cold and dominates the bridge
 * impedance).  Bridge balance is unchanged because both arms tap the
 * same v_bridge_top node — the R_series voltage drop is common-mode.
+* With overpower_protect this R is replaced by the latching-relay disconnect.
 R_series v_osc_drive v_bridge_top 0.01
 X_filament v_bridge_top node_A T_node r_fil filament
 R_sense  node_A      v_ap_drive 2.0
@@ -213,6 +214,8 @@ R_bc e_sat n_int_minus 2500.0
 R_led_set n_v_led n_led_a 270
 
 * fault supervisor disabled
+
+* over-power protection disabled
 
 .tran 50u 15.0 0 uic
 .options reltol=1e-4 abstol=1n vntol=1u
