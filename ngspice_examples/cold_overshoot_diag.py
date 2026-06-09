@@ -40,10 +40,16 @@ for env_k, arg_k in [("VCH", "V_clamp_hi"), ("TSR", "t_src_ramp"),
         kw[arg_k] = float(os.environ[env_k])
 if os.environ.get("STIFF"):
     kw["stiff_clamp"] = True
+if os.environ.get("SWDEMOD"):  # hardware-faithful commutating-switch demod (rail-clipped)
+    kw["switch_demod"] = True
 
 
 def build():
     cir = r.make_netlist(instrument_power=False, T_end=T_END, **kw)
+    if os.environ.get("PRELOG"):  # feed the integrator the un-amplified pre-log error
+        # (n_demod_dc) instead of the x20-gained, cold-start-railing n_log_dem.
+        cir = re.sub(r"R_intin  n_log_dem n_int_minus", "R_intin  n_demod_dc n_int_minus", cir)
+        cir = re.sub(r"C_intin  n_log_dem n_int_minus", "C_intin  n_demod_dc n_int_minus", cir)
     if os.environ.get("STIFFCLAMP"):  # flat/hard anti-windup clamp (sharp knee, low Rs)
         cir = re.sub(r"\.model Dclamp D\([^)]*\)",
                      ".model Dclamp D(Is=1e-7 N=0.05 RS=0.01 BV=40)", cir)
@@ -78,6 +84,20 @@ def build():
     if "RAWO" in os.environ:  # override hardcoded R_aw_out = 10
         cir = re.sub(r"R_aw_out  v_int_raw v_int \S+",
                      f"R_aw_out  v_int_raw v_int {os.environ['RAWO']}", cir)
+    if "SETRAMP" in os.environ:  # OPEN-LOOP setpoint ramp: V_set decays start->0 (time only)
+        vss = float(os.environ["SETRAMP"]); taus = float(os.environ.get("TAUSET", "0.5"))
+        cir = re.sub(r"V_set n_setpoint 0 DC 0",
+                     f"B_set n_setpoint 0 V = {vss}*exp(-time/{taus})", cir)
+    if "GOV" in os.environ:  # REFERENCE GOVERNOR (closed-loop adaptive): setpoint stays
+        # a fixed `lead` ahead of the MEASURED imbalance n_log_dem and clamps at the true
+        # target (0).  Tracking error is bounded by `lead` -> no windup, no slam; self-paces
+        # to the filament's actual warm-up (tube/tau-independent); converges to 0 for DC accy.
+        lead = float(os.environ["GOV"])
+        tg = float(os.environ.get("TAUGOV", "0.03"))  # smooth the fast ~15ms Wien-build-up
+        cg = tg / 10e6  # R_gov=10Meg (hi-Z, doesn't load n_log_dem)
+        cir = re.sub(r"V_set n_setpoint 0 DC 0",
+                     f"R_gov n_log_dem n_gov 10meg\nC_gov n_gov 0 {cg:.6g} IC=0\n"
+                     f"B_set n_setpoint 0 V = min(V(n_gov) + {lead}, 0)", cir)
     cir = re.sub(r"(\.save [^\n]*)", r"\1 v(v_int_raw) v(e_sat) v(v_clamp_hi)", cir)
     cir = re.sub(r"(wrdata \S+/run\.data[^\n]*)",
                  r"\1 v(v_int_raw) v(e_sat) v(v_clamp_hi)", cir)
@@ -143,4 +163,4 @@ _traj = ([0.002, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.06, 0.1, 0.2, 0.
          if os.environ.get("FINETRAJ") else [0.1, 0.3, 0.5, 0.8, 1.2, 1.6, 2.0, 2.5, 3.0, 4.0])
 for tt in _traj:
     i = np.argmin(np.abs(t - tt))
-    print(f"   t={tt:4.1f}s  env={env[i]:6.3f}  V_int={vint[i]:6.3f}  V_int_raw={vint_raw[i]:7.3f}  e_sat={e_sat[i]:6.3f}  T={T[i]:6.1f}")
+    print(f"   t={tt:5.3f}s  env={env[i]:6.3f}  V_int={vint[i]:6.3f}  n_demod_dc={d[i,5]:8.3f}  T={T[i]:6.1f}")

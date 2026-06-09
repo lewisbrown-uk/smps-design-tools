@@ -49,17 +49,18 @@ TAU_TH = 0.1
 # splattable into make_netlist(**TUBES[key]).
 TUBES = {
     # Re-cal 2026-06-07 for the buffered-LED + differencing-in-demod sense topology
-    # (removes the standing demod error → gain-invariant setpoint).  Removing the
-    # standing error raised effective loop gain, so R_int was raised 300k→1e6 to
-    # restore phase margin (esp. ilc11_7, the highest-gain tube).  Only R_bot trims
+    # (removes the standing demod error → gain-invariant setpoint).  Only R_bot trims
     # re-centre T (V_src unchanged from the original constant-V cal).
-    # t_clamp_ramp: per-tube smallest clamp-ceiling RC ramp (real-Wien cold-start
-    # sweep, 2026-06-09) that holds drive overshoot <=8% and temp overshoot <=8K;
-    # stiff_clamp makes the anti-windup diode bite during the fast windup slam.
-    "ilc11_7": dict(R_op=25.0,  V_op=5.0, T_op=800.0, R_sense=5.0,  R_top_ref=5.0e3, R_bot_ref=1.0e3, V_src_rms=0.088,  t_clamp_ramp=0.4, stiff_clamp=True),
-    "iv6":     dict(R_op=20.0,  V_op=1.0, T_op=800.0, R_sense=5.0,  R_top_ref=2.0e3, R_bot_ref=500.0, V_src_rms=0.019,  t_clamp_ramp=0.5, stiff_clamp=True),
-    "iv18":    dict(R_op=100.0, V_op=1.0, T_op=800.0, R_sense=10.0, R_top_ref=1.0e3, R_bot_ref=100.0, V_src_rms=0.0115, R_in_s1=28.0, t_clamp_ramp=0.4, stiff_clamp=True),
-    "ilc11_8": dict(R_op=8.0,   V_op=1.2, T_op=800.0, R_sense=2.0,  R_top_ref=800.0, R_bot_ref=200.0, V_src_rms=0.0224, t_clamp_ramp=0.5, stiff_clamp=True),
+    # Cold-start (2026-06-09): the integrator senses the PRE-log signal n_demod_dc
+    # directly (the ×20 "log" stage was removed and its gain folded into R_int).  This
+    # keeps loop feedback un-railed through warm-up, so the loop throttles back exactly
+    # as the filament reaches target → temp overshoot +0.2K, tube-independent, with no
+    # clamp-ceiling ramp and no per-tube cold-start tuning.  stiff_clamp keeps the
+    # anti-windup diode biting during the (still-present, harmless) drive windup slam.
+    "ilc11_7": dict(R_op=25.0,  V_op=5.0, T_op=800.0, R_sense=5.0,  R_top_ref=5.0e3, R_bot_ref=1.0e3, V_src_rms=0.088,  stiff_clamp=True),
+    "iv6":     dict(R_op=20.0,  V_op=1.0, T_op=800.0, R_sense=5.0,  R_top_ref=2.0e3, R_bot_ref=500.0, V_src_rms=0.019,  stiff_clamp=True),
+    "iv18":    dict(R_op=100.0, V_op=1.0, T_op=800.0, R_sense=10.0, R_top_ref=1.0e3, R_bot_ref=100.0, V_src_rms=0.0115, R_in_s1=28.0, stiff_clamp=True),
+    "ilc11_8": dict(R_op=8.0,   V_op=1.2, T_op=800.0, R_sense=2.0,  R_top_ref=800.0, R_bot_ref=200.0, V_src_rms=0.0224, stiff_clamp=True),
 }
 TUBE_NAMES = {"ilc11_7": "ILC1-1/7", "iv6": "IV-6", "iv18": "IV-18", "ilc11_8": "ILC1-1/8"}
 
@@ -80,10 +81,9 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
                   use_notch_filter=False,
                   R_tt=8e3, C_tt=10e-9,
                   R_lp_post=100e3, C_lp_post=50e-9,
-                  R_int=1e6, C_int=318e-9, R_pid=1e6, C_pid=1e-9, C_hf=1e-9,
-                  log_gain_K=20.0,
+                  R_int=5e4, C_int=318e-9, R_pid=1e6, C_pid=1e-9, C_hf=1e-9,
                   V_clamp_hi=4.0, V_clamp_lo=-0.5,
-                  t_clamp_ramp=0.0, stiff_clamp=False,
+                  stiff_clamp=False,
                   R_led_set=270,
                   fault_supervisor=False, v_fault_arm=1.5, v_fault_trip=0.5,
                   v_fault_trip_hi=3.7, t_fault_hi=3.0, t_fault_lo=0.001,
@@ -404,17 +404,8 @@ V_im_chain  vcc_buf vcc_buf_chain 0"""
     # stiff_clamp: sharp-knee, low-Rs clamp diode so it holds V_int hard during a
     #   fast windup slam (the soft default diode's V_F balloons under the slam and
     #   lets V_int overshoot the reference).
-    # t_clamp_ramp>0: ramp the clamp CEILING up from ~0 to V_clamp_hi over this RC
-    #   time constant (a cap on the clamp-reference divider).  At cold-start the
-    #   ceiling is low, so the loop's drive rises GENTLY with the filament warm-up
-    #   (drive tracks dT/dt) instead of slamming max drive and overshooting; the
-    #   ceiling relaxes to its full V_clamp_hi safety value once warm.  This SCALES
-    #   the drive amplitude (gain control) -- it does NOT clip the drive waveform,
-    #   so no clipped-RMS heating and no startup/fault ambiguity for the supervisor.
     dclamp_model = (".model Dclamp D(Is=1e-7 N=0.05 RS=0.01 BV=40)" if stiff_clamp
                     else ".model Dclamp D(Is=10n N=1.0 RS=0.1 BV=40 IBV=0.1m CJO=10p)")
-    v_clamp_hi_src = (f"B_clamp_hi v_clamp_hi 0 V = {V_clamp_hi}*(1-exp(-time/{t_clamp_ramp:.6g}))"
-                      if t_clamp_ramp > 0 else f"V_clamp_hi v_clamp_hi 0 {V_clamp_hi}")
 
     return f"""* Regulator netlist: polarity_swap={polarity_swap}, instrument_power={instrument_power}, use_split_gain={use_split_gain}
 .include {UOPAMP}
@@ -437,8 +428,10 @@ R_sense_vee vee_top vee_buf 0.1
 * (loop gain >1) from the power-on kick to the clamp level over t_src_ramp
 * (~17ms / ~17 cycles, measured from wien_oscillator.py) -- a concave-UP
 * build-up, NOT the old concave-down 1-exp (which described a slow JFET AGC we
-* don't use).  This fast rise is why cold-start needs the clamp-ceiling ramp
-* (t_clamp_ramp) to keep the drive from slamming max gain before V_int responds.
+* don't use).  The integrator still winds to the V_int clamp during this fast
+* rise (the harmless drive slam), but with PRE-log sensing the loop has un-railed
+* feedback and throttles back exactly as the filament reaches target -> no temp
+* overshoot, so no clamp-ceiling ramp is needed.
 * env(t) = exp((t - t_src_ramp)*g/t_src_ramp), g=3.4 so env(0) ~ 3% (the kick),
 * env(t_src_ramp) = 1, clamped at 1 thereafter.
 B_src v_src 0 V = {V_src_pk:.6g} * (time < {t_src_ramp} ? exp((time-{t_src_ramp})*{3.4/t_src_ramp:.6g}) : 1) * sin(2*3.141592653589793*{F0}*time){src_gate}
@@ -519,20 +512,16 @@ XU_buf_B  node_B n_node_B_buf vcc_buf vee_buf n_node_B_buf {op}
 {demod_block}
 {demod_filter_block}
 
-* ===== Log demod / soft saturator =====
-* Non-inverting op-amp with R_fb=10k and R_gnd sized for gain log_gain_K.
-* Anti-parallel BAT54 Schottkys clip output at ±V_F ≈ ±0.3V → at cold
-* start when bridge error is ~12V × demod gain, the integrator input
-* is clipped to ±0.3V so the wind-up rate is bounded.  Small-signal:
-* linear gain log_gain_K = {log_gain_K:.1f}, faster settling at OP.
-R_gnd_log   n_log_minus 0 {10e3 / max(log_gain_K - 1.0, 1e-3)}
-R_fb_log    n_log_minus n_log_dem 10k
-* Schottky clip diodes removed (2026-05-25).  With small SS bridge error
-* the clip kept the op-amp at current-limit continuously → asymmetric rail
-* current.  Now linear at SS; op-amp only saturates at its rails (-9.9V)
-* briefly during cold-start while the loop catches up.
-XU_log      n_demod_dc n_log_minus vcc_buf vee_buf n_log_dem {op}
-
+* ===== PRE-log sensing (no separate gain stage) =====
+* The integrator senses the demod output n_demod_dc DIRECTLY; the loop gain
+* the old ×20 "log demod" op-amp provided is folded into R_int (=5e4 vs the
+* 1e6 it had behind the ×20 — identical small-signal loop transfer).  Removing
+* that stage removes the cold-start RAILING it caused: at warm-up the ×20 pinned
+* its output at the −9.9V op-amp rail from ~15ms (filament still 300K) right up
+* to target (×20 turns even the small near-target imbalance into >9.9V), so the
+* loop was BLIND through warm-up and overshot before it could throttle back.
+* n_demod_dc stays graded/un-railed, so the loop sees the filament arriving and
+* backs off precisely → +0.2K temp overshoot, tube-independent (2026-06-09).
 V_set n_setpoint 0 DC 0
 R_int_p n_setpoint n_int_plus {R_int}
 R_int_pg n_int_plus 0 1G
@@ -543,13 +532,13 @@ R_int_pg n_int_plus 0 1G
 *   H(s) = -((R_pid || 1/sC_hf) + 1/sC_int) · (1 + sR_int·C_pid) / R_int
 *   Integrator zero: f_zi = 1/(2π·R_pid·C_int) ≈ 5 Hz
 *   HF rolloff: f_hf = 1/(2π·R_pid·C_hf) ≈ 160 Hz
-* Damping (2026-06-05): R_int 100k->300k (lower loop gain) + demod LP sped up
-* (C_lp 1u->0.22u, 1.6->7.2 Hz, out of the crossover region) raise phase margin
-* ~42->58 deg, collapsing the cold-start clamp-release ring to one bump. THD,
-* regulation, startup unchanged. C_int/R_pid don't affect PM (crossover sits in
-* the proportional region). R_int also scales R_bc -> softer anti-windup release.
-R_intin  n_log_dem n_int_minus {R_int}
-C_intin  n_log_dem n_int_minus {C_pid}
+* Damping (2026-06-05): demod LP sped up (C_lp 1u->0.22u, 1.6->7.2 Hz, out of
+* the crossover region) raises phase margin ~42->58 deg, collapsing the
+* cold-start clamp-release ring to one bump. C_int/R_pid don't affect PM
+* (crossover sits in the proportional region). R_int also scales R_bc ->
+* softer anti-windup release.  Input is the PRE-log demod node (see above).
+R_intin  n_demod_dc n_int_minus {R_int}
+C_intin  n_demod_dc n_int_minus {C_pid}
 R_pid    n_int_pidp v_int_raw {R_pid}
 C_intfb  n_int_minus n_int_pidp {C_int} IC=0
 C_hf     n_int_pidp v_int_raw {C_hf} IC=0
@@ -566,7 +555,7 @@ XU_int n_int_plus n_int_minus vcc_buf vee_buf v_int_raw {op}
 * V_int=0 is "max drive" (cold-start state) and V_int_OP > 0; V_clamp_lo
 * is the safety bound that prevents wind-down past the H11F's max-I_F.
 * V_clamp_hi is wind-up safety past the operating point.
-{v_clamp_hi_src}
+V_clamp_hi v_clamp_hi 0 {V_clamp_hi}
 V_clamp_lo v_clamp_lo 0 {V_clamp_lo}
 R_aw_out  v_int_raw v_int 10
 D_aw_hi   v_int     v_clamp_hi Dclamp
