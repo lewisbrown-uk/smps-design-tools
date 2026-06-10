@@ -114,6 +114,31 @@ So at the realistic ±5 % filament spread, T_ss moves **±~33 K** (overshoot sta
 <+7 K, THD intact). That's the brightness-variation number to weigh — half the
 pessimistic ±10 % figure above, consistent with the fixed-R-target design.
 
+### Suite G — active-device parameter variations (added 06-10, protection OFF)
+The active-device tolerance set the overnight battery missed. **0 hunts, 0 fails,
+all 4 tubes:**
+
+| axis | range | result |
+|---|---|---|
+| op-amp **GBW** | 0.5 / 1 / 3 / 10 MHz | no hunt; THD *improves* with GBW (−43→−51 dB iv6, −50→−59 dB iv18) |
+| **H11F R-spread** | BETA_SCALE 0.7–1.43 (±30–43 %) | T_ss ±0.3 K, THD unchanged, no hunt |
+| output **BJT beta** | BF ×0.5 / ×2 | no measurable effect |
+| **independent per-op-amp Vos** | ±150 µV each, 25/tube | 0 fails, 0 hunts, T_ss 791–801 K, ripple 0.11 K |
+
+Two takeaways:
+- **The prior "GBW ≥3 MHz hunts" constraint is gone on pre-log.** Removing the ×20
+  railing log stage took out the high-gain nonlinearity that drove the
+  GBW-dependent oscillation — the loop is now stable across 0.5–10 MHz.
+- **G4 resolves the Suite-A Vos flag.** With *independent* per-op-amp Vos at the
+  OPA4277's actual max (±150 µV), the worst tube (iv18) holds 791–801 K (±9 K) with
+  no bifurcation. The 30–100 K shifts in Suite A were the global-correlated 2–5 mV
+  stress corners (a jellybean op-amp), not the real part. **At the chosen OPA4277,
+  Vos is a ±9 K effect, not a design risk** — the build-note stands (use a
+  precision op-amp) but the margin is comfortable.
+
+**Net: the pre-log design passes the full active-device variation set with margin,
+and is strictly more robust than the prior architecture on GBW.**
+
 ## Known issues / caveats
 - Suite A **WORST triple-corner FAILed on a harness bug** (trailing space in the
   scratch-dir name), not a design failure. Fixed in the supplement runner.
