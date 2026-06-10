@@ -36,7 +36,7 @@ QMODELS = """\
 # Defaults below are for ILC1-1/7; per-tube values live in TUBES.
 R_OP = 25.0; V_OP = 5.0; T_OP = 800.0; T_AMB = 300.0
 R_SENSE = 5.0; R_TOP_REF = 5e3; R_BOT_REF = 1e3; F0 = 1000.0; FIL_EXP = 1.2
-TAU_TH = 0.1
+TAU_TH = 0.42  # fallback only; real per-tube tau_th lives in TUBES (geometry-estimated)
 
 # Per-tube calibration for the unified H11F variable-gain + BJT push-pull
 # regulator.  Only five things change per tube: the filament operating point
@@ -57,10 +57,16 @@ TUBES = {
     # as the filament reaches target → temp overshoot +0.2K, tube-independent, with no
     # clamp-ceiling ramp and no per-tube cold-start tuning.  stiff_clamp keeps the
     # anti-windup diode biting during the (still-present, harmless) drive windup slam.
-    "ilc11_7": dict(R_op=25.0,  V_op=5.0, T_op=800.0, R_sense=5.0,  R_top_ref=5.0e3, R_bot_ref=1.0e3, V_src_rms=0.088,  stiff_clamp=True),
-    "iv6":     dict(R_op=20.0,  V_op=1.0, T_op=800.0, R_sense=5.0,  R_top_ref=2.0e3, R_bot_ref=500.0, V_src_rms=0.019,  stiff_clamp=True),
-    "iv18":    dict(R_op=100.0, V_op=1.0, T_op=800.0, R_sense=10.0, R_top_ref=1.0e3, R_bot_ref=100.0, V_src_rms=0.0115, R_in_s1=28.0, stiff_clamp=True),
-    "ilc11_8": dict(R_op=8.0,   V_op=1.2, T_op=800.0, R_sense=2.0,  R_top_ref=800.0, R_bot_ref=200.0, V_src_rms=0.0224, stiff_clamp=True),
+    # tau_th: per-tube filament thermal time constant, geometry-estimated from
+    # envelope length + R_op (d~17-54µm -> tau below); replaces the old global 0.1s
+    # PLACEHOLDER.  0.1s was conservative for phase margin but wrong for the
+    # transient: it hid ilc11_8's cold-start overshoot (+0.2K@0.1s -> +7.4K@0.62s)
+    # and over-stated the fault peak (it under-states the dwell).  Bench-measure to
+    # refine.  Validated 2026-06-10 (tau_th_study + re-run battery).
+    "ilc11_7": dict(R_op=25.0,  V_op=5.0, T_op=800.0, R_sense=5.0,  R_top_ref=5.0e3, R_bot_ref=1.0e3, V_src_rms=0.088,  tau_th=0.42, stiff_clamp=True),
+    "iv6":     dict(R_op=20.0,  V_op=1.0, T_op=800.0, R_sense=5.0,  R_top_ref=2.0e3, R_bot_ref=500.0, V_src_rms=0.019,  tau_th=0.20, stiff_clamp=True),
+    "iv18":    dict(R_op=100.0, V_op=1.0, T_op=800.0, R_sense=10.0, R_top_ref=1.0e3, R_bot_ref=100.0, V_src_rms=0.0115, R_in_s1=28.0, tau_th=0.19, stiff_clamp=True),
+    "ilc11_8": dict(R_op=8.0,   V_op=1.2, T_op=800.0, R_sense=2.0,  R_top_ref=800.0, R_bot_ref=200.0, V_src_rms=0.0224, tau_th=0.62, stiff_clamp=True),
 }
 TUBE_NAMES = {"ilc11_7": "ILC1-1/7", "iv6": "IV-6", "iv18": "IV-18", "ilc11_8": "ILC1-1/8"}
 
@@ -70,7 +76,7 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
                   R_bias=2200, k_buf=14, V_src_rms=0.1, t_src_ramp=0.017,
                   R_cs=0.01, I_limit_enable=False,
                   R_series=0.01,
-                  R_op=R_OP, V_op=V_OP, T_op=T_OP,
+                  R_op=R_OP, V_op=V_OP, T_op=T_OP, tau_th=TAU_TH,
                   R_sense=R_SENSE, R_top_ref=R_TOP_REF, R_bot_ref=R_BOT_REF,
                   R_fb_vgain=100000, R_atten_top=12000, R_atten_bot=1000,
                   use_split_gain=True,
@@ -114,7 +120,7 @@ def make_netlist(*, instrument_power=False, T_end=15.0,
     # Calibrated so driving the filament at V_op (RMS) holds it at T_op.
     P_op = V_op ** 2 / R_op
     sigma_eps_A = P_op / (T_op ** 4 - T_AMB ** 4)
-    C_th = TAU_TH * 4 * sigma_eps_A * T_op ** 3
+    C_th = tau_th * 4 * sigma_eps_A * T_op ** 3
     R_amb = R_op / (T_op / T_AMB) ** FIL_EXP
     fil_subckt = f"""\
 .param T_amb={T_AMB}

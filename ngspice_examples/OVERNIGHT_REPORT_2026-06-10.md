@@ -1,5 +1,54 @@
 # Overnight report — 2026-06-09 23:xx → 06-10
 
+> **UPDATE (06-10 PM): per-tube thermal τ adopted + everything re-run.** The
+> tables further down were run against the global `TAU_TH = 0.1 s` PLACEHOLDER.
+> That's now replaced by geometry-estimated per-tube τ in `TUBES` (ilc11_7 0.42,
+> iv6 0.20, iv18 0.19, ilc11_8 0.62 s). See the "## Per-tube τ" section immediately
+> below for the realistic-τ results — they supersede the 0.1 s numbers. Net: the
+> design passes the full battery + Suite G on the realistic τ with *more* stability
+> margin, the only substantive change being ilc11_8's cold-start overshoot.
+
+## Per-tube τ — adoption + re-validation (06-10 PM)
+
+The 0.1 s τ was conservative for phase margin but **wrong for the transient**: it
+hid ilc11_8's overshoot and over-stated the fault peaks. Realistic per-tube τ now
+baked into `TUBES`; full battery + Suite G re-run on it.
+
+**Cold-start overshoot (0.1 s → realistic τ):**
+
+| tube | τ | overshoot 0.1 s → real | T_ss |
+|---|---|---|---|
+| iv18 | 0.19 s | +0.1 → +0.1 K | 796 K |
+| iv6 | 0.20 s | +0.2 → +0.1 K | 798 K |
+| ilc11_7 | 0.42 s | +3.6 → +3.7 K | 800 K |
+| **ilc11_8** | **0.62 s** | **+0.2 → +7.4 K** | 799 K |
+
+Only the slow-τ tube moves (the integrator stays wound at the clamp longer while
+the temperature lags). +7.4 K is well within safety; ilc11_8 is now the tube to
+watch on cold-start (slowest τ + Vos-sensitive: +9.5 K at Vos=2 mV, +10.5 K at
+R_op+10%).
+
+**Re-validation on realistic τ — clean pass:**
+- Monte Carlo (200 draws): **0 fails, 0 hunts**, T_ss 781–810 K.
+- Suite G (GBW / H11F / BJT / indep-Vos): **0 hunts**; T-ripple *dropped* to
+  0.02–0.06 K (was 0.10–0.11 K) — slower thermal pole → more phase margin.
+- Protection FMEA + over-drive faults: **all caught**, peaks **lower** than 0.1 s.
+- Disorderly: **0 false trips**.
+
+**Fault excursion durations (the survivability question), at realistic τ:**
+
+| tube | peak (was @0.1 s) | dwell >800 K | >850 K | >900 K |
+|---|---|---|---|---|
+| ilc11_7 | 814 K (831) | 57 ms | 0 | 0 |
+| iv6 | 871 K (910) | 80 ms | 22 ms | 0 |
+| iv18 | **899 K** (937) | 100 ms | 46 ms | 0 |
+| ilc11_8 | 834 K (902) | **127 ms** | 0 | 0 |
+
+So the worst excursion is **≤899 K (never reaches 900 K), ≤~130 ms above operating
+temp, ≤46 ms above 850 K**, then cold-safe. Realistic τ lowers the peak and
+lengthens the dwell vs the 0.1 s model — both, as expected. This is the number to
+weigh for filament survivability.
+
 ## What got done
 
 1. **Pre-log sensing — committed `754c395`, pushed.** Cold-start temperature

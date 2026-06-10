@@ -60,7 +60,7 @@ app("|---|---|---|---|---|")
 efaults = ["atten_top_short", "atten_bot_open", "topref_open", "fb_vgain_short"]
 for tb in TUBES:
     for fl in efaults:
-        cir = r.make_netlist(T_end=6.0, overpower_protect=True, **r.TUBES[tb])
+        cir = r.make_netlist(T_end=9.0, overpower_protect=True, **r.TUBES[tb])
         if fl == "atten_top_short": cir = short(cir, "R_atten_top")
         elif fl == "atten_bot_open": cir = opn(cir, "R_atten_bot")
         elif fl == "topref_open": cir = opn(cir, "R_topref")

@@ -45,6 +45,7 @@ def thd_db(t, v, t0, t1, f_seed=1000.0):
 
 def run(cir, work, timeout=600):
     """Run a netlist string, return data array or None (+ error tail)."""
+    work = re.sub(r"\s+", "_", work)  # no spaces in scratch-dir names (the WORST-corner bug)
     os.makedirs(work, exist_ok=True)
     cir = re.sub(r"wrdata \S+/run\.data", f"wrdata {work}/run.data", cir)
     open(f"{work}/run.cir", "w").write(cir)
@@ -166,14 +167,14 @@ def suite_B():
 # =================== SUITE C: disorderly / restart ===================
 def suite_C():
     append(f"\n## Suite C — disorderly / restart (protection ON, watch false-trip)  {time.ctime()}\n")
-    scenarios = ["instant_on", "dropout_restart", "brownout"]
+    scenarios = ["instant_on", "dropout_restart", "brownout"]  # T_END bumped for slow tau
     if QUICK: scenarios = scenarios[:2]
     tubes = TUBES[:2] if QUICK else TUBES
     append("| tube | scenario | T_peak | T_ss | false-trip? |")
     append("|---|---|---|---|---|")
     for tb in tubes:
         for sc in scenarios:
-            kw = dict(r.TUBES[tb]); T_END = 8.0
+            kw = dict(r.TUBES[tb]); T_END = 10.0
             if sc == "instant_on":
                 kw["t_rail_ramp"] = 0.0
                 cir = r.make_netlist(T_end=T_END, overpower_protect=True, **kw)
@@ -205,7 +206,7 @@ def suite_D():
     append("|---|---|---|---|---|")
     for tb in tubes:
         for fl in faults:
-            kw = dict(r.TUBES[tb]); T_END = 6.0
+            kw = dict(r.TUBES[tb]); T_END = 9.0
             cir = r.make_netlist(T_end=T_END, overpower_protect=True, **kw)
             if fl == "xubuf_hi": cir = inject_xubuf(cir, 9.9)
             elif fl == "xubuf_lo": cir = inject_xubuf(cir, -9.9)

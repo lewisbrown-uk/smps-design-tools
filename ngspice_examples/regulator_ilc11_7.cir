@@ -17,7 +17,7 @@
 .param T_amb=300.0
 .param R_amb=7.705087e+00
 .param sigma_eps_A=2.490660e-12
-.param C_th=5.100872e-04
+.param C_th=2.142366e-03
 .param fil_exp=1.2
 
 .subckt filament v_top v_bot T_node r_fil
