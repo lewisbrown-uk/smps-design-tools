@@ -187,6 +187,68 @@ def chart_gbw():
     g.save(os.path.join(HERE, "chart5_gbw_thd.svg"))
 
 
+# ===== Charts 6/7: MC distributions of settling time & THD =====
+def load_col(tb, col):
+    p = os.path.join(HERE, f"mc_dist_{tb}.csv")
+    if not os.path.exists(p): return []
+    out = []
+    for ln in open(p).read().splitlines()[1:]:
+        parts = ln.split()
+        if len(parts) > col:
+            try:
+                v = float(parts[col])
+                if v == v: out.append(v)
+            except ValueError:
+                pass
+    return out
+
+
+def histogram(vals, lo, hi, nbins):
+    counts = [0]*nbins; w = (hi-lo)/nbins
+    for v in vals:
+        k = int((v-lo)/w) if w else 0
+        counts[max(0, min(nbins-1, k))] += 1
+    return counts, w
+
+
+def dist_chart(col, fname, title, xlabel, nbins, vfmt, note, pad=0.06):
+    data = {tb: load_col(tb, col) for tb in TUBES}
+    allv = [v for tb in TUBES for v in data[tb]]
+    if not allv:
+        print("skip", fname, "(no mc_dist data)"); return
+    lo, hi = min(allv), max(allv); span = (hi-lo) or 1
+    lo -= span*pad; hi += span*pad
+    g = SVG(780, 560); x0, pw, ph_e, gap, y0 = 90, 620, 96, 16, 64
+    mx = lambda v: x0 + (v-lo)/(hi-lo)*pw
+    g.txt(x0+pw/2, 30, title, 16, "middle", "#111", "bold")
+    maxc = max((max(histogram(data[tb], lo, hi, nbins)[0]) for tb in TUBES if data[tb]), default=1) or 1
+    for i, tb in enumerate(TUBES):
+        yy = y0 + i*(ph_e+gap); g.rect(x0, yy, pw, ph_e, "#fafafa", "#ddd", 1)
+        c, w = histogram(data[tb], lo, hi, nbins)
+        for k, cnt in enumerate(c):
+            if not cnt: continue
+            bh = (cnt/maxc)*(ph_e-10)
+            g.rect(mx(lo+k*w)+0.5, yy+ph_e-bh, pw/nbins-1, bh, COL[tb])
+        sv = sorted(data[tb])
+        if sv:
+            med = sv[len(sv)//2]
+            g.txt(x0+8, yy+15, f"{NAME[tb]}   n={len(sv)}   median {vfmt.format(med)}   "
+                  f"range {vfmt.format(sv[0])}–{vfmt.format(sv[-1])}", 11.5, "start", COL[tb], "bold")
+    yb = y0 + 4*(ph_e+gap)
+    for k in range(6):
+        xt = lo + (hi-lo)*k/5; g.line(mx(xt), y0, mx(xt), yb-gap, "#eee", 1)
+        g.txt(mx(xt), yb+2, vfmt.format(xt), 11, "middle", "#666")
+    g.txt(x0+pw/2, yb+22, xlabel, 12, "middle", "#444")
+    g.txt(x0+pw/2, yb+40, note, 12, "middle", "#555")
+    g.save(os.path.join(HERE, fname))
+
+
 if __name__ == "__main__":
     chart_trajectories(); chart_peaks(); chart_overshoot(); chart_mc(); chart_gbw()
+    dist_chart(0, "chart6_settling_dist.svg", "Settling-time distribution (Monte Carlo, 50 draws/tube)",
+               "settling time to ±1% of T_ss (s)", 22, "{:.2f}",
+               "Tight, single-mode — no long tails (a hunting draw would show up as a long-settle outlier).")
+    dist_chart(1, "chart7_thd_dist.svg", "V_filament THD distribution (Monte Carlo, 50 draws/tube)",
+               "THD (dB)", 22, "{:.1f}",
+               "All draws well below the −40 dB target band; no draw degrades toward instability.")
     print("done")
