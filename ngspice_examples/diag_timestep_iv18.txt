@@ -1,0 +1,9 @@
+=== iv18: timestep at the protection disconnect ===
+  wall clock        : 27.4 s   (44339 accepted steps, sim to 2.200s)
+  dt before fault   : median 50.00 µs   (the .tran ceiling)
+  dt MIN (collapse) : 0.000 fs  @ t-T_INJ = +0.005 ms
+  steps with dt<1ns : 7 of 44338  (=0.0% of all steps)
+  collapse sim-span : 1500.005 ms of sim-time spent sub-ns
+  dt AFTER recovery : median 50.00 µs  (vs 50.00 µs pre-fault)
+  RECOVERS to normal dt after the event? YES
+  reached sim end (2.2s)? YES

@@ -1,0 +1,5 @@
+temp=25: data=YES  ALIVE (envelope 3.633->3.633V sustained)
+temp=50: data=YES  ALIVE (envelope 3.189->3.189V sustained)
+temp=60: data=YES  ALIVE (envelope 2.839->2.839V sustained)
+temp=70: data=YES  ALIVE (envelope 0.000->0.000V sustained)
+temp=80: data=YES  REAL DEATH (envelope 0.000->0.000V, decayed)

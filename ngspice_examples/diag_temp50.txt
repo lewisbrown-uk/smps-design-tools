@@ -1,0 +1,17 @@
+=== temp=27: data=YES ===
+   Warning: Value of resistor r_dc_couple is too small, set to 1.000000e-12
+=== temp=40: data=YES ===
+   Warning: Value of resistor r_dc_couple is too small, set to 1.000000e-12
+=== temp=50: data=NO ===
+   Warning: Value of resistor r_dc_couple is too small, set to 1.000000e-12
+   doAnalyses: TRAN:  Timestep too small; initial timepoint: trouble with node "v_clamp_hi#branch"
+   run simulation(s) aborted
+   Error: no such vector v(v_osc_drive)
+=== temp=55: data=YES ===
+   Warning: Value of resistor r_dc_couple is too small, set to 1.000000e-12
+   doAnalyses: TRAN:  Timestep too small; time = 3.72529e-15, timestep = 4.58411e-17: trouble with node "v.xu_s2.v9#branch"
+   run simulation(s) aborted
+=== temp=60: data=YES ===
+   Warning: Value of resistor r_dc_couple is too small, set to 1.000000e-12
+   doAnalyses: TRAN:  Timestep too small; time = 3.72529e-15, timestep = 6.25e-17: trouble with node "v.xu_s2.v9#branch"
+   run simulation(s) aborted

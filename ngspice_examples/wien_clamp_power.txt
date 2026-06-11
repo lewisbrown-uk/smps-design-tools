@@ -1,0 +1,10 @@
+=== temp=25C, Wien amplitude 3.63V ===
+  Q1 avg/peak power : 0.003 / 0.019 mW
+  Q2 avg/peak power : 0.003 / 0.019 mW
+  peak clamp Ic     : 0.02 mA
+  T_j rise (theta_JA=300): 2.047 mC  (=> junction ~= ambient + 0.0020 C)
+=== temp=60C, Wien amplitude 2.84V ===
+  Q1 avg/peak power : 0.001 / 0.007 mW
+  Q2 avg/peak power : 0.001 / 0.007 mW
+  peak clamp Ic     : 0.01 mA
+  T_j rise (theta_JA=300): 0.771 mC  (=> junction ~= ambient + 0.0008 C)
