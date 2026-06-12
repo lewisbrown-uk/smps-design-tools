@@ -195,14 +195,13 @@ sourcing, no trimming.
 > **"Y5V-safe" covers regulation/stability/THD only — NOT ESR, DC-bias
 > derating, or acoustics (added 2026-06-12):**
 > - **DC-bias derating:** Class-2 MLCCs (X7R/Y5V) lose 30–60 % of C under DC
->   bias — far beyond the ±10 % the Monte Carlo swept. Bites two places: the
->   **rail decoupling** (10 µF at ±10/15 V) and the **protection RC qualifier
->   caps** (`C_hiq` etc. set the 3 s / 7 ms fault-discrimination times —
->   derating shortens them → cold-start false-trip risk). Spec those
->   high-voltage-rated (small derating at their 0–5 V working point) or
->   C0G/film. *Quantified by the cap-derate FMEA — see `cap_derate_fmea.md`.*
->   The value-critical loop caps (`C_intfb`, Wien `C1/C2`, `C_intin/hf`) are
->   already C0G/film → immune.
+>   bias — far beyond the ±10 % the Monte Carlo swept. The live concern is the
+>   **rail decoupling** (10 µF at ±10/15 V — size from the *derated* value). The
+>   **protection RC qualifier caps** (`C_hiq` etc., 3 s/7 ms times) were also a
+>   suspect, but the cap-derate FMEA (`cap_derate_fmea.md`) shows they survive
+>   ≥40 % derating with **no false-trip → standard X7R is fine there**. The
+>   value-critical loop caps (`C_intfb`, Wien `C1/C2`, `C_intin/hf`) are already
+>   C0G/film → immune.
 > - **ESR:** matters for `C_bbo` (adds to the bias droop → low-ESR tant/film)
 >   and the bulk decoupling (MLCC mΩ is fine once C is sized from derated value).
 > - **Acoustic (electrostriction):** Class-2 caps *sing* at 2 kHz (worst on the
@@ -338,7 +337,7 @@ Full net-by-net schematic in `SCHEMATIC.md` §8. Parts + **locked values**:
 | flat drive clamp | **TLV431** active shunt (per-tube ref) on `v_osc_drive` | `k_clamp` = 1.5 → ±`V_cl` |
 | over-power sense | precision FWR: 2× OPA4277 ch (U9) + Schottkys + RC envelope | trip at `k_overpower` = 1.3 ×V_op |
 | V_int supervisor | LM339 window comparators + RC qualifiers + diode-cap latch | arm 1.5 V / low-trip 0.5 V (1 ms) / high-trip 3.7 V (3 s) |
-| **RC qualifier caps** | `C_hiq`/`C_loq`/`C_arm`/`C_lat`/`C_envop` (1 µF / 0.1 µF) | **C0G/film or high-V-rated X7R** — DC-bias derating must not shorten the 3 s/7 ms times (dielectric rule; margin quantified in `cap_derate_fmea.md`) |
+| RC qualifier caps | `C_hiq`/`C_loq`/`C_arm`/`C_lat`/`C_envop` (1 µF / 0.1 µF) | **Standard X7R OK** — the cap-derate FMEA (`cap_derate_fmea.md`) shows no false-trip + all faults caught down to 40 % derating (3 s/7 ms times have ~2.5× margin). |
 | disconnect | **latching relay** (replaces `R_series`) + coil driver | `t_relay` = 7 ms — **re-confirm vs the chosen relay's datasheet** |
 | osc cutoff + fault LED | transistor gating the Wien + indicator | — |
 
