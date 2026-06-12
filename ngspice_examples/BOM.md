@@ -132,9 +132,18 @@ sim −0.5/+4.0 for corner / low-power-tube headroom).
   Precision bipolar, OP07-class: Vos ~10 µV typ (~50 µV max), drift
   ±0.1 µV/°C, **GBW 1 MHz**, A_OL 134 dB, CMRR ~140 dB, **PSRR ~130 dB**,
   channel separation **±1 µV/V**, BJT class-AB output (no LM358 crossover).
-- **Why OPA4277 / why 1 MHz:** the GBW sweep showed low GBW is the THD
-  sweet spot — 1 MHz best, ≥3 MHz both degrades THD ~10 dB *and* hunts
-  under Vos patterns. 1 MHz is ideal; do **not** substitute a faster part.
+- **Why OPA4277 (low Vos, not bandwidth):** the load-bearing requirement is
+  **low Vos** (≤~150 µV) — a 2–5 mV jellybean loses 30–100 K and ~25 dB THD.
+  **GBW is *not* critical:** Suite G1 (2026-06-10, pre-log design) swept
+  0.5 / 1 / 3 / 10 MHz with **zero hunting** and THD **flat-to-improving**
+  (IV-18 −49.8→−59.0 dB, IV-6 −43.3→−50.8, ILC1-1/8 −42.3→−52.2, ILC1-1/7 flat
+  at −34.7 dB across the range). So faster parts are **safe**, and a
+  higher-GBW / higher-slew op-amp is the lever if the carrier is ever raised
+  (see frequency-headroom note). OPA4277 (1 MHz, ~50 µV Vos, quad) is chosen
+  for low Vos + cost, not for its bandwidth. **(Supersedes the earlier
+  "≥3 MHz degrades THD + hunts" finding, which was the pre-pre-log
+  architecture — the pre-log-sensing + differencing-in-demod rework removed
+  the hunt mechanism; Suite G1 was the re-check.)**
 - **Vos:** the design is Vos-insensitive (Fix A's G2 = 25 keeps cumulative
   Vos·G2 small); 1024-case ±2 mV cube passes. Economy grade is fine.
 - **Coupling / why quads are OK:** channel separation ±1 µV/V and 130 dB
