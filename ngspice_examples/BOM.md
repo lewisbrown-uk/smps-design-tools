@@ -329,7 +329,10 @@ Steady output **3.63 V_pk / 2.57 V_rms @ 25 °C** (measured) → feeds the
 ## Protection (SHIPS — `overpower_protect=True`)
 
 Over-temp protection is **part of the production design** (decision 2026-06-11;
-worst fault excursion ≤899 K, ≤127 ms >800 K, then cold-safe; zero false trips).
+worst fault excursion **≤922 K** (IV-6/ILC1-1/8 botref_short & topref_open;
+three tubes cross 900 K), bounded by the clamp floor ~1030 K, then cold-safe;
+zero false trips. *(The "≤899 K / never 900 K" figure was IV-18-only; the
+full-battery worst is 922 K — see `cap_derate_fmea.md` / OVERNIGHT §FMEA.)*
 Full net-by-net schematic in `SCHEMATIC.md` §8. Parts + **locked values**:
 
 | block | part | locked value |

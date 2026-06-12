@@ -426,8 +426,14 @@ node. Requires the supervisor present (reuses its `n_armed/n_lo_int/n_hi_int`).
 | **disconnect** | `S_disc_op` (model `SWdisc_op`) | **latching relay** contact `v_osc_drive↔v_bridge_top` | cold-safe series isolation (replaces `R_series`) |
 
 > Clamp + disconnect **compound**: clamp caps the rate, disconnect caps the
-> dwell. Validated worst-case fault peak ≤899 K, ≤127 ms >800 K, never ≥900 K,
-> then cold-safe; **zero false trips** on cold-start / restart / brownout.
+> dwell. Validated worst-case fault peak **≤922 K** (IV-6/ILC1-1/8 botref_short
+> & topref_open; **three tubes cross 900 K** — IV-6 922, ILC1-1/8 913, IV-18
+> 909), bounded by the flat-clamp floor (~1030 K), then cold-safe; **zero false
+> trips** on cold-start / restart / brownout. *(The HANDOFF's "≤899 K, never
+> 900 K" was the IV-18-only dwell figure; the full-battery worst is 922 K —
+> reproduced by `cap_derate_fmea.md` Part 2 and matching Suite D / OVERNIGHT
+> §FMEA.)* The ≤127 ms >800 K dwell figure is IV-18-specific; dwell at the
+> 922 K peaks is not separately characterised.
 > **Lock per-tube `k_clamp`/`t_relay`** and re-confirm `t_relay` against the
 > real latching relay's datasheet actuation time before a production run.
 
