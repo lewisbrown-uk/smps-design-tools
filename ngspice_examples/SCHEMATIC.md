@@ -109,16 +109,18 @@ amplitude-clamped Wien from `wien_bridge_biased.cir`:
 | C1,C2 | `C1`,`C2` | **C0G/NP0 or PP film**, 5 % | **15.9 nF** (16 nF) → f₀=1/(2πRC)=1 kHz |
 | Rg,Rfa,Rfb | `Rg`,`Rfa`,`Rfb` | 1 % | **10 k / 10 k / 12 k** loop-gain net (gain just >3) |
 | Q7,Q8 | `Q1`,`Q2` | **MMBT3904** (SOT-23), matched anti-parallel | amplitude clamp across `Rfb` (kills H2) |
-| Rtop1/2,Rbot1/2 | `Rtop1/2`,`Rbot1/2` | 5 % | clamp base-bias dividers (sim 168 k/72 k, α=0.30) |
+| Rtop1/2,Rbot1/2 | `Rtop1/2`,`Rbot1/2` | 1 % | clamp base-bias dividers **169 k/71.5 k** E96 (sim 168 k/72 k, α≈0.30) |
 
 **Wien nets:** `out` (oscillator output ≡ sim `v_src`), `ns`, `np`, `nn`, `fb`, `b1`, `b2`.
 Positive-FB: `out→R1→ns→C1→np→R2→0`, `C2 np→0`. Op-amp `XU1(+)=np, (−)=nn, out=out`.
 Neg-FB clamp: `Rg nn→0`, `Rfa nn→fb`, `Rfb fb→out`, `Q1(C=fb,B=b1,E=out)`, `Q2(C=out,B=b2,E=fb)`.
 
 > **Rails = ±15 V, op-amp = NE5532 (decision §11-f):** ship the oscillator
-> **exactly as `wien_bridge_biased.cir`** — the clamp base-bias dividers
-> (168 k/72 k, α=0.30) were tuned at ±15 V, so keeping ±15 V means **no
-> retune**. Steady output **3.63 V_pk (2.57 V_rms) @ 25 °C** (measured,
+> as `wien_bridge_biased.cir` — the clamp base-bias dividers were tuned at
+> ±15 V (α=0.30), so keeping ±15 V means **no op-amp retune**. (Bias resistors
+> realised as E96 **169 k/71.5 k** for the non-standard tuned 168 k/72 k —
+> ratio within 1.3 %, α≈0.30 preserved.) Steady output **3.63 V_pk
+> (2.57 V_rms) @ 25 °C** (measured,
 > `wien_clamp_power.txt`), shrinking with temperature (2.84 V @ 60 °C) and
 > dying ~70 °C — the airflow/separation build note stands. This is the only
 > ±15 V block; everything downstream is ±10 V OPA4277.
@@ -173,7 +175,7 @@ count (§10).
 | RefDes | netlist | part | value |
 |---|---|---|---|
 | U1b | `XU_vgain` | OPA4277 ch | inverting VGA: `(+)=0,(−)=n_h11f_inv,out=v_drv1` |
-| R_inv | `R_in_vgain` | 1 % | **40 Ω** (⚠ **28 Ω for IV-18** — 5th per-tube part, §9/§11-e) |
+| R_inv | `R_in_vgain` | 1 % | **40.2 Ω** E96 (⚠ **28 Ω for IV-18** — 5th per-tube part, §9/§11-e) |
 | R_max | `R_max_s1` | 1 % | **140 Ω** — bounds gain & desensitises H11F spread |
 | U4 (FET) | `X_h11f` FET side | **H11F1M** | channel `n_h11f_inv ↔ v_drv1`, ∥ R_max_s1 |
 
@@ -242,7 +244,7 @@ AC-couple Stage-2 → buffer, then a V_BE-multiplier-biased complementary pair.
 | Q2 | `Q_o_out_p` | **BCX51** (PNP, SOT-89) | bottom output `C=vee_buf,B=n_o_pair_p,E=n_buf_emi` |
 | Q3 | `Q_o_drv_n` | BCX54 | top driver `C=vcc_buf,B=q_o_bn,E=n_o_pair_n` |
 | Q4 | `Q_o_drv_p` | BCX51 | bottom driver `C=vee_buf,B=q_o_bp,E=n_o_pair_p` |
-| Rbl | `R_o_bleed_n/p` | 5 % | 5 kΩ ×2 (`n_o_pair_*→n_buf_emi`) |
+| Rbl | `R_o_bleed_n/p` | 5 % | 5.1 kΩ ×2 (`n_o_pair_*→n_buf_emi`) |
 | Rcs | `R_cs` | — | **0.01–0.1 Ω** sense `n_buf_emi→v_osc_drive` (short trace OK) |
 
 > ⚠ **PCB thermal:** SOT-89 sheds via collector tab. Worst device ILC1-1/8
@@ -332,9 +334,9 @@ The integrator senses `n_demod_dc` **directly** — there is **no ×20 log/gain
 stage** (removed in the pre-log fix; the gain is folded into `R_int`).
 
 ```
- V_set 0V ─R_int_p 50k─ n_int_plus ─(+)┐                 (R_int_pg 1G = model leak, OMIT in HW)
+ V_set 0V ─R_int_p 49.9k─ n_int_plus ─(+)┐               (R_int_pg 1G = model leak, OMIT in HW)
                                         XU_int ─► v_int_raw
- n_demod_dc ─R_intin 50k──┬─ n_int_minus ─(−)┤
+ n_demod_dc ─R_intin 49.9k──┬─ n_int_minus ─(−)┤
             C_intin 1n ────┘                  │
    feedback:  C_intfb 318n n_int_minus→n_int_pidp ; R_pid 1M n_int_pidp→v_int_raw ;
               C_hf 1n n_int_pidp→v_int_raw          (zero ~5 Hz, HF pole ~160 Hz)
@@ -342,8 +344,8 @@ stage** (removed in the pre-log fix; the gain is folded into `R_int`).
 | RefDes | netlist | part | value |
 |---|---|---|---|
 | U3a | `XU_int` | OPA4277 ch | PID integrator |
-| Rip | `R_int_p` | 1 % | 50 kΩ (`R_int`=50 k, gain folded from removed ×20) |
-| Rii | `R_intin` | 1 % | 50 kΩ |
+| Rip | `R_int_p` | 1 % | **49.9 kΩ** (E96; `R_int`=50 k design, gain folded from removed ×20) |
+| Rii | `R_intin` | 1 % | **49.9 kΩ** |
 | Cii | `C_intin` | C0G | 1 nF |
 | Cif | `C_intfb` | **film/C0G** | **0.318 µF** (use 330 nF) — dominant pole, value-stable |
 | Rpid | `R_pid` | 1 % | 1 MΩ |
@@ -358,7 +360,7 @@ stage** (removed in the pre-log fix; the gain is folded into `R_int`).
  diff amp (×1): R_diff1 v_int→n_aw_diff_minus 100k ; R_diff2 v_int_raw→n_aw_diff_plus 100k ;
                 R_diff3 n_aw_diff_minus→e_sat 100k ; R_diff4 n_aw_diff_plus→0 100k ;
                 XU_aw_diff(+)=n_aw_diff_plus,(−)=n_aw_diff_minus,out=e_sat = v_int_raw−v_int
- R_bc 2500 e_sat→n_int_minus    (= R_int/20 → unwinds 20× faster than wind-up)
+ R_bc 2.49k e_sat→n_int_minus   (= R_int/20 → unwinds 20× faster than wind-up)
 ```
 | RefDes | netlist | part | value |
 |---|---|---|---|
@@ -366,7 +368,7 @@ stage** (removed in the pre-log fix; the gain is folded into `R_int`).
 | Raw | `R_aw_out` | 1 % | 10 Ω |
 | Daw | `D_aw_hi`,`D_aw_lo` | **BAT54** (low V_F) or 1N4148 | clamp diodes (`stiff_clamp` ⇒ sharp-knee low-Rs) |
 | Rdiff | `R_diff1..4` | 0.1–1 % match | 100 kΩ ×4 |
-| Rbc | `R_bc` | 1 % | 2.5 kΩ |
+| Rbc | `R_bc` | 1 % | **2.49 kΩ** (E96; = R_int/20) |
 
 ### H11F LED drive (buffered — current bypasses anti-windup R)
 
@@ -435,14 +437,25 @@ node. Requires the supervisor present (reuses its `n_armed/n_lo_int/n_hi_int`).
 
 | element | netlist | IV-18 | IV-6 | ILC1-1/7 | ILC1-1/8 | grade |
 |---|---|---|---|---|---|---|
-| `R_topref` | bridge top | 1 kΩ | 2 kΩ | 5 kΩ | 800 Ω | **0.1 %** |
-| `R_botref` | bridge bot | 100 Ω | 500 Ω | 1 kΩ | 200 Ω | **0.1 %** |
-| `R_sense` | bridge sense | 10 Ω | 5 Ω | 5 Ω | 2 Ω | **0.1 %** (½ W on ILC1-1/7) |
-| target `R_fil` | =Rs·Rtr/Rbr | 100 Ω | 20 Ω | 25 Ω | 8 Ω | (held by loop) |
+| `R_topref` | bridge top | 1 kΩ | 2 kΩ | 3.3 kΩ | 1.2 kΩ | **0.1 %, E24** |
+| `R_botref` | bridge bot | 100 Ω | 510 Ω | 620 Ω | 300 Ω | **0.1 %, E24** |
+| `R_sense` | bridge sense | 10 Ω | 5.1 Ω | 4.7 Ω | 2 Ω | **0.1 %, E24** (½ W on ILC1-1/7) |
+| target `R_fil` | =Rs·Rtr/Rbr | 100 Ω | 20 Ω | 25 Ω | 8 Ω | held exactly (ILC1-1/7 +0.43 K) |
 | carrier level | (sim `V_src_rms`) | 0.0115 | 0.019 | 0.088 | 0.0224 | set by `R_atten_top` |
 | `v_atten` target | Stage-1 in | 0.885 mV | 1.46 mV | 6.77 mV | 1.72 mV | rms (= carrier/13 in sim) |
 | **`R_atten_top`** (Stage B) | attenuator | **57.6 kΩ** | **34.0 kΩ** | **6.65 kΩ** | **28.7 kΩ** | 1 % — off the ÷50 buffered node (§2). Stage A = 49.9 k/1 k fixed (all tubes). |
-| ⚠ `R_in_vgain` | Stage-1 in | **28 Ω** | 40 Ω | 40 Ω | 40 Ω | 1 % — **IV-18 differs (5th per-tube part)** |
+| ⚠ `R_in_vgain` | Stage-1 in | **28 Ω** | 40.2 Ω | 40.2 Ω | 40.2 Ω | 1 % — **IV-18 differs (5th per-tube part)** |
+
+**Bridge triplets are E24 (0.1 %)** — chosen by E-series search (2026-06-12) to
+hold each tube's `R_fil` exactly: IV-6/IV-18/ILC1-1/8 land dead-on, ILC1-1/7 is
++0.43 K (a fixed nominal offset, swamped by ±5 % filament spread). 0.1 % is
+stocked in E24 values. The triplets preserve `R_fil` and the loop transfer
+exactly; only the reference-arm absolute impedance moves a few % (IV-18/
+ILC1-1/8 keep the same divider ratio). These supersede the netlist's design-
+round values (5 k/1 k etc.) — **re-run the validation battery on the final
+values to confirm** (regulated point unchanged, so a confirmation not a
+redesign). ILC1-1/7 exact alternative if wanted: E96 4.99/5.11 k/1.02 k
+(−0.03 K).
 
 `R_atten_top` (Stage B) computed for the buffered ~72 mV_pk mid node (3.63 V_pk
 Wien ÷50), `R_atten_bot`=1 kΩ → reproduces each tube's `v_atten`. E96 values;
@@ -503,12 +516,12 @@ only the bench-check carry-ins (j) remain open (they need hardware).
   one OPA4277 channel (in the 4-quad count §10).
 - **(e) IV-18 5th per-tube part — ✅ fixed in BOM.** `R_in_vgain`=28 Ω added to
   the per-tube table; "only four things vary" corrected to five.
-- **(f) Wien op-amp + rails — ✅ RESOLVED (2026-06-12).** Ship the Wien
-  **exactly as `wien_bridge_biased.cir`**: dedicated **NE5532 on ±15 V** (U6),
-  clamp bias 168 k/72 k (α=0.30) unchanged → **no retune** (the reason ±15 V is
-  kept). Adds a ±15 V supply pair (S1, VR4/VR5) that is the board's master
-  rail; ±10 V derives from it. Wien is its own package, out of the OPA4277
-  quad count (§10). Steady output 3.63 V_pk @ 25 °C.
+- **(f) Wien op-amp + rails — ✅ RESOLVED (2026-06-12).** Ship the Wien as
+  `wien_bridge_biased.cir`: dedicated **NE5532 on ±15 V** (U6); ±15 V kept so
+  the α=0.30 clamp bias needs **no op-amp retune** (bias realised E96
+  169 k/71.5 k, ratio within 1.3 %). Adds a ±15 V supply pair (S1, VR4/VR5)
+  that is the board's master rail; ±10 V derives from it. Wien is its own
+  package, out of the OPA4277 quad count (§10). Steady output 3.63 V_pk @ 25 °C.
 - **(g) Op-amp count → 4 quads — ✅ fixed in BOM** (§10). Packaging + cost
   updated (4× OPA4277 + the NE5532 Wien).
 - **(h) Protection part values — ✅ LOCKED:** `k_clamp`=1.5, `k_overpower`=1.3,
@@ -521,6 +534,15 @@ only the bench-check carry-ins (j) remain open (they need hardware).
 - **(j) Bench-check carry-ins (unchanged):** Wien amplitude tempco / >60 °C
   death cliff (needs airflow/separation); H11F R(I_LED) at the real operating
   point; filament-R spread vs the constant-V assumption.
+- **(k) E-series realisation — ✅ APPLIED (2026-06-12), re-sim PENDING.** All
+  non-standard passives mapped to buildable values: **E24 0.1 % bridge
+  triplets** (hold R_fil exactly, ILC1-1/7 +0.43 K), `R_in_vgain` 40→40.2 Ω,
+  `R_int` 50→49.9 kΩ, `R_bc` 2.5→2.49 kΩ, Wien bias 168 k/72 k→169 k/71.5 k,
+  `R_o_bleed` 5 k→5.1 k, FWR `R4op` 5 k→4.99 k. The bridge legs move the
+  divider off the simulated values (regulated point unchanged) → **re-run the
+  validation battery on the final E-series values to confirm** (and fold in the
+  Wien-bias 1.3 % ratio shift). Cleanest: update `TUBES` in `regulator.py` to
+  the final values, regenerate `regulator_<tube>.cir`, re-run the battery.
 
 ---
 

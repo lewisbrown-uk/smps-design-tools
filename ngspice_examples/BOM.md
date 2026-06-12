@@ -15,6 +15,11 @@ Reference designators follow the `regulator_<tube>.cir` element names.
 > 3→4 quads) and folded in the locked productionisation decisions
 > (**0.1 % bridge refs**, **protection ships**, **2-stage buffered
 > attenuator**, **Wien on ±15 V NE5532**, clamp window [−3,+6]).
+>
+> A follow-on **E-series realisation pass (2026-06-12)** mapped non-standard
+> design values to buildable parts: **E24 0.1 % bridge triplets** (hold R_fil
+> exactly), `R_in_vgain` 40→40.2 Ω, `R_int` 50→49.9 kΩ, `R_bc` 2.5→2.49 kΩ,
+> Wien bias 168 k/72 k→169 k/71.5 k, `R_o_bleed` 5 k→5.1 k.
 
 > **Supersedes the previous all-pass BOM (2026-06).** The earlier BOM
 > described the retired JFET/H11F *all-pass* architecture
@@ -54,11 +59,11 @@ the thermal model — not parts to buy.)
 
 | element     | IV-18 | IV-6 | ILC1-1/7 | ILC1-1/8 | notes |
 |-------------|-------|------|----------|----------|-------|
-| `R_topref`  | 1 kΩ  | 2 kΩ | 5 kΩ     | 800 Ω    | bridge top ref; **0.1 % thin-film 0805** (locked) |
-| `R_botref`  | 100 Ω | 500 Ω| 1 kΩ     | 200 Ω    | bridge bottom ref; **0.1 % thin-film** |
-| `R_sense`   | 10 Ω  | 5 Ω  | 5 Ω      | 2 Ω      | bridge sense leg, in series with the filament (carries the load current); **0.1 %**. Per-element dissipation (full power audit): **ILC1-1/7 ~166 mW → ½ W part**; ILC1-1/8 ~45 mW → ¼ W (0805 marginal); IV-6 ~12 mW and IV-18 ~1 mW → plain 0805. |
+| `R_topref`  | 1 kΩ  | 2 kΩ | 3.3 kΩ   | 1.2 kΩ   | bridge top ref; **0.1 % thin-film 0805**, **E24 value** |
+| `R_botref`  | 100 Ω | 510 Ω| 620 Ω    | 300 Ω    | bridge bottom ref; **0.1 % thin-film**, E24 |
+| `R_sense`   | 10 Ω  | 5.1 Ω| 4.7 Ω    | 2 Ω      | bridge sense leg, in series with the filament (carries the load current); **0.1 %**, E24. Per-element dissipation: **ILC1-1/7 ~156 mW → ½ W part**; ILC1-1/8 ~45 mW → ¼ W (0805 marginal); IV-6 ~12 mW and IV-18 ~1 mW → plain 0805. |
 | `R_atten_top` (Stage B) | 57.6 kΩ | 34.0 kΩ | 6.65 kΩ | 28.7 kΩ | attenuator Stage-B leg (1 %), off the ÷50 buffered node — sets the per-tube carrier. Stage A (49.9 k/1 k) + buffer are common to all tubes. See "Source". |
-| `R_in_vgain` | **28 Ω** | 40 Ω | 40 Ω | 40 Ω | Stage-1 input resistor — **IV-18 only differs** (1 %). |
+| `R_in_vgain` | **28 Ω** | 40.2 Ω | 40.2 Ω | 40.2 Ω | Stage-1 input resistor — **IV-18 only differs** (1 %, E96). |
 | target R_fil | 100 Ω | 20 Ω | 25 Ω | 8 Ω | = R_sense·R_topref/R_botref (held by the loop) |
 
 (The five per-tube items: 3 bridge refs + `R_atten_top` + IV-18's `R_in_vgain`.
@@ -69,6 +74,18 @@ The earlier "only four things vary" was wrong for IV-18.)
 2026-06-11) — the only lever on T uniformity. This shaves ~±16 K off the
 worst-case brightness envelope vs 1 % (1 % gave ±3 % R_fil / +21 K, 8-corner).
 **Caps and every other resistor are irrelevant to R_fil/T.**
+
+**Values are E24 (0.1 %)**, chosen (brute-force E-series search, 2026-06-12) to
+hold each tube's R_fil exactly: IV-6 / IV-18 / ILC1-1/8 land **dead-on**;
+ILC1-1/7 is **+0.43 K** — a fixed nominal offset, swamped by the tube's own
+±5 % filament spread (±~33 K). 0.1 % thin-film is stocked in E24 values
+(Susumu RG, Panasonic ERA, Vishay TNPW), so these are round, common parts at
+full precision. The triplets **preserve R_fil (hence T) and the loop transfer
+exactly**; only the reference-arm absolute impedance shifts a few % (IV-18 and
+ILC1-1/8 keep the same divider ratio; ILC1-1/7 / IV-6 shift ≤5 %). These
+supersede the netlist's design-round values (5 k/1 k etc.) — **re-run the
+validation battery on the final values to confirm** (the regulated point is
+unchanged, so this is a confirmation, not a redesign).
 Filament-R part variation maps as `T ≈ T_op·(R_actual/R_nominal)^(1/1.2)`;
 the constant-voltage mains-winding history bounds real filament spread to
 a few %, well inside loop authority (no binning needed).
@@ -155,7 +172,7 @@ sourcing, no trimming.
 | **Q_vbm_t, Q_vbm_b** | V_BE-multiplier bias (2×) | **BCX54** (NPN), thermally coupled to the output pair | sets/tracks the class-AB quiescent current (Iq ~20 mA). Small-signal BC847 also works but BCX54 best-matches the output V_BE tempco. |
 | `R_vbm_t1/b1`, `R_vbm_t2/b2` | V_BE-multiplier dividers (4×) | 680 Ω / 1.0 kΩ, 1 %, 0805 | ratio 1.68 → ~2 V_BE per half → Iq ~20 mA |
 | `R_bbo_ta/tb/ba/bb` | bias-chain current feed (4×) | 1.1 kΩ, 5 %, 0805 | feeds ~4 mA through the multipliers; bootstrapped via C_bbo |
-| `R_o_bleed_n/p` | output-pair bleed (2×) | 5 kΩ, 5 %, 0805 | |
+| `R_o_bleed_n/p` | output-pair bleed (2×) | 5.1 kΩ, 5 %, 0805 | |
 | `R_cs` | current-sense / series limit | 0.01–0.1 Ω (model 0.01) | low-value; a short PCB trace or 0.1 Ω 1 % is fine. (`R_series` 0.01 Ω likewise — cold-start current limit.) |
 | **C_bbo_t, C_bbo_b** | bias-rail bootstrap (2×) | **4.7 µF — electrolytic / tantalum / film. *NOT* Y5V ceramic.** | ⚠ **See dielectric rule.** These are the only THD-critical caps. |
 
@@ -219,7 +236,7 @@ BCX54 IKF = 0.45 A causes only mild rolloff at the ILC1-1/7 peak.)
 | element | value | type | function |
 |---------|-------|------|----------|
 | attenuator (2-stage buffered) | Stage A 49.9 k / 1 k (÷50, all tubes) → buffer → Stage B `R_atten_top` per-tube (§per-tube table) / `R_atten_bot` 1 k | 1 % 0805 | sets carrier level into Stage 1 (see "Source") |
-| `R_in_vgain` | **40 Ω** (28 Ω IV-18) | 1 % | Stage-1 input resistor |
+| `R_in_vgain` | **40.2 Ω** (28 Ω IV-18) | 1 % | Stage-1 input resistor (E96) |
 | `R_max_s1` | **140 Ω** | 1 % | bounds Stage-1 gain (∥ H11F) — also desensitizes H11F part spread |
 | `R_fb_s2` / `R_gnd_s2` | 2.4 kΩ / 100 Ω | 1 % | Stage-2 gain G2 = 1 + 2400/100 = **25** (Fix A; do not restore 201) |
 | `C_couple_buf` | 1 µF | X7R/film | AC-couple Stage 2 → buffer (Y5V-safe) |
@@ -237,8 +254,8 @@ BCX54 IKF = 0.45 A causes only mild rolloff at the ILC1-1/7 peak.)
 | Post-chop diff amp | `XU_demod_da`, `R_dda_inp/inm`, `R_dda_g1/g2`, `R_dda_fb` | 1 k, 1 k, **15 k + 15 k**, 30 k | Gain = R_dda_fb/R_dda_in = K_diff = **30**; balanced (R_dda_g = R_dda_fb). **R_dda_g is split into two series 15 k halves** so a single-resistor SHORT leaves 15 k to ground (diff-amp keeps rejection) instead of 0 (single-ended → +23 K silent overheat). Closes the one residual demod-component fault (FMEA). 1 % thin-film, match the pairs. Switch R_on (~60–300 Ω) is common-mode (both arms) → negligible; raise R_dda_in to 10 k (R_dda_fb 300 k) for extra margin if desired. |
 | Demod LP | `R_lp_demod` / `C_lp_demod` | 100 kΩ / **0.22 µF** | **~7.2 Hz** post-demod LP — moved up from 1.6 Hz for phase margin (out of the loop-crossover region); still ~49 dB rejection at the 2 kHz demod ripple. C may be X7R (Y5V-safe) |
 | ~~Log demod~~ (**REMOVED**) | — | — | The ×20 `XU_log` stage is **gone** (pre-log-sensing fix): the integrator senses the demod LP node directly, its gain folded into `R_int`. Frees one op-amp channel. |
-| PID integrator | `XU_int`, `R_intin`/`R_int_p`, `C_intin`, `C_intfb`, `R_pid`, `C_hf` | **50 kΩ**, 1 nF, **330 nF (for 318 nF)**, 1 MΩ, 1 nF | **`R_int` = 50 kΩ** in the shipping netlist: the pre-log-sensing fix folded the removed ×20 log stage's gain into `R_int` (1 MΩ → 50 kΩ, identical small-signal loop transfer). `C_intfb` = film/C0G (value-stable dominant pole); `C_intin`/`C_hf` C0G. `R_int_pg` 1 GΩ is a model leak — omit in hardware. |
-| Anti-windup | `R_diff1–4`, `R_bc`, `R_aw_out`, `D_aw_hi`, `D_aw_lo` | 100 k ×4, **2.5 k**, 10 Ω, 2× clamp diode | back-calc unwind (`R_bc` = R_int/20 = **2.5 kΩ**); clamp diodes = BAT54 (low-V_F) or 1N4148. |
+| PID integrator | `XU_int`, `R_intin`/`R_int_p`, `C_intin`, `C_intfb`, `R_pid`, `C_hf` | **49.9 kΩ**, 1 nF, **330 nF (for 318 nF)**, 1 MΩ, 1 nF | **`R_int` = 49.9 kΩ** (E96, for the 50 kΩ design value): the pre-log-sensing fix folded the removed ×20 log stage's gain into `R_int` (1 MΩ → 50 kΩ, identical small-signal loop transfer). `C_intfb` = film/C0G (value-stable dominant pole); `C_intin`/`C_hf` C0G. `R_int_pg` 1 GΩ is a model leak — omit in hardware. |
+| Anti-windup | `R_diff1–4`, `R_bc`, `R_aw_out`, `D_aw_hi`, `D_aw_lo` | 100 k ×4, **2.49 k**, 10 Ω, 2× clamp diode | back-calc unwind (`R_bc` = R_int/20 → **2.49 kΩ** E96); clamp diodes = BAT54 (low-V_F) or 1N4148. |
 | Clamp refs | `V_clamp_hi`, `V_clamp_lo` | **+6.0 V, −3.0 V** (adopted) | **LM4040 shunt refs** for the wider [−3, +6] window (corner / low-power headroom). (Sim used −0.5/+4.0.) |
 
 ---
@@ -248,7 +265,8 @@ BCX54 IKF = 0.45 A causes only mild rolloff at the ILC1-1/7 peak.)
 The netlist abstracts the source as `B_src`; in hardware it is the op-amp
 Wien-bridge oscillator with a **two-NPN symmetric amplitude clamp**
 (`wien_bridge_biased.cir`). **Ships exactly as that netlist** (no retune):
-op-amp `XU1` = **NE5532 on ±15 V**, clamp bias 168 k/72 k (α = 0.30).
+op-amp `XU1` = **NE5532 on ±15 V**, clamp bias **169 k/71.5 k** (E96, for the
+tuned 168 k/72 k — ratio within 1.3 %, α≈0.30 preserved).
 Steady output **3.63 V_pk / 2.57 V_rms @ 25 °C** (measured) → feeds the
 2-stage buffered attenuator (see "Per-tube variants" / "Gain chain").
 
@@ -259,7 +277,7 @@ Steady output **3.63 V_pk / 2.57 V_rms @ 25 °C** (measured) → feeds the
 | `C1`, `C2` (frequency) | 16 nF (15.9 nF), 5 % **C0G/NP0 or PP film** | frequency-setting — keep stable dielectric |
 | gain net (Rfa/Rfb/Rg) | 10 k / 12 k / 10 k, 1 % | sets loop gain just > 3 |
 | clamp transistors | 2× **MMBT3904** (SOT-23) | matched anti-parallel NPN amplitude clamp (kills H2) |
-| base-bias dividers | 168 k / 72 k, 5 % | set clamp threshold (**α = 0.30**, the THD-min from `sweep_wien_bias.py`) |
+| base-bias dividers | **169 k / 71.5 k**, 1 % (E96) | set clamp threshold (**α ≈ 0.30**, the THD-min from `sweep_wien_bias.py`; E96 nearest the tuned 168 k/72 k, ratio within 1.3 %) |
 
 > **Bench-check (flagged):** the matched-NPN clamp is clean (THD ~2.3 %,
 > H2 killed, perfect PSRR) but its amplitude has a **−0.45 %/°C tempco**
