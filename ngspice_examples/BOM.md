@@ -183,15 +183,34 @@ sourcing, no trimming.
 | `R_bbo_ta/tb/ba/bb` | bias-chain current feed (4×) | 1.1 kΩ, 5 %, 0805 | feeds ~4 mA through the multipliers; bootstrapped via C_bbo |
 | `R_o_bleed_n/p` | output-pair bleed (2×) | 5.1 kΩ, 5 %, 0805 | |
 | `R_cs` | current-sense / series limit | 0.01–0.1 Ω (model 0.01) | low-value; a short PCB trace or 0.1 Ω 1 % is fine. (`R_series` 0.01 Ω likewise — cold-start current limit.) |
-| **C_bbo_t, C_bbo_b** | bias-rail bootstrap (2×) | **4.7 µF — electrolytic / tantalum / film. *NOT* Y5V ceramic.** | ⚠ **See dielectric rule.** These are the only THD-critical caps. |
+| **C_bbo_t, C_bbo_b** | bias-rail bootstrap (2×) | **4.7 µF — low-ESR tantalum / film (NOT Y5V; NOT high-ESR aluminium electrolytic).** | ⚠ **See dielectric rule.** The only THD-critical caps; ESR adds to the bias-rail droop. |
 
 > **Cap dielectric rule (Y5V study):** every cap in the design may be
 > cheap Y5V ceramic **except `C_bbo_t`/`C_bbo_b`** (the 4.7 µF bootstrap
 > caps). If those collapse under Y5V's temperature/tolerance droop, the
 > class-AB bias rail sags within the carrier cycle → crossover distortion
 > (THD −55 → −22 dB at 85 °C). At 4.7 µF they'd naturally be electrolytic
-> or tantalum anyway, so this is a "don't accidentally spec Y5V" note. All
-> other caps: Y5V-safe (zero effect on regulation, stability, or THD).
+> or tantalum anyway, so this is a "don't accidentally spec Y5V" note.
+>
+> **"Y5V-safe" covers regulation/stability/THD only — NOT ESR, DC-bias
+> derating, or acoustics (added 2026-06-12):**
+> - **DC-bias derating:** Class-2 MLCCs (X7R/Y5V) lose 30–60 % of C under DC
+>   bias — far beyond the ±10 % the Monte Carlo swept. Bites two places: the
+>   **rail decoupling** (10 µF at ±10/15 V) and the **protection RC qualifier
+>   caps** (`C_hiq` etc. set the 3 s / 7 ms fault-discrimination times —
+>   derating shortens them → cold-start false-trip risk). Spec those
+>   high-voltage-rated (small derating at their 0–5 V working point) or
+>   C0G/film. *Quantified by the cap-derate FMEA — see `cap_derate_fmea.md`.*
+>   The value-critical loop caps (`C_intfb`, Wien `C1/C2`, `C_intin/hf`) are
+>   already C0G/film → immune.
+> - **ESR:** matters for `C_bbo` (adds to the bias droop → low-ESR tant/film)
+>   and the bulk decoupling (MLCC mΩ is fine once C is sized from derated value).
+> - **Acoustic (electrostriction):** Class-2 caps *sing* at 2 kHz (worst on the
+>   ILC1-1/7 output-stage decoupling carrying carrier ripple). Y5V is the worst
+>   singer — use X7R-or-better (ideally C0G / low-acoustic soft-termination) on
+>   any cap with carrier-frequency AC across it. See the acoustics note.
+> - Neither ESR nor DC-bias derating was in the sim (ideal caps, ideal rails;
+>   MC = ±10 % tolerance only).
 
 **Why BCX54/BCX51 + a V_BE-multiplier bias:** SOT-89 1 A complementary pair
 with **VCEO = 45 V** — on ±10 V rails the off-device sees ~17 V pk, giving
@@ -304,7 +323,7 @@ Steady output **3.63 V_pk / 2.57 V_rms @ 25 °C** (measured) → feeds the
 | +V rail | +10 V (sim `V_vcc`) | MC7810 / LM317-set (from +15) | op-amp + buffer positive rail (±9 V works with slightly less headroom) |
 | −V rail | −10 V (sim `V_vee`) | MC7910 / LM337-set (from −15) | negative rail |
 | +5 V | H11F LED supply (`V_led_supply`) | 78L05 / divider | feeds `R_led_set` |
-| decoupling | 100 nF + 10 µF per rail per IC | X7R | (`R_sense_vcc/vee` 0.1 Ω in the netlist are model rail-sense elements, not real parts) |
+| decoupling | 100 nF + 10 µF per rail per IC | X7R — **size from bias-derated C** (X7R loses 30–60 % at ±10/15 V); low-ESR; X7R-or-better (not Y5V) for acoustic | (`R_sense_vcc/vee` 0.1 Ω in the netlist are model rail-sense elements, not real parts) |
 
 ---
 
@@ -319,6 +338,7 @@ Full net-by-net schematic in `SCHEMATIC.md` §8. Parts + **locked values**:
 | flat drive clamp | **TLV431** active shunt (per-tube ref) on `v_osc_drive` | `k_clamp` = 1.5 → ±`V_cl` |
 | over-power sense | precision FWR: 2× OPA4277 ch (U9) + Schottkys + RC envelope | trip at `k_overpower` = 1.3 ×V_op |
 | V_int supervisor | LM339 window comparators + RC qualifiers + diode-cap latch | arm 1.5 V / low-trip 0.5 V (1 ms) / high-trip 3.7 V (3 s) |
+| **RC qualifier caps** | `C_hiq`/`C_loq`/`C_arm`/`C_lat`/`C_envop` (1 µF / 0.1 µF) | **C0G/film or high-V-rated X7R** — DC-bias derating must not shorten the 3 s/7 ms times (dielectric rule; margin quantified in `cap_derate_fmea.md`) |
 | disconnect | **latching relay** (replaces `R_series`) + coil driver | `t_relay` = 7 ms — **re-confirm vs the chosen relay's datasheet** |
 | osc cutoff + fault LED | transistor gating the Wien + indicator | — |
 
