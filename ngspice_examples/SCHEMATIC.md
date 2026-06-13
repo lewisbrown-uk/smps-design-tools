@@ -404,7 +404,7 @@ Watches the integrator output both ways (every overheating passive fault rails
 |---|---|---|---|
 | arm | `B_arm`/`D_arm`/`C_arm` | `v_int>1.5` latches "armed" | comparator + diode-cap |
 | LOW | `B_lo`,`R_loq/C_loq` (τ=`t_fault_lo`=1 ms) | `v_int<0.5` **fast** | window comp, glitch-qual |
-| HIGH | `B_hi`,`R_hiq/C_hiq` (τ=`t_fault_hi`=3 s) | `v_int>3.7` **sustained** | window comp + RC integrator (rejects cold-start ride) |
+| HIGH | `B_hi`,`R_hiq/C_hiq` (τ=`t_fault_hi`, **per-tube 0.3–1.3 s**) | `v_int>3.7` **sustained** | window comp + RC integrator (rides out the cold-start V_int ride) |
 | latch | `B_tr`,`B_tr_hi`,`D_tr`,`C_lat` | either trip, set-dominant | diode-OR into a latch |
 | **cutoff** | `src_gate` on `B_src` | gate the **Wien oscillator OFF** | a transistor disabling the Wien → filament cools cold-safe + drive a **fault LED** |
 
@@ -426,14 +426,16 @@ node. Requires the supervisor present (reuses its `n_armed/n_lo_int/n_hi_int`).
 | **disconnect** | `S_disc_op` (model `SWdisc_op`) | **latching relay** contact `v_osc_drive↔v_bridge_top` | cold-safe series isolation (replaces `R_series`) |
 
 > Clamp + disconnect **compound**: clamp caps the rate, disconnect caps the
-> dwell. Validated worst-case fault peak **≤922 K** (IV-6/ILC1-1/8 botref_short
-> & topref_open; **three tubes cross 900 K** — IV-6 922, ILC1-1/8 913, IV-18
-> 909), bounded by the flat-clamp floor (~1030 K), then cold-safe; **zero false
-> trips** on cold-start / restart / brownout. *(The HANDOFF's "≤899 K, never
-> 900 K" was the IV-18-only dwell figure; the full-battery worst is 922 K —
-> reproduced by `cap_derate_fmea.md` Part 2 and matching Suite D / OVERNIGHT
-> §FMEA.)* The ≤127 ms >800 K dwell figure is IV-18-specific; dwell at the
-> 922 K peaks is not separately characterised.
+> dwell. With the **per-tube `t_fault_hi`** (IV-18 0.3 / IV-6 0.4 / ILC1-1/7 1.2
+> / ILC1-1/8 1.3 s — in `TUBES`), the worst over-driving fault (botref_short)
+> peaks **≤871 K with ZERO dwell >900 K** (≤162 ms >850 K), then cold-safe;
+> **zero false trips** on cold-start / restart / brownout (`confirm_pertube.py`).
+> *(History: the default 3 s watchdog let botref_short sit **922 K for ~2.3 s
+> >900 K** — `dwell_botref.py` / `t_fhi_sweep.md`; the per-tube watchdog removes
+> that. The old HANDOFF "≤899 K / never 900 K" was the IV-18-only XU_buf-fault
+> dwell, not the worst.)* Each `t_fault_hi` = (cold-start V_int ride >3.7 V)/
+> 0.916 × ~1.4 (`vint_ride.py`, floors 205/269/867/926 ms); needs a **stable
+> `C_hiq`** (C0G/film) so derating can't shrink it into the false-trip floor.
 > **Lock per-tube `k_clamp`/`t_relay`** and re-confirm `t_relay` against the
 > real latching relay's datasheet actuation time before a production run.
 
@@ -532,7 +534,8 @@ only the bench-check carry-ins (j) remain open (they need hardware).
   updated (4× OPA4277 + the NE5532 Wien).
 - **(h) Protection part values — ✅ LOCKED:** `k_clamp`=1.5, `k_overpower`=1.3,
   `t_relay`=7 ms, supervisor `v_fault_arm`=1.5 / `v_fault_trip`=0.5 /
-  `v_fault_trip_hi`=3.7 / `t_fault_hi`=3 s. Still **re-confirm `t_relay`
+  `v_fault_trip_hi`=3.7 / `t_fault_hi` **per-tube 0.3/0.4/1.2/1.3 s**
+  (IV-18/IV-6/ILC1-1/7/ILC1-1/8). Still **re-confirm `t_relay`
   against the chosen latching relay's datasheet** and pick the TLV431 per-tube
   `V_cl` resistor (§8b) at PCB time.
 - **(i) Clamp-ref window — ✅ ADOPTED [−3 V, +6 V]** via LM4040 shunt refs

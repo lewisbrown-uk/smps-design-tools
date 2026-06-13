@@ -197,9 +197,11 @@ sourcing, no trimming.
 > - **DC-bias derating:** Class-2 MLCCs (X7R/Y5V) lose 30–60 % of C under DC
 >   bias — far beyond the ±10 % the Monte Carlo swept. The live concern is the
 >   **rail decoupling** (10 µF at ±10/15 V — size from the *derated* value). The
->   **protection RC qualifier caps** (`C_hiq` etc., 3 s/7 ms times) were also a
->   suspect, but the cap-derate FMEA (`cap_derate_fmea.md`) shows they survive
->   ≥40 % derating with **no false-trip → standard X7R is fine there**. The
+>   **protection RC qualifier caps** were also a suspect: at the 3 s baseline the
+>   cap-derate FMEA shows ≥40 % derating with no false-trip (standard X7R fine).
+>   **But** with the tightened **per-tube `t_fault_hi`** (0.3–1.3 s, to cut the
+>   fault dwell) that margin is consumed → **`C_hiq` must be stable C0G/film**;
+>   the other qualifier caps stay X7R. The
 >   value-critical loop caps (`C_intfb`, Wien `C1/C2`, `C_intin/hf`) are already
 >   C0G/film → immune.
 > - **ESR:** matters for `C_bbo` (adds to the bias droop → low-ESR tant/film)
@@ -329,18 +331,20 @@ Steady output **3.63 V_pk / 2.57 V_rms @ 25 °C** (measured) → feeds the
 ## Protection (SHIPS — `overpower_protect=True`)
 
 Over-temp protection is **part of the production design** (decision 2026-06-11;
-worst fault excursion **≤922 K** (IV-6/ILC1-1/8 botref_short & topref_open;
-three tubes cross 900 K), bounded by the clamp floor ~1030 K, then cold-safe;
-zero false trips. *(The "≤899 K / never 900 K" figure was IV-18-only; the
-full-battery worst is 922 K — see `cap_derate_fmea.md` / OVERNIGHT §FMEA.)*
+worst fault excursion **≤871 K with ZERO dwell >900 K** (≤162 ms >850 K) using
+the **per-tube `t_fault_hi`** (below); then cold-safe; zero false trips. *(The
+default 3 s watchdog let the worst fault — IV-6 botref_short — sit **922 K for
+~2.3 s >900 K**; the per-tube watchdog fixes it. See `t_fhi_sweep.md` /
+`confirm_pertube.py`. The old "≤899 K / never 900 K" was the IV-18-only
+XU_buf-fault dwell.)*
 Full net-by-net schematic in `SCHEMATIC.md` §8. Parts + **locked values**:
 
 | block | part | locked value |
 |-------|------|--------------|
 | flat drive clamp | **TLV431** active shunt (per-tube ref) on `v_osc_drive` | `k_clamp` = 1.5 → ±`V_cl` |
 | over-power sense | precision FWR: 2× OPA4277 ch (U9) + Schottkys + RC envelope | trip at `k_overpower` = 1.3 ×V_op |
-| V_int supervisor | LM339 window comparators + RC qualifiers + diode-cap latch | arm 1.5 V / low-trip 0.5 V (1 ms) / high-trip 3.7 V (3 s) |
-| RC qualifier caps | `C_hiq`/`C_loq`/`C_arm`/`C_lat`/`C_envop` (1 µF / 0.1 µF) | **Standard X7R OK** — the cap-derate FMEA (`cap_derate_fmea.md`) shows no false-trip + all faults caught down to 40 % derating (3 s/7 ms times have ~2.5× margin). |
+| V_int supervisor | LM339 window comparators + RC qualifiers + diode-cap latch | arm 1.5 V / low-trip 0.5 V (1 ms) / high-trip 3.7 V (**per-tube `t_fault_hi`: IV-18 0.3 / IV-6 0.4 / ILC1-1/7 1.2 / ILC1-1/8 1.3 s**) |
+| RC qualifier caps | `C_hiq` (high-side) vs `C_loq`/`C_arm`/`C_lat`/`C_envop` | **`C_hiq`: stable C0G/film** (e.g. 100 nF C0G + per-tube `R_hiq` 3/4/12/13 MΩ) — the tightened per-tube `t_fault_hi` leaves little derating margin (`t_fhi_sweep.md`). The **others: standard X7R OK** (low-side/latch/envelope have wide margin; cap-derate FMEA clean to 40 %). |
 | disconnect | **latching relay** (replaces `R_series`) + coil driver | `t_relay` = 7 ms — **re-confirm vs the chosen relay's datasheet** |
 | osc cutoff + fault LED | transistor gating the Wien + indicator | — |
 
