@@ -63,10 +63,17 @@ TUBES = {
     # transient: it hid ilc11_8's cold-start overshoot (+0.2K@0.1s -> +7.4K@0.62s)
     # and over-stated the fault peak (it under-states the dwell).  Bench-measure to
     # refine.  Validated 2026-06-10 (tau_th_study + re-run battery).
-    "ilc11_7": dict(R_op=25.0,  V_op=5.0, T_op=800.0, R_sense=5.0,  R_top_ref=5.0e3, R_bot_ref=1.0e3, V_src_rms=0.088,  tau_th=0.42, stiff_clamp=True),
-    "iv6":     dict(R_op=20.0,  V_op=1.0, T_op=800.0, R_sense=5.0,  R_top_ref=2.0e3, R_bot_ref=500.0, V_src_rms=0.019,  tau_th=0.20, stiff_clamp=True),
-    "iv18":    dict(R_op=100.0, V_op=1.0, T_op=800.0, R_sense=10.0, R_top_ref=1.0e3, R_bot_ref=100.0, V_src_rms=0.0115, R_in_s1=28.0, tau_th=0.19, stiff_clamp=True),
-    "ilc11_8": dict(R_op=8.0,   V_op=1.2, T_op=800.0, R_sense=2.0,  R_top_ref=800.0, R_bot_ref=200.0, V_src_rms=0.0224, tau_th=0.62, stiff_clamp=True),
+    # t_fault_hi: PER-TUBE high-side watchdog qualification (2026-06-13).  The slow
+    # botref_short/topref_open faults are caught by this watchdog; the default 3 s let
+    # the worst (iv6) sit 922 K for 2.3 s >900 K.  Set per-tube to floor*~1.4, where
+    # floor = (cold-start V_int ride >3.7 V)/0.916 = 205/269/867/926 ms for
+    # iv18/iv6/ilc11_7/ilc11_8 (vint_ride.py; tracks tau_th).  Result: every tube's
+    # worst fault <=871 K, ZERO dwell >900 K, no cold-start false-trip (confirm_pertube).
+    # Requires a STABLE C_hiq (C0G/film) so derating doesn't shrink it into the floor.
+    "ilc11_7": dict(R_op=25.0,  V_op=5.0, T_op=800.0, R_sense=5.0,  R_top_ref=5.0e3, R_bot_ref=1.0e3, V_src_rms=0.088,  tau_th=0.42, t_fault_hi=1.2, stiff_clamp=True),
+    "iv6":     dict(R_op=20.0,  V_op=1.0, T_op=800.0, R_sense=5.0,  R_top_ref=2.0e3, R_bot_ref=500.0, V_src_rms=0.019,  tau_th=0.20, t_fault_hi=0.4, stiff_clamp=True),
+    "iv18":    dict(R_op=100.0, V_op=1.0, T_op=800.0, R_sense=10.0, R_top_ref=1.0e3, R_bot_ref=100.0, V_src_rms=0.0115, R_in_s1=28.0, tau_th=0.19, t_fault_hi=0.3, stiff_clamp=True),
+    "ilc11_8": dict(R_op=8.0,   V_op=1.2, T_op=800.0, R_sense=2.0,  R_top_ref=800.0, R_bot_ref=200.0, V_src_rms=0.0224, tau_th=0.62, t_fault_hi=1.3, stiff_clamp=True),
 }
 TUBE_NAMES = {"ilc11_7": "ILC1-1/7", "iv6": "IV-6", "iv18": "IV-18", "ilc11_8": "ILC1-1/8"}
 
@@ -141,9 +148,12 @@ B_R     r_fil 0     V = R_amb * (max(V(T_node),T_amb)/T_amb)^fil_exp
     Rb_half = R_bias / 2.0
     # Models the OPA4277 (quad precision, OP07-class, all 10 positions):
     # A_OL 134 dB (~5e6), GBW 1 MHz, Vos ~10 µV typ / ~50 µV max (quad),
-    # BJT class-AB output, ~0.8 mA/ch Iq.  GBW=1 MHz is the best-THD point in
-    # the GBW sweep (≥3 MHz degrades THD + hunts under Vos).  Quad packaging
-    # is safe here (channel sep ±1 µV/V; coupling sim showed ≤0.14 dB penalty).
+    # BJT class-AB output, ~0.8 mA/ch Iq.  The load-bearing op-amp requirement
+    # is LOW Vos, not GBW: Suite G1 (pre-log) swept 0.5-10 MHz with zero hunting
+    # and THD flat-to-improving, so faster parts are safe (the earlier "≥3 MHz
+    # degrades THD + hunts" was the pre-pre-log architecture).  1 MHz chosen for
+    # low Vos + cost.  Quad packaging is safe here (channel sep ±1 µV/V;
+    # coupling sim showed ≤0.14 dB penalty).
     op = ("uopamp_lvl3 Avol=5meg GBW=1meg Rin=100g Rout=10 "
           "Iq=800u Ilimit=25m Vos=50u Vmax=30 Vrail=0.1")
     # Power instrumentation: insert 0-V current-sense sources in series with
