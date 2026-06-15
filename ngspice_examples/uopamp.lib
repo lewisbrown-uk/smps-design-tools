@@ -206,3 +206,57 @@ I1 VCC VEE {Iq}
 .param pi=3.1415926535898
 .ends
 *****************************************
+
+
+*****************************************
+.subckt uopamp_lvl3_slew +IN -IN VCC VEE OUT
+* Slew-limited variant of uopamp_lvl3 (2026-06-15). IDENTICAL to lvl3 except the
+* linear input transconductances G1/G2 are replaced by SATURATING B1/B2 (tanh),
+* so the current charging the dominant-pole node N001 is capped at +-2*Islew ->
+* a constant output slew rate SR ~ 2*Islew/Cdom. Small-signal (tanh ~ linear)
+* the model is bit-identical to lvl3 (same gm=1u/source, GBW, Avol). Calibrate
+* Islew for the target SR (OPA4277 = 0.8 V/us) at the GBW in use.
+* PINOUT ORDER +IN -IN VCC VEE OUT
+B1 VCC N001 I = Islew*tanh(1u*(V(N002)-V(-IN))/Islew)
+B2 VEE N001 I = Islew*tanh(1u*(V(N002)-V(-IN))/Islew)
+R1 VCC N001 {Avol/1u}
+R2 N001 VEE {Avol/1u}
+G3 OUT VCC VCC N001 {1/(2*Rout)}
+G4 VEE OUT N001 VEE {1/(2*Rout)}
+R4 VCC OUT {2*Rout}
+R5 OUT VEE {2*Rout}
+C1 VCC N001 {1u/(2*pi*GBW)}
+C2 N001 VEE {1u/(2*pi*GBW)}
+G6 N005 VEE N001 OUT {1/(2*Rout)}
+G5 N006 VEE OUT N001 {1/(2*Rout)}
+R8 -IN +IN {Rin}
+V6 VCC N003 {Vrail+545m}
+V7 N008 VEE {Vrail+545m}
+V8 N002 +IN {Vos}
+V9 OUT N007 {Ilimit*Rout-5m}
+V10 N004 OUT {Ilimit*Rout-5m}
+D1 N001 N003 diode
+D2 N008 N001 diode
+D3 VCC N005 diode
+D4 VCC N006 diode
+D5 VEE N005 zener
+D6 VEE N006 zener
+D7 N001 N004 iclip
+D8 N007 N001 iclip
+I1 VCC VEE {Iq}
+.param Avol = 100k
+.param GBW = 100meg
+.param Rin = 100g
+.param Rout = 1
+.param Iq = 1m
+.param Ilimit = 50m
+.param Vrail = 0
+.param Vos = 0
+.param Vmax = 50
+.param Islew = 1
+.model diode D(Is=1e-14)
+.model zener D(Is=1e-14 BV={Vmax})
+.model iclip D(Is=1u)
+.param pi=3.1415926535898
+.ends
+*****************************************
