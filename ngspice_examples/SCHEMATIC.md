@@ -15,7 +15,7 @@ logged in §11 (the BOM has drifted and needs a follow-up edit).
 
 Production configuration captured here:
 `make_netlist(switch_demod=True, overpower_protect=True, stiff_clamp=True)`
-— i.e. the real CD4053B demod, the protection chain enabled (per the locked
+— i.e. the real switched (DG419) demod, the protection chain enabled (per the locked
 decision), and the sharp-knee clamp. Per-tube values from `TUBES`.
 
 Locked productionisation decisions folded in (2026-06-11):
@@ -53,7 +53,7 @@ Locked productionisation decisions folded in (2026-06-11):
    │                            ▲                                     │node_A    │node_B
    │                       anti-windup                            buf_A│      buf_B│
    │                            ▲                                      ▼          ▼
- [SUPERVISOR]◄─v_int─── PID integrator ◄── LP ◄── post-chop diff ◄── CD4053B chopper
+ [SUPERVISOR]◄─v_int─── PID integrator ◄── LP ◄── post-chop diff ◄── DG419 chopper
   (S8 window               (XU_int)        (7.2Hz)   (×30, S6)       (commutating, S6)
    comparators)                                                          ▲ gate
                                                                     comparator(v_osc)
@@ -292,39 +292,82 @@ vs 1 %). `R_ap_gnd`/`R_series` drops are common-mode (both arms tap
 
 ---
 
-## 6. Sheet S6 — Synchronous demodulator (CD4053B) + filter
+## 6. Sheet S6 — Synchronous demodulator (2× DG419) + filter
 
-**Behavioural→real:** sim default is `B_demod = 30·(n_node_B_buf −
-n_node_A_buf)·sign(v_osc_drive)`. The shipping hardware (`switch_demod=True`)
-is the **commutating analog-switch** detector that this stands in for:
+**Behavioural→real:** the fast sim default is `B_demod = 30·(n_node_B_buf −
+n_node_A_buf)·sign(v_osc_drive)`. The **shipping hardware** (`switch_demod=True`)
+is the **commutating analog-switch** chopper that the B-source stands in for —
+a phase-reference comparator gating a DG419 SPDT pair that swaps the two buffered bridge
+taps onto the +/− inputs of a difference amplifier. Wire it exactly as below.
 
 ```
- v_osc_drive ─►[comparator]─► n_demod_ref ──┬─► gate S_dp1,S_dm1
-   XU_demod_comp (LM393/TLV3201)            └─►[inverter]─► n_demod_refn ─► gate S_dp2,S_dm2
+   ┌──────── PHASE REFERENCE — carrier zero-cross (U5a TLV3201, +5/0 single-supply) ────────┐
+   │                          R_hyst 10M (n_demod_ref→n_pr_in, ~±50 mV hysteresis)          │
+   │                        ┌──────────────────────────────────────────┐                    │
+   │ v_osc_drive ─R_pr 100k─┴─ n_pr_in ─►(+)│U5a TLV3201│ out ──────────┴─ n_demod_ref ─► both DG419 INs
+   │                  │BAT54S│ clamp n_pr_in │  push-pull │  (0/+5, NO pull-up)             │
+   │                  └ to 0 / +5 ─┘    0 ──►(−)│         │                                  │
+   │  V+ = +5   V− = 0(GND)   →  out HIGH when v_osc_drive ≥ 0   (40 ns: phase err ≪1° @1kHz)│
+   └────────────────────────────────────────────────────────────────────────────────────────┘
+       2× Vishay DG419 SPDT  — V+(6)=+5  V−(4)=−5  GND(8)=0  VL(5)=+5
+       truth table: IN=0 → D–S1 closed ;  IN=1 → D–S2 closed  (break-before-make)
+   ┌─ U8a  DG419 #1  (PLUS line) ────────────────────────────────────────┐
+   │  pin1 D  (common)        = n_demod_plus                              │
+   │  pin3 S1 (IN=0, v_osc<0) ◄── n_node_A_buf                            │
+   │  pin2 S2 (IN=1, v_osc≥0) ◄── n_node_B_buf                            │
+   │  pin7 IN                ◄── n_demod_ref                              │
+   ├─ U8b  DG419 #2  (MINUS line) ───────────────────────────────────────┤
+   │  pin1 D  (common)        = n_demod_minus                             │
+   │  pin3 S1 (IN=0, v_osc<0) ◄── n_node_B_buf                            │
+   │  pin2 S2 (IN=1, v_osc≥0) ◄── n_node_A_buf                            │
+   │  pin7 IN                ◄── n_demod_ref                              │
+   └─────────────────────────────────────────────────────────────────────┘
+   net effect:  v_osc ≥ 0 → (plus=B, minus=A) ;  v_osc < 0 → (plus=A, minus=B)
 
-   half-cycle +:  n_demod_plus=node_B_buf , n_demod_minus=node_A_buf
-   half-cycle −:  n_demod_plus=node_A_buf , n_demod_minus=node_B_buf   (commutation)
-
+ n_demod_plus ─R_dp_gnd 1M─ 0      n_demod_minus ─R_dm_gnd 1M─ 0   (bias to gnd)
  n_demod_plus ─R_dda_inp 1k─ n_dda_p ─R_dda_g1 15k─ n_dda_gmid ─R_dda_g2 15k─ 0
- n_demod_minus─R_dda_inm 1k─ n_dda_m                            (split-R, fault-safe)
- R_dda_fb 30k  n_demod→n_dda_m ;  XU_demod_da(+)=n_dda_p,(−)=n_dda_m,out=n_demod
- n_demod ─R_lp_demod 100k─ n_demod_dc ─C_lp_demod 0.22µF─ 0     (~7.2 Hz LP)
+ n_demod_minus─R_dda_inm 1k─ n_dda_m ─R_dda_fb 30k─ n_demod   (feedback)
+ U2c:  (+)=n_dda_p , (−)=n_dda_m , out=n_demod     (balanced diff amp, gain 30)
+ n_demod ─R_lp_demod 100k─ n_demod_dc ─C_lp_demod 0.22µF─ 0     (~7.2 Hz LP → S7)
 ```
-| RefDes | netlist | part | value / role |
-|---|---|---|---|
-| U5 | `XU_demod_comp` | **LM393** (or TLV3201) | squares `v_osc_drive` → `n_demod_ref` gate |
-| U7 | (`B_demod_refn`) | **SN74HC14** inverter | complementary gate `n_demod_refn = ¬n_demod_ref` |
-| U8 | `S_dp1/2`,`S_dm1/2` | **CD4053B** (±5 V bipolar) | 2 SPDT used: plus-line {B,A}, minus-line {A,B}. **NOT 74HC4053** (6 V-class). DG419/ADG419 = lower-charge-injection premium. |
-| — | `R_dp_gnd`,`R_dm_gnd` | 1 % | 1 MΩ bias `n_demod_plus/minus→0` |
-| U2c | `XU_demod_da` | OPA4277 ch | post-chop diff amp, gain = R_dda_fb/R_dda_in = **30** |
-| Rdda | `R_dda_inp/inm` | 0.1–1 % match | 1 kΩ pair |
-| Rddag | `R_dda_g1/g2` | match | **15 k + 15 k split** — a single-R short leaves 15 k to gnd (keeps diff rejection; closes the last demod FMEA fault) |
-| Rddaf | `R_dda_fb` | match | 30 kΩ |
-| Rlp,Clp | `R_lp_demod`,`C_lp_demod` | X7R ok | 100 kΩ / 0.22 µF → ~7.2 Hz (out of crossover, ~49 dB at 2 kHz ripple) |
 
-Switch R_on (~60–300 Ω) is common-mode → negligible; raise `R_dda_in` to 10 k
-(fb 300 k) for margin. Charge injection (~1–20 pC) → small DC offset the loop
-absorbs.
+**Devices & connections (net-for-net):**
+
+| RefDes | netlist | part | pins / nets |
+|---|---|---|---|
+| U5a | `XU_demod_comp` | **TLV3201** push-pull comparator (single, SC70/SOT23-5) | Phase reference (carrier zero-cross). **V+=+5, V−=GND(0)**; rail-to-rail **push-pull output → drives both DG419 `IN`s directly, NO pull-up** (drops the LM393's open-collector pull-up). OUT=`n_demod_ref` HIGH when `v_osc_drive ≥ 0`; 40 ns prop delay → commutation-edge phase error ≪1° at 1 kHz (DG419 logic 1 ≥ 2.4 V / 0 ≤ 0.8 V — full-rail swing clears both). **Input conditioning (required):** TLV3201 is single-supply (V_S ≤ 5.5 V) and **cannot take the raw ±`v_osc_drive`** (±8.5 V on ILC1-1/7). Wire `v_osc_drive`→**`R_pr` 100 kΩ**→`n_pr_in` = (+) input; clamp `n_pr_in` to 0/+5 with a **BAT54S** dual-Schottky (R_pr limits clamp current to ≪0.1 mA); (−)=`0`. Add **`R_hyst` ~10 MΩ** `n_demod_ref`→`n_pr_in` for ~±50 mV hysteresis — TLV3201 has none internally, so this gives one clean edge per zero-crossing. |
+| U8a | `S_dp1`,`S_dp2` | **Vishay DG419** SPDT (PLUS line) | D(1)=`n_demod_plus`; **S1(3)=`n_node_A_buf`** (selected IN=0, v_osc<0 half), **S2(2)=`n_node_B_buf`** (selected IN=1, v_osc≥0 half); IN(7)=`n_demod_ref`. Supplies **V+(6)=+5, V−(4)=−5, GND(8)=0, VL(5)=+5**. |
+| U8b | `S_dm1`,`S_dm2` | **Vishay DG419** SPDT (MINUS line) | D(1)=`n_demod_minus`; **S1(3)=`n_node_B_buf`** (IN=0), **S2(2)=`n_node_A_buf`** (IN=1); IN(7)=`n_demod_ref`. Same supply pins as U8a. |
+| — | `R_dp_gnd`,`R_dm_gnd` | 1 % | **1 MΩ** each, `n_demod_plus→0` and `n_demod_minus→0` (DC bias for the switched commons). |
+| U2c | `XU_demod_da` | OPA4277 ch | post-chop difference amp. (+)=`n_dda_p`, (−)=`n_dda_m`, out=`n_demod`. Gain = `R_dda_fb/R_dda_inm` = **30**. |
+| Rdda | `R_dda_inp`,`R_dda_inm` | **0.1 % matched pair** | 1 kΩ. `R_dda_inp`: `n_demod_plus→n_dda_p`; `R_dda_inm`: `n_demod_minus→n_dda_m`. Match sets CMRR — use a matched pair or a resistor network. |
+| Rddag | `R_dda_g1`,`R_dda_g2` | match | **15 k + 15 k in series** (=30 k), `n_dda_p→n_dda_gmid→0`. The mid-tap split is deliberate: a single-resistor SHORT then still leaves 15 k to ground (keeps the diff amp differential instead of going single-ended) — closes the last demod FMEA fault. **Do not substitute a single 30 k.** |
+| Rddaf | `R_dda_fb` | match (to Rddag) | **30 kΩ**, `n_demod→n_dda_m`. |
+| Rlp,Clp | `R_lp_demod`,`C_lp_demod` | X7R ok | **100 kΩ / 0.22 µF** → ~7.2 Hz 1st-order LP (out of the loop crossover; ~49 dB rejection at the 2 kHz chopper-ripple component). `n_demod→n_demod_dc→0`. |
+
+> **The complement gate is internal — no SN74HC14 needed.** The sim builds two
+> *SPST* primitives per line (`S_dp1/S_dp2`, `S_dm1/S_dm2`) and so needs an
+> explicit inverted gate `n_demod_refn` (`B_demod_refn`). Each **DG419 is a real
+> SPDT that routes from the single `IN` bit internally** (IN=0 → S1, IN=1 → S2),
+> so the hardware needs **only `n_demod_ref`** — drop the `U7` SN74HC14 inverter
+> the §10/BOM inventory carried for the demod (it was a sim-primitive artifact).
+> If you ever build the demod from discrete SPST switches instead, restore it.
+
+> **Why DG419 over the CD4053B.** Two single SPDTs (one per line) instead of one
+> triple package: the DG419's **guaranteed break-before-make** means the two
+> bridge taps are never momentarily shorted through the switch during
+> commutation, and its **charge injection (~3–5 pC typ) and R_on (~25–40 Ω) are
+> far lower and tighter** than the CD4053B's (~20 pC, 60–300 Ω). Both halves
+> share one `IN` so they commutate together. **Match the two packages** (ideally
+> same date code) so R_on/charge-injection track between the plus and minus arms.
+
+> **Tolerances / second-order effects.** Switch R_on appears equally in both arms
+> → common-mode, rejected by the matched diff amp; for extra margin scale
+> `R_dda_in`→10 k and `R_dda_fb`→300 k (gain still 30). DG419 charge injection
+> injects a small, largely-cancelling DC offset that the integrator absorbs (it
+> is inside the loop). Keep the two bridge-tap traces
+> (`n_node_A_buf`/`n_node_B_buf`) symmetric to the switches so stray-C mismatch
+> doesn't unbalance the chop.
 
 ---
 
@@ -393,51 +436,121 @@ Two cooperating layers, both armed only after loop capture
 (`v_int` first > `v_fault_arm`=1.5 V) and both **latching**.
 
 **Behavioural→real:** the sim uses `B`-source comparators/multipliers + RC
-latches. Hardware = window comparators + voltage references + RC qualifiers +
-diode-cap (or SR-latch) latches + a logic-gated output.
+latches. The hardware below realises each `B`-source as a window comparator +
+precision reference, each RC qualifier as a literal RC on the comparator output,
+each diode-cap pseudo-latch as a **CMOS SR latch** (½ CD4043B), and the logic
+products as **CD4081B (AND) / CD4071B (OR)** gates. All logic runs on the **+5 V
+(`n_v_led`) rail**, levels 0/+5. **References** (1.5/0.5/3.7 V + the per-tube
+over-power/clamp refs) come from one **LM4040-4.096 shunt** + a resistor-divider
+rail, buffered if loaded. Suggested packages: **U9 = LM339 quad comparator**
+(arm, low, high, over-power), **U10 = CD4043B quad SR latch** (supervisor latch,
+disconnect latch), **U11 = CD4081B / U12 = CD4071B** logic.
 
 ### 8a. Dual-sided V_int fault supervisor → oscillator cutoff
 
 Watches the integrator output both ways (every overheating passive fault rails
-`v_int` to a clamp):
-| signal | netlist | trip | HW |
-|---|---|---|---|
-| arm | `B_arm`/`D_arm`/`C_arm` | `v_int>1.5` latches "armed" | comparator + diode-cap |
-| LOW | `B_lo`,`R_loq/C_loq` (τ=`t_fault_lo`=1 ms) | `v_int<0.5` **fast** | window comp, glitch-qual |
-| HIGH | `B_hi`,`R_hiq/C_hiq` (τ=`t_fault_hi`, **per-tube 0.3–1.3 s**) | `v_int>3.7` **sustained** | window comp + RC integrator (rides out the cold-start V_int ride) |
-| latch | `B_tr`,`B_tr_hi`,`D_tr`,`C_lat` | either trip, set-dominant | diode-OR into a latch |
-| **cutoff** | `src_gate` on `B_src` | gate the **Wien oscillator OFF** | a transistor disabling the Wien → filament cools cold-safe + drive a **fault LED** |
+`v_int` to a clamp). Reference threshold nodes: `v_ref_arm`=1.5, `v_ref_lo`=0.5,
+`v_ref_hi`=3.7 (off the LM4040 divider).
 
-LOW = loss-of-authority/forward-gain faults (loop fights to low rail, ms-fast).
-HIGH = sense/setpoint/bridge-ref faults (loop winds to max drive, time-qualified).
+```
+ ARM   U9a (+)=v_int (−)=v_ref_arm(1.5) ─OUT─►[D_arm 1N4148]─┬─ n_armed ─[R 10M→0]
+       (latches high the first time v_int>1.5; cap holds it) └─ C_arm 1µF→0
+ LOW   U9b (+)=v_ref_lo(0.5) (−)=v_int ─OUT─R_loq 1k─┬─ n_lo_int   (HIGH when v_int<0.5)
+       (τ=R_loq·C_loq=1ms glitch-qual)              └─ C_loq 1µF→0
+ HIGH  U9c (+)=v_int (−)=v_ref_hi(3.7) ─OUT─R_hiq─┬─ n_hi_int     (HIGH when v_int>3.7)
+       (τ=R_hiq·C_hiq=t_fault_hi, PER-TUBE)        └─ C_hiq 1µF→0  ◄── stable C0G/film
+ TRIP  U11a AND(n_armed, n_lo_int) ─┐
+       U11b AND(n_armed, n_hi_int) ─┴─►U12a OR─►[SR latch ½U10] SET ─ n_latch
+       (set-dominant; either qualified trip latches; R_lat 10M, C_lat 1µF)
+ CUT   n_latch ─► Q_cut (2N7002) ─► disables the Wien (S2) + lights FAULT LED
+```
+
+| RefDes | netlist | part | connections / threshold |
+|---|---|---|---|
+| U9a | `B_arm`/`D_arm`/`C_arm` | **LM339** ¼ + 1N4148 + 1 µF | arm comparator: (+)=`v_int`, (−)=`v_ref_arm`(**1.5 V**). OUT→`D_arm`→`n_armed`; `C_arm` 1 µF + `R_arm` 10 MΩ to 0 hold it latched-high once `v_int` first exceeds 1.5 V (loop captured). |
+| U9b | `B_lo`,`R_loq`,`C_loq` | LM339 ¼ | LOW trip: (+)=`v_ref_lo`(**0.5 V**), (−)=`v_int` → OUT HIGH when `v_int<0.5`. **`R_loq` 1 kΩ + `C_loq` 1 µF → τ=`t_fault_lo`=1 ms** glitch-qual → `n_lo_int`. Fast: these forward-gain faults over-drive ~50× and heat faster than τ_th. |
+| U9c | `B_hi`,`R_hiq`,`C_hiq` | LM339 ¼ | HIGH trip: (+)=`v_int`, (−)=`v_ref_hi`(**3.7 V**) → OUT HIGH when `v_int>3.7`. **`R_hiq` + `C_hiq` 1 µF → τ=`t_fault_hi` (PER-TUBE, §9a below)** → `n_hi_int`. Time-qualified so the cold-start `v_int` ride doesn't trip. |
+| U11a/b | `B_tr`,`B_tr_hi` | **CD4081B** 2× AND | `n_armed`·`n_lo_int` and `n_armed`·`n_hi_int` (a trip only counts after the loop has armed). |
+| U12a | (diode-OR in sim) | **CD4071B** OR | OR the two AND outputs → SET. |
+| U10a | `D_tr`,`D_tr_hi`,`C_lat`,`R_lat` | **½ CD4043B** SR latch (set-dominant) | `n_latch`; `R_lat` 10 MΩ / `C_lat` 1 µF model the hold. Set-dominant = either trip latches and stays. |
+| Q_cut | `src_gate` on `B_src` | **2N7002** + fault LED | `n_latch` high → **disable the Wien oscillator** (pull its positive-FB node or gate the +15 V to U6) → filament cools cold-safe; same gate lights a **FAULT LED**. |
+
+LOW = loss-of-authority / forward-gain faults (atten/buffer; loop fights to the
+low rail, ms-fast). HIGH = sense/setpoint/bridge-ref faults (loop winds to max
+drive; time-qualified).
+
+#### 8a-i. Per-tube HIGH-side qualifier `R_hiq` (with `C_hiq`=1 µF)
+
+`τ = R_hiq·C_hiq = t_fault_hi`, so **`R_hiq = t_fault_hi / 1 µF`**:
+
+| tube | `t_fault_hi` | `R_hiq` (C_hiq=1 µF) |
+|---|---|---|
+| IV-18 | 0.3 s | **300 kΩ** |
+| IV-6 | 0.4 s | **400 kΩ** |
+| ILC1-1/7 | 1.2 s | **1.2 MΩ** |
+| ILC1-1/8 | 1.3 s | **1.3 MΩ** |
+
+`C_hiq` **must be C0G/film** (value-stable): if it derates, τ shrinks toward the
+false-trip floor (`vint_ride.py` floors 205/269/867/926 ms). `R_loq`/`C_loq`
+(LOW, 1 ms) and `C_arm`/`C_lat` are not value-critical.
 
 ### 8b. Over-power: flat-clamp + authority-gated disconnect
 
 The supervisor's cutoff hits the oscillator **upstream** of a stuck output
-buffer, so it can't isolate that fault — hence a second layer on the drive
-node. Requires the supervisor present (reuses its `n_armed/n_lo_int/n_hi_int`).
+buffer, so it can't isolate *that* fault — hence a second layer on the drive
+node. It **reuses the supervisor's `n_armed`/`n_lo_int`/`n_hi_int`** (so the
+supervisor must be present).
 
-| block | netlist | part | role |
+```
+ CLAMP   v_osc_drive ─┬─[D_clp 1N5711]─► +V_cl  (TLV431 shunt set to +V_cl)
+                      └─[D_cln 1N5711]◄─ −V_cl  (TLV431 shunt set to −V_cl)  (per-tube)
+ SENSE   v_bridge_top ─►[precision full-wave rect: XA1op,XA2op + D1op,D2op Schottky]
+                       ─► nAbsop ─R_envop 100k─ n_envop ─C_envop 0.1µF─ 0   (10 ms env)
+ OPF     U9d (+)=(−n_envop) (−)=v_ref_op(k_overpower·V_op) ─► n_opf   (HIGH = over-power)
+ DISC    U11c AND( n_armed , n_opf , [n_lo_int OR n_hi_int] ) ─►[SR latch ½U10] n_disc_op
+ RELAY   n_disc_op ─► Q_coil (logic-FET) ─► LATCHING RELAY coil   (t_relay≈7 ms)
+         relay CONTACT:  v_osc_drive ─/ ─ v_bridge_top   (opens cold-safe; replaces R_series)
+```
+
+| block | netlist | part | connections / value |
 |---|---|---|---|
-| **flat-clamp** | `D_clp_op/D_cln_op` to `±V_cl` | **TLV431 active shunt** (per-tube ref) / flat-clamp TVS | bounds **instantaneous** drive on `v_osc_drive` → peak independent of relay lag. `V_cl = k_clamp·V_op·√2·(R_op+R_sense)/R_op`, **k_clamp=1.5** |
-| over-power sense | `R1op..R5op`,`D1op/D2op`,`XA1op`,`XA2op`,`R_envop/C_envop` | **precision FWR** (2 OPA4277 ch + Schottky) + envelope | rectifies filament-side drive; trip if `−V(n_envop) > k_overpower·V_op`, **k_overpower=1.3** |
-| disconnect logic | `B_discset_op`,`D_disc_op`,`C_disc_op` | window-comp AND + SR latch | **DISCONNECT = over_power AND (V_int low OR high) AND armed** — the authority discriminator (commanded over-power = warm-up, has V_int high+benign; fault over-power latches) |
-| relay drive | `B_coil_op`,`R_coil_op`,`C_coil_op` | coil driver (RC = `t_relay`=7 ms actuation model) | energise/latch |
-| **disconnect** | `S_disc_op` (model `SWdisc_op`) | **latching relay** contact `v_osc_drive↔v_bridge_top` | cold-safe series isolation (replaces `R_series`) |
+| **flat-clamp** | `D_clp_op`,`D_cln_op`,`V_clp_op`,`V_cln_op` | **2× TLV431 active shunt** (per-tube ref) + 2× **1N5711** Schottky, or a bidirectional flat-clamp TVS | bounds the **instantaneous** drive on `v_osc_drive` to ±`V_cl` → fault peak is independent of relay lag. **`V_cl = k_clamp·V_op·√2·(R_op+R_sense)/R_op`, k_clamp=1.5** (table §8b-i). |
+| over-power FWR | `R1op`,`R2op`,`R3op`,`R4op`,`R5op`,`D1op`,`D2op`,`XA1op`,`XA2op` | **precision full-wave rectifier**: 2 OPA4277 ch + 2 Schottky (1N5711) | senses `v_bridge_top`. Stage 1 `XA1op` (R1op/R2op=10 k/10 k, D1op/D2op) → half-wave; Stage 2 `XA2op` (R3op/R5op=10 k/10 k, R4op=5 k summing) → `nAbsop` = −\|drive\|. |
+| envelope | `R_envop`,`C_envop` | 100 kΩ / 0.1 µF | `nAbsop→n_envop→0`, τ≈10 ms peak-hold of the rectified drive. |
+| over-power comp | `B_opf` | **LM339 ¼ (U9d)** | (+)=`−n_envop` (magnitude), (−)=`v_ref_op`(**k_overpower·V_op, k=1.3**) → `n_opf` HIGH when the rectified drive exceeds 1.3·V_op (table §8b-i). |
+| disconnect logic | `B_discset_op`,`D_disc_op`,`C_disc_op` | **CD4081B AND + CD4071B OR + ½ CD4043B SR latch (U10b)** | **DISCONNECT = `n_opf` AND `n_armed` AND (`n_lo_int` OR `n_hi_int`)** → `n_disc_op`. The `(lo OR hi)` term is the **authority discriminator**: a *commanded* over-power (warm-up) has `v_int` mid-range (neither rail) → benign, no disconnect; a *fault* over-power rails `v_int` → latches. |
+| relay drive | `B_coil_op`,`R_coil_op`,`C_coil_op` | **logic-level MOSFET** (e.g. 2N7002 / AO3400) + flyback diode | `n_disc_op` high → drive the **bistable (latching) relay** SET coil. `R_coil_op·C_coil_op` models the ~`t_relay`=7 ms actuation lag (contact opens ≈0.69·t_relay after latch). |
+| **disconnect** | `S_disc_op` (`.model SWdisc_op`) | **latching (bistable) relay contact** | series in `v_osc_drive ↔ v_bridge_top`; opens for **cold-safe isolation** and **replaces `R_series`** (§4). Bistable so it stays open with no holding current after a fault. |
 
-> Clamp + disconnect **compound**: clamp caps the rate, disconnect caps the
-> dwell. With the **per-tube `t_fault_hi`** (IV-18 0.3 / IV-6 0.4 / ILC1-1/7 1.2
-> / ILC1-1/8 1.3 s — in `TUBES`), the worst over-driving fault (botref_short)
-> peaks **≤871 K with ZERO dwell >900 K** (≤162 ms >850 K), then cold-safe;
-> **zero false trips** on cold-start / restart / brownout (`confirm_pertube.py`).
-> *(History: the default 3 s watchdog let botref_short sit **922 K for ~2.3 s
-> >900 K** — `dwell_botref.py` / `t_fhi_sweep.md`; the per-tube watchdog removes
-> that. The old HANDOFF "≤899 K / never 900 K" was the IV-18-only XU_buf-fault
-> dwell, not the worst.)* Each `t_fault_hi` = (cold-start V_int ride >3.7 V)/
-> 0.916 × ~1.4 (`vint_ride.py`, floors 205/269/867/926 ms); needs a **stable
-> `C_hiq`** (C0G/film) so derating can't shrink it into the false-trip floor.
-> **Lock per-tube `k_clamp`/`t_relay`** and re-confirm `t_relay` against the
-> real latching relay's datasheet actuation time before a production run.
+#### 8b-i. Per-tube clamp & over-power references
+
+`V_cl = 1.5·V_op·√2·(R_op+R_sense)/R_op` ; `v_ref_op = 1.3·V_op`:
+
+| tube | V_op | R_op | R_sense | **`V_cl`** (±, clamp) | **`v_ref_op`** (over-power) |
+|---|---|---|---|---|---|
+| ILC1-1/7 | 5.0 | 25 | 4.7 | **12.6 V** † | **6.50 V** |
+| IV-6 | 1.0 | 20 | 5.1 | **2.66 V** | **1.30 V** |
+| IV-18 | 1.0 | 100 | 10 | **2.33 V** | **1.30 V** |
+| ILC1-1/8 | 1.2 | 8 | 2.0 | **3.18 V** | **1.56 V** |
+
+† ILC1-1/7's `V_cl` (12.6 V) sits **above the ±10 V rail**, so for that tube the
+rail clip + the disconnect (not the shunt clamp) bound the fault; the TLV431 is
+still fitted but only acts under a rail-overshoot corner. The low-V tubes are
+where the flat-clamp does the work.
+
+> Clamp + disconnect **compound**: the clamp caps the *rate* (instantaneous
+> peak), the disconnect caps the *dwell* (time at temperature). With the
+> **per-tube `t_fault_hi`** (→ `R_hiq` table §8a-i), the worst over-driving fault
+> (botref_short) peaks **≤871 K with ZERO dwell >900 K** (≤162 ms >850 K), then
+> cold-safe; **zero false trips** on cold-start / restart / brownout
+> (`confirm_pertube.py`). *(History: the default 3 s watchdog let botref_short
+> sit **922 K for ~2.3 s >900 K** — `dwell_botref.py` / `t_fhi_sweep.md`; the
+> per-tube watchdog removes that. The old HANDOFF "≤899 K / never 900 K" was the
+> IV-18-only XU_buf-fault dwell, not the worst.)* Each `t_fault_hi` = (cold-start
+> `v_int` ride >3.7 V)/0.916 × ~1.4 (`vint_ride.py`). **Lock per-tube `k_clamp`/
+> `t_relay` and re-confirm `t_relay` against the chosen latching relay's
+> datasheet actuation time, and pick each TLV431's `V_cl` set-resistor, before a
+> production run.**
 
 ---
 
@@ -493,10 +606,14 @@ pre-log sensing), +`XU_atten_buf1` (2-stage divider), Wien moved to its own
 package — i.e. the extra quad is driven by the over-power FWR pair + divider
 buffer, not the Wien.
 
-**Comparators:** `XU_demod_comp` (demod gate, LM393/TLV3201) + supervisor LOW
-& HIGH window comparators + over-power window comparator ≈ **3–4 comparator
-channels** (e.g. 1× LM339 quad). Plus **SN74HC14** inverter (demod
-complementary gate; spare gates can also form the supervisor logic).
+**Comparators & logic (explicit in §6/§8):** demod gate `XU_demod_comp`
+(**TLV3201**, push-pull, single +5 — input-conditioned per §6) · supervisor
+arm/LOW/HIGH + over-power = **4 channels → 1× LM339 quad (U9)** (these run on
+the ±-aware supply and compare against fixed refs, so the LM339 stays) ·
+digital latch/logic = **CD4043B SR latch (U10)**,
+**CD4081B AND (U11)**, **CD4071B OR (U12)**. **No SN74HC14** — the demod's
+complementary gate is internal to each DG419 SPDT (§6); the inverter the earlier
+inventory listed was a sim-primitive artifact and is **dropped**.
 
 > ⚠ This raises the op-amp line item by one quad (~$2–3/tube) vs the BOM
 > estimate. Folded back, cost stays within the ~$20 target. **Action: update
@@ -560,7 +677,7 @@ only the bench-check carry-ins (j) remain open (they need hardware).
 `v_src`→`n_atten_raw`→`v_atten`→`n_h11f_inv`→`v_drv1`→`n_s2_in`→`v_drv`→
 `v_buf_in`→`n_buf_o`→(`q_o_bn`/`q_o_bp`,`n_o_pair_n/p`)→`n_buf_emi`→
 [`Rcs`]→`v_osc_drive`→[**relay**]→`v_bridge_top`→(`node_A`|`node_B`)→
-`v_ap_drive`. Sense: `node_A/B`→`n_node_A_buf/B_buf`→(CD4053B)→
+`v_ap_drive`. Sense: `node_A/B`→`n_node_A_buf/B_buf`→(DG419 ×2)→
 `n_demod_plus/minus`→`n_demod`→`n_demod_dc`→`n_int_minus`→`v_int_raw`→
 `v_int`→`v_int_buf`→(H11F LED)→ sets `R_h11f` → closes loop.
 Protection taps: `v_int` (supervisor), `v_bridge_top`/`v_osc_drive`
