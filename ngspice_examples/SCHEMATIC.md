@@ -449,10 +449,10 @@ combinational/latch logic runs at **+3.3 V with 74HC parts** (74HC works
 over-power refs) come from one **LM4040-4.096 shunt** + resistor dividers
 (§8c gives the E-series values), buffered if loaded. Suggested packages:
 **U9 = LM339 quad comparator** (arm, low, high, over-power),
-**U10 = 74HC279 quad SR latch** (supervisor latch + disconnect latch in one
-package), **U11 = 74HC14 hex Schmitt** (clean-up + qualifier thresholds on the
-low/high/over-power flags), and at most **74HC08/74HC32** for any residual gate
-the wired-AND/diode-OR doesn't cover.
+**U10 = 74HC279 quad SR latch** (arm + supervisor-trip + disconnect latches,
+3 of 4 channels), **U11 = 74HC14 hex Schmitt** (flag clean-up/inversion + qualifier
+thresholds), and **U12 = 74HC10 triple 3-input NAND** for the over-power
+disconnect AND (§8b). Per-block netlists are in §8a/§8b.
 
 **LM339 (U9) power rails — V+ (pin 3) = +12 V or +15 V (whichever rail you
 have), GND (pin 12) = 0 V (system ground).** The open-collector outputs are
@@ -487,9 +487,10 @@ faults). Set each comparator's polarity so it **releases (high) when its
 condition is true**, and the gate disappears into the wiring. **One caveat:** the
 LOW and HIGH qualifiers have different time constants (1 ms vs per-tube τ), so
 **each RC must sit on its own comparator output, before the wired node** — you
-can't qualify after combining. Net result: `(lo OR hi)` and the arm-gating reduce
-to wired connections plus at most one 74HC gate; only the set-dominant **latch**
-(U10, 74HC279) is a real package.
+can't qualify after combining (this is explicit in the §8a netlist). The
+arm-gating is the `Q_arm` MOSFETs and the `(lo OR hi)` OR is the trip-latch
+diode-OR, so the discrete logic reduces to the 74HC279 latch + a 74HC14 + (for
+§8b) one 74HC10.
 
 ### 8a. Dual-sided V_int fault supervisor → oscillator cutoff
 
@@ -498,42 +499,70 @@ Watches the integrator output both ways (every overheating passive fault rails
 `v_ref_hi`=3.7 (off the LM4040 divider).
 
 ```
- OC reality: each LM339 output only SINKS (pulls its node low) in the benign
- state and RELEASES (high-Z) on its event; the +3.3 V PULL-UP sources the cap
- charge. Every "event" below = output releases = its pull-up charges that cap.
-
- ARM   U9a (+)=v_int (−)=1.5 → releases when v_int>1.5 (loop captures)
-       OC ─Rpu 100k→+3.3─►|D_arm├─┬─ n_armed   (peak-detect latch: D_arm blocks on
-                          C_arm 1µF┘ R_arm 10M→0   fall-back, cap holds it armed)
- GATE  arm open-drain (Q_arm) holds the LOW (n_lo) & HIGH (n_hi_raw) OC nodes low
-       until armed → the qualifier only runs once armed (wired-AND, no AND gate)
- LOW   U9b (+)=0.5 (−)=v_int → releases when v_int<0.5 (fault)
-       OC ─R_loq 1k→+3.3──┬─ n_lo  (R_loq IS the pull-up AND the timer, cap on the
-                    C_loq 1µF┘→0    OC node) → τ=1ms → [74HC14] → n_lo_int_L
-       (cap fills via the pull-up only while fault holds; transistor dumps it fast
-        on clear — fast qualify / fast reset, a glitch filter)
- HIGH  U9c (+)=v_int (−)=3.7 → releases when v_int>3.7 (fault)
-       OC ─Rpu 10k→+3.3─ n_hi_raw ─R_hiq─┬─ n_hi_q → [74HC14] → n_hi_int_L
-                            (per-tube)  C_hiq 1µF┘→0  (C0G/film)
-       (the 10k pull-up sources the charge; R_hiq»10k so τ≈R_hiq·C_hiq; the cap
-        node is read by a CMOS Schmitt — nA input, so the ~1.3M node stays
-        leakage-clean, unlike hanging C on the bare OC node)
- TRIP  74HC14 inverts → n_*_int_L are ACTIVE-LOW, matching the 74HC279's active-low
-       S̄: steer both into S̄ via diodes (S̄ low when either flag low = lo OR hi)
-       n_lo_int_L ◄├─┐                                (2×1N4148 into S̄, R_pu on S̄)
-       n_hi_int_L ◄├─┴─ S̄ ─►[74HC279 latch, set-dominant] ─ n_latch
- CUT   n_latch ─► Q_cut (2N7002) ─► disables the Wien (S2) + lights FAULT LED
+* ===================== S8a SUPERVISOR — NETLIST =====================
+* Nets: 0=GND  +3V3=logic  +VC=+12/+15 (LM339 V+)  +5=n_v_led  VREF=4.096
+* 2-terminal:  RefDes  nodeA  nodeB  ; value     (diode: anode  cathode)
+* IC:          RefDes  PART  pin=net …           (every LM339: V+=+VC pin3, GND=0 pin12)
+*
+* -- 4.096 V reference + threshold dividers (0.1 % R; values §8c) --
+R_refb   +5    VREF             ; 3k3   LM4040 bias (~0.9 mA)
+U_ref    LM4040-4.096   K=VREF  A=0
+R_armt   VREF  v_ref_arm        ; 30k1  } v_ref_arm = 1.500 V
+R_armb   v_ref_arm  0           ; 17k4  }
+R_lot    VREF  v_ref_lo         ; 76k8  } v_ref_lo  = 0.500 V
+R_lob    v_ref_lo  0            ; 10k7  }
+R_hit    VREF  v_ref_hi         ; 4k42  } v_ref_hi  = 3.700 V
+R_hib    v_ref_hi  0            ; 41k2  }
+*
+* -- shared clamped copy of v_int (LM339 can't sense below its 0 V GND pin) --
+R_vint   v_int  v_int_cl        ; 100k
+D_vint   0  v_int_cl   BAT54    ; anode 0, cathode v_int_cl → clamps v_int_cl ≥ −0.2 V
+*
+* -- ARM: capture comparator → SR latch (full-rail n_armed, no diode drop) --
+U9a      LM339  in+=v_ref_arm  in-=v_int_cl  out=n_arm_oc   ; OC sinks LOW when v_int>1.5
+R_puarm  +3V3  n_arm_oc         ; 10k
+U10.1    74HC279  Sbar=n_arm_oc  Rbar=n_por  Q=n_armed      ; latches "armed"
+U11d     74HC14   in=n_armed  out=n_armed_b                 ; 279 has no Qbar → invert here
+*
+* -- wired-AND arm gate: hold the LO/HI comparator nodes low until armed --
+Q_arm_lo 2N7002  G=n_armed_b  D=n_lo      S=0
+Q_arm_hi 2N7002  G=n_armed_b  D=n_hi_raw  S=0
+*
+* -- LOW trip (fast 1 ms): the PULL-UP is the timer, cap on the OC node --
+U9b      LM339  in+=v_ref_lo  in-=v_int_cl  out=n_lo        ; OC releases when v_int<0.5
+R_loq    +3V3  n_lo             ; 1k    pull-up = 1 ms timer
+C_loq    n_lo  0                ; 1µF   on the OC node
+U11b     74HC14  in=n_lo  out=n_lo_int_L                    ; active-LOW LOW flag
+*
+* -- HIGH trip (slow per-tube τ): 10k pull-up is the source, R_hiq series into cap --
+U9c      LM339  in+=v_int_cl  in-=v_ref_hi  out=n_hi_raw    ; OC releases when v_int>3.7
+R_puhi   +3V3  n_hi_raw         ; 10k    the current source
+R_hiq    n_hi_raw  n_hi_q       ; per-tube 300k/400k/1M2/1M3  (§8a-i)
+C_hiq    n_hi_q  0              ; 1µF C0G/film     τ = R_hiq·C_hiq
+U11c     74HC14  in=n_hi_q  out=n_hi_int_L                  ; active-LOW HIGH flag
+*
+* -- TRIP latch: diode-OR the active-low flags into the active-low Sbar --
+D_trlo   S_trip  n_lo_int_L  1N4148    ; anode S_trip, cathode flag
+D_trhi   S_trip  n_hi_int_L  1N4148
+R_puset  +3V3  S_trip           ; 100k   S_trip = active-low (lo OR hi)
+U10.2    74HC279  Sbar=S_trip  Rbar=n_por  Q=n_latch        ; latches the trip
+*
+* -- oscillator cutoff + fault LED --
+Q_cut    2N7002  G=n_latch  D=n_wien_kill  S=0   ; disables the Wien osc (S2)
+R_fled   +3V3  n_fled_a         ; 1k
+D_fled   n_fled_a  n_fled_k  LED ; FAULT LED
+Q_fled   2N7002  G=n_latch  D=n_fled_k  S=0
+*
+* -- power-on reset (resets every 74HC279 latch at power-up; starts disarmed) --
+R_por    +3V3  n_por            ; 100k
+C_por    n_por  0               ; 1µF   n_por: 0 → +3V3, ~100 ms reset window
 ```
 
-| RefDes | netlist | part | connections / threshold |
-|---|---|---|---|
-| U9a | `B_arm`/`D_arm`/`C_arm` | **LM339** ¼ + `Rpu` 100 kΩ + 1N4148 + 1 µF | arm comparator: (+)=`v_int`, (−)=`v_ref_arm`(**1.5 V**) → OC **releases (high) when `v_int>1.5`** (capture). The OC needs a **pull-up `Rpu`≈100 kΩ to +3.3 V** to source the charge through `D_arm` into `C_arm`; `D_arm` then blocks on fall-back and `C_arm` 1 µF + `R_arm` 10 MΩ hold `n_armed` latched-high (peak-detect latch). |
-| U9b | `B_lo`,`R_loq`,`C_loq` | LM339 ¼ + ⅙ 74HC14 | LOW trip: (+)=`v_ref_lo`(**0.5 V**), (−)=`v_int` → OC **releases (high) when `v_int<0.5`**. OC can't source, so the **pull-up `R_loq`=1 kΩ to +3.3 V is itself the timer** with `C_loq`=1 µF on the OC node → τ=`t_fault_lo`=**1 ms** (cap fills via the pull-up only while the fault holds; the transistor dumps it fast on clear). 74HC14 Schmitt → `n_lo_int_L` (active-low — 74HC14 inverts). Fast/asymmetric is fine here — a glitch filter; these forward-gain faults over-drive ~50× and heat faster than τ_th. |
-| U9c | `B_hi`,`R_hiq`,`C_hiq` | LM339 ¼ + `Rpu` 10 kΩ + ⅙ 74HC14 | HIGH trip: (+)=`v_int`, (−)=`v_ref_hi`(**3.7 V**) → OC **releases (high) when `v_int>3.7`**. A **10 kΩ pull-up to +3.3 V** makes the OC node a clean 0/+3.3 source (`n_hi_raw`); **`R_hiq` in series then feeds `C_hiq`** (1 µF) — sourced by the pull-up, not the OC. Since `R_hiq` (per-tube 300 k–1.3 M) ≫ 10 kΩ, **τ≈`R_hiq`·`C_hiq`** (PER-TUBE, §8a-i). The high-Z cap node is read by a **74HC14 (CMOS, nA input)** → leakage-clean even at 1.3 MΩ → `n_hi_int_L`. `C_hiq` **C0G/film**. Time-qualified so the cold-start ride doesn't trip. |
-| Q_arm | `B_tr`,`B_tr_hi` (arm factor) | **open-drain (74HC03 ch or small MOSFET)** | the arm latch's open-drain buffer: **holds the LOW (`n_lo`) and HIGH (`n_hi_raw`) OC nodes low until `n_armed` is set**, releasing them once armed. This is the **wired-AND** — `armed·(low)` and `armed·(high)` happen on the wire, replacing the CD4081B AND gates. (It gates each comparator's *output node*, upstream of the HIGH-side qualifier RC.) |
-| Dor | `D_tr`,`D_tr_hi` | **2× 1N4148** into `S̄` (+ `R_pu` on `S̄`) | the flags are **active-low** (`n_lo_int_L`/`n_hi_int_L`), and the 74HC279 `S̄` is active-low, so steer each into `S̄` (anode at `S̄`, cathode at the flag): `S̄` is pulled low when **either** flag is low = `(lo OR hi)`. Replaces the CD4071B OR; the polarity falls out of the 74HC14 inversion. |
-| U10a | `C_lat`,`R_lat` | **¼ 74HC279** SR latch | `S̄` (active-low set) → `n_latch` high; 74HC279 is a quad S̄R̄ latch — one package holds both this and the §8b disconnect latch. Latches on the first qualified trip and stays until power-cycle/reset. |
-| Q_cut | `src_gate` on `B_src` | **2N7002** + fault LED | `n_latch` high → **disable the Wien oscillator** (pull its positive-FB node or gate the +15 V to U6) → filament cools cold-safe; same gate lights a **FAULT LED**. |
+**Notes (rationale not obvious from the netlist):**
+- **LOW is a fast glitch filter** (1 ms, pull-up-timed, asymmetric fast reset) — its forward-gain faults over-drive ~50× and heat faster than τ_th, so speed beats integration. **HIGH is time-qualified** (per-tube τ, §8a-i) so the cold-start `v_int` ride doesn't false-trip.
+- **`v_int_cl` clamp is lossless:** every threshold is ≥ 0.5 V, so a railed-low `v_int` (down to the −3 V floor) still reads ≈ 0 V < 0.5 V and trips LOW correctly; the clamp only protects the LM339 input.
+- **Arm/trip/disconnect latches are three channels of one 74HC279** (the §8b disconnect latch is `U10.3`). The 74HC279 has **no Q̄**, so `U11d` inverts `n_armed` for the gate.
+- **`Q_arm` gates the comparator *output nodes*** (upstream of the HIGH qualifier RC): pre-arm they're held at 0, so neither qualifier can charge; this is the `armed AND fault` wired-AND with no AND gate.
 
 LOW = loss-of-authority / forward-gain faults (atten/buffer; loop fights to the
 low rail, ms-fast). HIGH = sense/setpoint/bridge-ref faults (loop winds to max
@@ -555,35 +584,70 @@ so **`R_hiq = t_fault_hi / 1 µF`**:
 
 `C_hiq` **must be C0G/film** (value-stable): if it derates, τ shrinks toward the
 false-trip floor (`vint_ride.py` floors 205/269/867/926 ms). `R_loq`/`C_loq`
-(LOW, 1 ms) and `C_arm`/`C_lat` are not value-critical.
+(LOW, 1 ms) are not value-critical (the arm and trip latches are now 74HC279
+channels — no timing caps).
 
 ### 8b. Over-power: flat-clamp + authority-gated disconnect
 
 The supervisor's cutoff hits the oscillator **upstream** of a stuck output
 buffer, so it can't isolate *that* fault — hence a second layer on the drive
-node. It **reuses the supervisor's `n_armed`/`n_lo_int`/`n_hi_int`** (so the
-supervisor must be present).
+node. It **reuses the supervisor's `n_armed` and `S_trip`** (= active-low
+`(lo OR hi)`) (so the supervisor must be present).
 
 ```
- CLAMP   v_osc_drive ─┬─[D_clp 1N5711]─► +V_cl  (TLV431 shunt set to +V_cl)
-                      └─[D_cln 1N5711]◄─ −V_cl  (TLV431 shunt set to −V_cl)  (per-tube)
- SENSE   v_bridge_top ─►[precision full-wave rect: XA1op,XA2op + D1op,D2op Schottky]
-                       ─► nAbsop ─R_envop 100k─ n_envop ─C_envop 0.1µF─ 0   (10 ms env)
- OPF     U9d (+)=(−n_envop) (−)=v_ref_op(k_overpower·V_op) ─► n_opf   (HIGH = over-power)
- DISC    U11c AND( n_armed , n_opf , [n_lo_int OR n_hi_int] ) ─►[SR latch ½U10] n_disc_op
- RELAY   n_disc_op ─► Q_coil (logic-FET) ─► LATCHING RELAY coil   (t_relay≈7 ms)
-         relay CONTACT:  v_osc_drive ─/ ─ v_bridge_top   (opens cold-safe; replaces R_series)
+* ===================== S8b OVER-POWER — NETLIST =====================
+* reuses S8a nets: n_armed, S_trip (= active-low (lo OR hi)), n_por, +VC, +3V3
+* the FWR runs on the ±10 OPA4277 rails (vcc_buf/vee_buf); U9d on +VC/0
+*
+* -- per-tube bidirectional flat clamp on v_osc_drive to ±V_cl (§8b-i) --
+*    +V_cl: TLV431 shunt set by divider; −V_cl: unity inverter of +V_cl.
+*    ILC1-1/7 V_cl > rail → clamp idle there (rail-clip + disconnect bound it).
+R_clpb   +VC  p_Vcl             ; TLV431 bias
+U_clp    TLV431  K=p_Vcl  R=n_clref  A=0
+R_clp1   p_Vcl  n_clref         ; } V_cl = 1.24·(1+R_clp1/R_clp2)   (§8b-i)
+R_clp2   n_clref  0             ; }
+XU_cln   OPA4277  in+=0  in-=n_clni  out=n_Vcl    ; −V_cl = −(+V_cl)
+R_cli1   p_Vcl  n_clni          ; } equal Rs → gain −1
+R_cli2   n_clni  n_Vcl          ; }
+D_clp    v_osc_drive  p_Vcl  1N5711   ; clamps v_osc_drive ≤ +V_cl
+D_cln    n_Vcl  v_osc_drive  1N5711   ; clamps v_osc_drive ≥ −V_cl
+*
+* -- precision full-wave rectifier on v_bridge_top → +|drive| --
+*    validated sim FWR; D1op/D2op REVERSED vs the sim so the output is POSITIVE
+*    (flipping both rectifier diodes flips the sign — confirm in sim/bench)
+R1op     v_bridge_top  nAop     ; 10k
+R2op     nAop  nBop             ; 10k
+XA1op    OPA4277  in+=0  in-=nAop  out=nO1op
+D1op     nBop  nO1op  1N5711    ; (reversed vs sim → +output)
+D2op     nO1op  nAop  1N5711
+R3op     v_bridge_top  nCop     ; 10k
+R4op     nBop  nCop             ; 5k
+R5op     nCop  nAbsop           ; 10k
+XA2op    OPA4277  in+=0  in-=nCop  out=nAbsop     ; = +|v_bridge_top|
+R_env    nAbsop  n_envop        ; 100k  } 10 ms envelope
+C_env    n_envop  0             ; 0.1µF }
+*
+* -- over-power comparator (per-tube ref §8b-i/§8c) --
+U9d      LM339  in+=n_envop  in-=v_ref_op  out=n_opf    ; OC releases when |drive|>v_ref_op
+R_puopf  +3V3  n_opf            ; 10k
+*
+* -- authority-gated disconnect: DISC = n_opf AND n_armed AND (lo OR hi) --
+U11e     74HC14  in=S_trip  out=n_lohi                  ; active-HIGH (lo OR hi)
+U_dnand  74HC10  a=n_armed  b=n_opf  c=n_lohi  y=S_disc ; 3-in NAND → low when all 3 high
+U10.3    74HC279  Sbar=S_disc  Rbar=n_por  Q=n_disc_op  ; latches the disconnect
+*
+* -- bistable-relay drive + series disconnect contact --
+Q_coil   AO3400  G=n_disc_op  D=n_coil  S=0    ; pulse the relay SET coil
+K_coil   +VC  n_coil   "relay SET coil"        ; ~7 ms actuation (t_relay)
+D_fly    n_coil  +VC   1N4148                  ; coil flyback (cathode +VC)
+K_cont   v_osc_drive  v_bridge_top  "relay contact"  ; latches OPEN on SET; replaces R_series
 ```
 
-| block | netlist | part | connections / value |
-|---|---|---|---|
-| **flat-clamp** | `D_clp_op`,`D_cln_op`,`V_clp_op`,`V_cln_op` | **2× TLV431 active shunt** (per-tube ref) + 2× **1N5711** Schottky, or a bidirectional flat-clamp TVS | bounds the **instantaneous** drive on `v_osc_drive` to ±`V_cl` → fault peak is independent of relay lag. **`V_cl = k_clamp·V_op·√2·(R_op+R_sense)/R_op`, k_clamp=1.5** (table §8b-i). |
-| over-power FWR | `R1op`,`R2op`,`R3op`,`R4op`,`R5op`,`D1op`,`D2op`,`XA1op`,`XA2op` | **precision full-wave rectifier**: 2 OPA4277 ch + 2 Schottky (1N5711) | senses `v_bridge_top`. Stage 1 `XA1op` (R1op/R2op=10 k/10 k, D1op/D2op) → half-wave; Stage 2 `XA2op` (R3op/R5op=10 k/10 k, R4op=5 k summing) → `nAbsop` = −\|drive\|. |
-| envelope | `R_envop`,`C_envop` | 100 kΩ / 0.1 µF | `nAbsop→n_envop→0`, τ≈10 ms peak-hold of the rectified drive. |
-| over-power comp | `B_opf` | **LM339 ¼ (U9d)** | (+)=`−n_envop` (magnitude), (−)=`v_ref_op`(**k_overpower·V_op, k=1.3**) → `n_opf` HIGH when the rectified drive exceeds 1.3·V_op (table §8b-i). |
-| disconnect logic | `B_discset_op`,`D_disc_op`,`C_disc_op` | **wired-AND + diode-OR + ¼ 74HC279 SR latch (U10b)** | **DISCONNECT = `n_opf` AND `n_armed` AND (`n_lo_int` OR `n_hi_int`)** → `n_disc_op`. Reuse the supervisor's already-gated `n_lo_int`/`n_hi_int` (each is `armed AND fault` from §8a's wired-AND): diode-OR them, then a single 74HC AND with `n_opf` (or wire `n_opf`'s open-collector onto the OR node) → SET the second 74HC279 latch. The `(lo OR hi)` term is the **authority discriminator**: a *commanded* over-power (warm-up) has `v_int` mid-range (neither rail) → benign, no disconnect; a *fault* over-power rails `v_int` → latches. |
-| relay drive | `B_coil_op`,`R_coil_op`,`C_coil_op` | **logic-level MOSFET** (e.g. 2N7002 / AO3400) + flyback diode | `n_disc_op` high → drive the **bistable (latching) relay** SET coil. `R_coil_op·C_coil_op` models the ~`t_relay`=7 ms actuation lag (contact opens ≈0.69·t_relay after latch). |
-| **disconnect** | `S_disc_op` (`.model SWdisc_op`) | **latching (bistable) relay contact** | series in `v_osc_drive ↔ v_bridge_top`; opens for **cold-safe isolation** and **replaces `R_series`** (§4). Bistable so it stays open with no holding current after a fault. |
+**Notes:**
+- **Flat-clamp** bounds the *instantaneous* drive to ±`V_cl` so the fault peak is independent of relay lag; `V_cl = k_clamp·V_op·√2·(R_op+R_sense)/R_op`, k_clamp=1.5 (§8b-i).
+- **Authority discriminator:** the `(lo OR hi)` term distinguishes a *commanded* over-power (warm-up — `v_int` mid-range, no disconnect) from a *fault* over-power (`v_int` railed → disconnect). It reuses the supervisor's `S_trip` (= active-low `(lo OR hi)`) and `n_armed`.
+- **Clamp + disconnect compound:** the clamp caps the *peak rate*, the bistable disconnect caps the *dwell* — the relay opens cold-safe and stays open with no holding current (replaces `R_series`, §4).
+- `XA1op`/`XA2op`/`XU_cln` are OPA4277 channels (in the §10 quad count); the FWR sign is set by the `D1op`/`D2op` orientation — drawn here for `+|drive|`.
 
 #### 8b-i. Per-tube clamp & over-power references
 
@@ -709,11 +773,11 @@ Recounted from the **shipping** netlist (`switch_demod=True,
 overpower_protect=True`) — this **supersedes** the BOM's "3 quads + 1
 comparator", which predates protection and still counts the removed `XU_log`.
 
-**OPA4277 op-amp channels (13):**
+**OPA4277 op-amp channels (14):**
 `XU_atten_buf1`(NEW), `XU_atten_buf, XU_vgain, XU_s2, XU_buf` (5) · `XU_buf_A,
 XU_buf_B, XU_demod_da` (3) · `XU_int, XU_aw_diff, XU_led_buf` (3) ·
-**over-power FWR `XA1op, XA2op`** (2) = **13 channels → 4 quad packages
-(U1–U4)** (16 ch, 3 spare), *up from 3 quads.*
+**over-power FWR `XA1op, XA2op`** (2) + **clamp −V_cl inverter `XU_cln`** (1, §8b)
+= **14 channels → 4 quad packages (U1–U4)** (16 ch, 2 spare), *up from 3 quads.*
 The **Wien op-amp is NOT an OPA4277** — it is a dedicated **NE5532 (U6) on
 ±15 V** (§2). Net change vs the original 3-quad BOM: −`XU_log` (removed by
 pre-log sensing), +`XU_atten_buf1` (2-stage divider), Wien moved to its own
@@ -724,11 +788,13 @@ buffer, not the Wien.
 (**TLV3201**, push-pull, single +5 — input-conditioned per §6) · supervisor
 arm/LOW/HIGH + over-power = **4 channels → 1× LM339 quad (U9)** (V+=+12/+15 V/
 GND=0 V, open-collector outputs pulled to **+3.3 V**; rails justified in §8a) ·
-digital latch = **74HC279 quad SR latch (U10)** — supervisor + disconnect latches
-in one package. The AND/OR products are done by the comparators' **open-collector
-wired-AND + a 1N4148 diode-OR** (§8a), so the only residual gates are at most one
-**74HC08/32 (U11)**; **the CD4000-series (CD4043/4081/4071) is dropped** — 74HC at
-+3.3 V replaces it. **No SN74HC14** either — the demod's complementary gate is
+digital latch = **74HC279 quad SR latch (U10)** — arm + supervisor-trip +
+disconnect latches in one package (§8a). The AND/OR products are done by the
+**`Q_arm` MOSFET wired-AND + a 1N4148 diode-OR** (§8a); the only logic ICs are
+**74HC14 hex Schmitt (U11)** (flag clean-up/inversion + qualifier thresholds) and
+**74HC10 (U12)** for the §8b disconnect AND. **The CD4000-series
+(CD4043/4081/4071) is dropped** — 74HC at +3.3 V replaces it. **No SN74HC14** as a
+demod inverter either — the demod's complementary gate is
 internal to each DG419 SPDT (§6); the inverter the earlier inventory listed was a
 sim-primitive artifact and is **dropped**.
 
