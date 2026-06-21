@@ -305,8 +305,10 @@ taps onto the +/− inputs of a difference amplifier. Wire it exactly as below.
    │                          R_hyst 10M (n_demod_ref→n_pr_in, ~±50 mV hysteresis)          │
    │                        ┌──────────────────────────────────────────┐                    │
    │ v_osc_drive ─R_pr 100k─┴─ n_pr_in ─►(+)│U5a TLV3201│ out ──────────┴─ n_demod_ref ─► both DG419 INs
-   │                  │BAT54S│ clamp n_pr_in │  push-pull │  (0/+5, NO pull-up)             │
-   │                  └ to 0 / +5 ─┘    0 ──►(−)│         │                                  │
+   │                        │   (push-pull, 0/+5, NO pull-up)                                │
+   │            BAT54S clamp │  pin1=GND ─▶├─ pin2(centre)=n_pr_in ─▶├─ pin3=+5             │
+   │            (centre tap  │   D1: GND→node (clamps −ve half)   D2: node→+5 (clamps +ve)  │
+   │             = n_pr_in)  │            0 ──►(−)│U5a│                                       │
    │  V+ = +5   V− = 0(GND)   →  out HIGH when v_osc_drive ≥ 0   (40 ns: phase err ≪1° @1kHz)│
    └────────────────────────────────────────────────────────────────────────────────────────┘
        2× Vishay DG419 SPDT  — V+(6)=+5  V−(4)=−5  GND(8)=0  VL(5)=+5
@@ -335,7 +337,7 @@ taps onto the +/− inputs of a difference amplifier. Wire it exactly as below.
 
 | RefDes | netlist | part | pins / nets |
 |---|---|---|---|
-| U5a | `XU_demod_comp` | **TLV3201** push-pull comparator (single, SC70/SOT23-5) | Phase reference (carrier zero-cross). **V+=+5, V−=GND(0)**; rail-to-rail **push-pull output → drives both DG419 `IN`s directly, NO pull-up** (drops the LM393's open-collector pull-up). OUT=`n_demod_ref` HIGH when `v_osc_drive ≥ 0`; 40 ns prop delay → commutation-edge phase error ≪1° at 1 kHz (DG419 logic 1 ≥ 2.4 V / 0 ≤ 0.8 V — full-rail swing clears both). **Input conditioning (required):** TLV3201 is single-supply (V_S ≤ 5.5 V) and **cannot take the raw ±`v_osc_drive`** (±8.5 V on ILC1-1/7). Wire `v_osc_drive`→**`R_pr` 100 kΩ**→`n_pr_in` = (+) input; clamp `n_pr_in` to 0/+5 with a **BAT54S** dual-Schottky (R_pr limits clamp current to ≪0.1 mA); (−)=`0`. Add **`R_hyst` ~10 MΩ** `n_demod_ref`→`n_pr_in` for ~±50 mV hysteresis — TLV3201 has none internally, so this gives one clean edge per zero-crossing. |
+| U5a | `XU_demod_comp` | **TLV3201** push-pull comparator (single, SC70/SOT23-5) | Phase reference (carrier zero-cross). **V+=+5, V−=GND(0)**; rail-to-rail **push-pull output → drives both DG419 `IN`s directly, NO pull-up** (drops the LM393's open-collector pull-up). OUT=`n_demod_ref` HIGH when `v_osc_drive ≥ 0`; 40 ns prop delay → commutation-edge phase error ≪1° at 1 kHz (DG419 logic 1 ≥ 2.4 V / 0 ≤ 0.8 V — full-rail swing clears both). **Input conditioning (required):** TLV3201 is single-supply (V_S ≤ 5.5 V) and **cannot take the raw ±`v_osc_drive`** (±8.5 V on ILC1-1/7). Wire `v_osc_drive`→**`R_pr` 100 kΩ**→`n_pr_in` = (+) input; clamp `n_pr_in` to 0/+5 with a **BAT54S** series dual-Schottky — **centre tap (pin 2) = `n_pr_in`, pin 1 → GND, pin 3 → +5 V** (the series/centre-tapped part is the correct two-rail clamp: D1 GND→node clamps the −ve half, D2 node→+5 clamps the +ve half; a common-cathode **BAT54C** would face both diodes the same way and clamp only one rail — wrong here). R_pr limits clamp current to ≪0.1 mA; (−)=`0`. Add **`R_hyst` ~10 MΩ** `n_demod_ref`→`n_pr_in` for ~±50 mV hysteresis — TLV3201 has none internally, so this gives one clean edge per zero-crossing. |
 | U8a | `S_dp1`,`S_dp2` | **Vishay DG419** SPDT (PLUS line) | D(1)=`n_demod_plus`; **S1(3)=`n_node_A_buf`** (selected IN=0, v_osc<0 half), **S2(2)=`n_node_B_buf`** (selected IN=1, v_osc≥0 half); IN(7)=`n_demod_ref`. Supplies **V+(6)=+5, V−(4)=−5, GND(8)=0, VL(5)=+5**. |
 | U8b | `S_dm1`,`S_dm2` | **Vishay DG419** SPDT (MINUS line) | D(1)=`n_demod_minus`; **S1(3)=`n_node_B_buf`** (IN=0), **S2(2)=`n_node_A_buf`** (IN=1); IN(7)=`n_demod_ref`. Same supply pins as U8a. |
 | — | `R_dp_gnd`,`R_dm_gnd` | 1 % | **1 MΩ** each, `n_demod_plus→0` and `n_demod_minus→0` (DC bias for the switched commons). |
@@ -551,6 +553,36 @@ where the flat-clamp does the work.
 > `t_relay` and re-confirm `t_relay` against the chosen latching relay's
 > datasheet actuation time, and pick each TLV431's `V_cl` set-resistor, before a
 > production run.**
+
+### 8c. Threshold reference generation (from one LM4040-4.096)
+
+All comparator thresholds (§8a arm/LOW/HIGH + §8b over-power) divide down from a
+single **LM4040-4.096** shunt reference (`Vref`=4.096 V, A-grade ±0.1 %), each
+through a two-resistor divider `Vref─[Rtop]─node─[Rbot]─0`,
+`V = 4.096·Rbot/(Rtop+Rbot)`. Optimal E-series pairs (`safety_refs_eseries.py`,
+total held 40–100 kΩ → ~41–102 µA ref load, node `Rth` 4–23 kΩ for the LM339
+inputs). **Use 0.1 % resistors** — the *ratio* sets the threshold, so 0.1 % parts
+give the nominal below; thresholds are fault windows with built-in margin, so the
+small E-series residuals are immaterial.
+
+| threshold | target | **E96** Rtop/Rbot → V (err) | **E24** Rtop/Rbot → V (err) |
+|---|---|---|---|
+| `v_ref_lo` (LOW, all) | 0.500 | 76.8 k / 10.7 k → 0.5009 (+0.18 %) | 36 k / 5.1 k → 0.5083 (+1.65 %) |
+| `v_ref_arm` (ARM, all) | 1.500 | 30.1 k / 17.4 k → 1.5004 (+0.03 %) | 62 k / 36 k → 1.5047 (+0.31 %) |
+| `v_ref_hi` (HIGH, all) | 3.700 | 4.42 k / 41.2 k → 3.6991 (−0.02 %) | 5.1 k / 47 k → 3.6950 (−0.13 %) |
+| `v_ref_op` (IV-6 / IV-18) | 1.300 | 49.9 k / 23.2 k → 1.3000 (−0.003 %) | 43 k / 20 k → 1.3003 (+0.02 %) |
+| `v_ref_op` (ILC1-1/8) | 1.560 | 27.4 k / 16.9 k → 1.5626 (+0.17 %) | 39 k / 24 k → 1.5604 (+0.02 %) |
+| `v_ref_op`/2 (ILC1-1/7) ‡ | 3.250 | 13.3 k / 51.1 k → 3.2501 (+0.003 %) | 16 k / 62 k → 3.2558 (+0.18 %) |
+
+‡ **ILC1-1/7's over-power threshold is 1.3·V_op = 6.50 V, above `Vref`** — not
+divider-realisable. Instead **halve the FWR envelope** (`n_envop` through a
+matched 2:1 divider, e.g. 2×10 k) and compare against a **3.25 V** reference
+(the row above); the trip point is then 2·3.25 = 6.50 V as required. The other
+tubes compare the envelope directly (no pre-divide). The supervisor refs and the
+two low-V over-power refs are shared/global; only `v_ref_op` (+ the ILC1-1/7
+envelope divider) is per-tube. The `V_cl` flat-clamp levels (§8b-i) are **not**
+from this divider — they are each set by the TLV431's own 1.24 V reference and
+set-resistor.
 
 ---
 
