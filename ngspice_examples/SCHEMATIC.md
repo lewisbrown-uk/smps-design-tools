@@ -113,6 +113,9 @@ amplitude-clamped Wien from `wien_bridge_biased.cir`:
 
 **Wien nets:** `out` (oscillator output ≡ sim `v_src`), `ns`, `np`, `nn`, `fb`, `b1`, `b2`.
 Positive-FB: `out→R1→ns→C1→np→R2→0`, `C2 np→0`. Op-amp `XU1(+)=np, (−)=nn, out=out`.
+**Fault cutoff:** the protection supervisor's `Q_cut` (§8a) ties to **`np`** — on a
+latched fault it shorts `np` to GND, collapsing the loop gain and stopping the
+carrier (filament cools cold-safe).
 Neg-FB clamp: `Rg nn→0`, `Rfa nn→fb`, `Rfb fb→out`, `Q1(C=fb,B=b1,E=out)`, `Q2(C=out,B=b2,E=fb)`.
 
 > **Rails = ±15 V, op-amp = NE5532 (decision §11-f):** ship the oscillator
@@ -548,7 +551,7 @@ R_puset  +3V3  S_trip           ; 100k   S_trip = active-low (lo OR hi)
 U10.2    74HC279  Sbar=S_trip  Rbar=n_por  Q=n_latch        ; latches the trip
 *
 * -- oscillator cutoff + fault LED --
-Q_cut    2N7002  G=n_latch  D=n_wien_kill  S=0   ; disables the Wien osc (S2)
+Q_cut    2N7002  G=n_latch  D=np  S=0   ; shorts the Wien +FB node np (§2) → kills the 1kHz carrier
 R_fled   +3V3  n_fled_a         ; 1k
 D_fled   n_fled_a  n_fled_k  LED ; FAULT LED
 Q_fled   2N7002  G=n_latch  D=n_fled_k  S=0
@@ -563,6 +566,7 @@ C_por    n_por  0               ; 1µF   n_por: 0 → +3V3, ~100 ms reset window
 - **`v_int_cl` clamp is lossless:** every threshold is ≥ 0.5 V, so a railed-low `v_int` (down to the −3 V floor) still reads ≈ 0 V < 0.5 V and trips LOW correctly; the clamp only protects the LM339 input.
 - **Arm/trip/disconnect latches are three channels of one 74HC279** (the §8b disconnect latch is `U10.3`). The 74HC279 has **no Q̄**, so `U11d` inverts `n_armed` for the gate.
 - **`Q_arm` gates the comparator *output nodes*** (upstream of the HIGH qualifier RC): pre-arm they're held at 0, so neither qualifier can charge; this is the `armed AND fault` wired-AND with no AND gate.
+- **Cutoff (`Q_cut`)** is the hardware form of the sim's `src_gate` (carrier × 0 on latch). Its drain ties to the **Wien `np` node in §2** (cross-sheet net) — shorting the positive-feedback / non-inverting input to GND collapses the loop gain and stops the 1 kHz carrier, so the filament drive goes to zero (cold-safe). The Wien feed Rs (R1/R2 = 10 k) limit the short to <0.4 mA. *(Alternative if you prefer a hard kill: make `Q_cut` a high-side load-switch gating +15 V to the NE5532 instead — but that's a P-FET to the supply, not the low-side N-FET shown.)*
 
 LOW = loss-of-authority / forward-gain faults (atten/buffer; loop fights to the
 low rail, ms-fast). HIGH = sense/setpoint/bridge-ref faults (loop winds to max
