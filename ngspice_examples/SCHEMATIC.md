@@ -88,10 +88,13 @@ sense). In hardware all op-amp/buffer +rails tie to one `vcc_buf` star and
 −rails to `vee_buf`. The `R_sense_*` resistors exist only so the sim can
 read rail current; they are **not parts.**
 
-**Clamp references** (used by S7) — `V_clamp_hi=+4.0 V`, `V_clamp_lo=−0.5 V`:
-- **Behavioural→real:** ideal V-sources in sim. **Adopted (§11-i): [−3 V, +6 V]
-  window via LM4040 shunt refs** (wider than the sim −0.5/+4.0 for corner /
-  low-power-tube headroom).
+**Clamp references** (used by S7 anti-windup) — **adopted window [−3 V, +6 V]**
+(the sim macromodel used −0.5/+4.0; widened for corner / low-power-tube headroom
+and to clear the +3.7 V HIGH watchdog — §11-i):
+- **Behavioural→real:** ideal V-sources in sim → **buffered dividers off the
+  regulated ±10 V rails** (the full generation + E-series values are in **§7**:
+  +6 V = 100 k/150 k off VCC, −3 V = 39 k/91 k off VEE, each via an OPA4277
+  follower). A clamp ceiling needs only rail tolerance, so no shunt reference.
 
 ---
 
@@ -403,8 +406,12 @@ stage** (removed in the pre-log fix; the gain is folded into `R_int`).
 ### Saturator + back-calc anti-windup
 
 ```
- v_int_raw ─R_aw_out 10─ v_int ─┬─ D_aw_hi ─► v_clamp_hi(+4)
-                                └─ D_aw_lo ◄─ v_clamp_lo(−0.5)
+ v_int_raw ─R_aw_out 10─ v_int ─┬─ D_aw_hi ─►|─ v_clamp_hi (+6 V)
+                                └─ D_aw_lo ─|◄─ v_clamp_lo (−3 V)
+ ADOPTED window [−3 V, +6 V]  (supersedes the sim −0.5/+4.0; §1, §11-i) —
+   v_clamp_hi:  VCC(+10) ─R_chT 100k─ n_chi ─R_chB 150k─ 0   → XU_clh follower → +6.00 V
+   v_clamp_lo:  0 ─R_clB 39k─ n_clo ─R_clT 91k─ VEE(−10)     → XU_cll follower → −3.00 V
+   (E24, off the regulated ±10 rails; BUFFERED so the ref stays stiff when D_aw conducts)
  diff amp (×1): R_diff1 v_int→n_aw_diff_minus 100k ; R_diff2 v_int_raw→n_aw_diff_plus 100k ;
                 R_diff3 n_aw_diff_minus→e_sat 100k ; R_diff4 n_aw_diff_plus→0 100k ;
                 XU_aw_diff(+)=n_aw_diff_plus,(−)=n_aw_diff_minus,out=e_sat = v_int_raw−v_int
@@ -414,9 +421,22 @@ stage** (removed in the pre-log fix; the gain is folded into `R_int`).
 |---|---|---|---|
 | U3b | `XU_aw_diff` | OPA4277 ch | unity diff amp → `e_sat` |
 | Raw | `R_aw_out` | 1 % | 10 Ω |
-| Daw | `D_aw_hi`,`D_aw_lo` | **BAT54** (low V_F) or 1N4148 | clamp diodes (`stiff_clamp` ⇒ sharp-knee low-Rs) |
+| Daw | `D_aw_hi`,`D_aw_lo` | **BAT54** (low V_F) or 1N4148 | clamp diodes (`stiff_clamp` ⇒ sharp-knee low-Rs). Clamp to **`v_clamp_hi`=+6 V / `v_clamp_lo`=−3 V** (adopted window, below). |
 | Rdiff | `R_diff1..4` | 0.1–1 % match | 100 kΩ ×4 |
 | Rbc | `R_bc` | 1 % | **2.49 kΩ** (E96; = R_int/20) |
+| Rch | `R_chT`/`R_chB` | 1 % | **100 kΩ / 150 kΩ** — +6 V divider off VCC(+10) (E24, exact) |
+| Rcl | `R_clB`/`R_clT` | 1 % | **39 kΩ / 91 kΩ** — −3 V divider off VEE(−10) (E24, exact) |
+| U_clh,U_cll | `XU_clh`,`XU_cll` | OPA4277 ch | unity followers buffering the two dividers → stiff `v_clamp_hi`/`v_clamp_lo` (the 2 remaining channels of the 4-quad count, §10) |
+
+> **Clamp window = [−3 V, +6 V] (adopted, §11-i) — NOT the sim −0.5/+4.0.** The
+> sim macromodel used `v_clamp_hi=+4.0`, `v_clamp_lo=−0.5`; the **shipping window
+> is widened to [−3, +6]** so the high rail clears the HIGH watchdog (+3.7 V) and
+> the cold-start `v_int` ride with margin (the clamp must not bite during a
+> legitimate ride), and the low rail clears the −0.85 V loss-of-authority rail.
+> Generated as **buffered dividers off the regulated ±10 V rails** (above) — a
+> clamp ceiling needs no better than rail tolerance, so no shunt reference is
+> required. *(Earlier text said "LM4040 shunt refs"; the buffered-divider form
+> here is the realisation — §1 updated to match.)*
 
 ### H11F LED drive (buffered — current bypasses anti-windup R)
 
@@ -606,9 +626,9 @@ node. It **reuses the supervisor's `n_armed` and `S_trip`** (= active-low
 * -- per-tube bidirectional flat clamp on v_osc_drive to ±V_cl (§8b-i) --
 *    +V_cl: TLV431 shunt set by divider; −V_cl: unity inverter of +V_cl.
 *    ILC1-1/7 V_cl > rail → clamp idle there (rail-clip + disconnect bound it).
-R_clpb   +VC  p_Vcl             ; TLV431 bias
+R_clpb   +15V  p_Vcl            ; TLV431 bias (~1 mA); +15V for ILC1-1/7 headroom
 U_clp    TLV431  K=p_Vcl  R=n_clref  A=0
-R_clp1   p_Vcl  n_clref         ; } V_cl = 1.24·(1+R_clp1/R_clp2)   (§8b-i)
+R_clp1   p_Vcl  n_clref         ; } V_cl = 1.24·(1+R_clp1/R_clp2)   values §8b-i
 R_clp2   n_clref  0             ; }
 XU_cln   OPA4277  in+=0  in-=n_clni  out=n_Vcl    ; −V_cl = −(+V_cl)
 R_cli1   p_Vcl  n_clni          ; } equal Rs → gain −1
@@ -668,6 +688,22 @@ K_cont   v_osc_drive  v_bridge_top  "relay contact"  ; latches OPEN on SET; repl
 rail clip + the disconnect (not the shunt clamp) bound the fault; the TLV431 is
 still fitted but only acts under a rail-overshoot corner. The low-V tubes are
 where the flat-clamp does the work.
+
+**TLV431 +V_cl generator values** (`V_cl = 1.24·(1+R_clp1/R_clp2)`, V_ref=1.24 V;
+the −V_cl rail is the `XU_cln` unity inverter, equal 1 kΩ Rs; `R_clpb` biases the
+shunt from +15 V at ~1 mA). E24/E96 from `clamp_refs_eseries.py`:
+
+| tube | V_cl | **E24** `R_clp1`/`R_clp2` | **E96** `R_clp1`/`R_clp2` | `R_clpb` (+15 V) |
+|---|---|---|---|---|
+| ILC1-1/7 ‡ | 12.6 | 22 k / 2.4 k | 18.7 k / 2.05 k | 2.4 k |
+| **IV-6** | 2.66 | **15 k / 13 k** | 10.7 k / 9.31 k | **12 k** |
+| IV-18 | 2.33 | 16 k / 18 k | 16.5 k / 18.7 k | 13 k |
+| ILC1-1/8 | 3.18 | 47 k / 30 k | 21.5 k / 13.7 k | 12 k |
+
+The divider total is held ~20–80 kΩ so its current (≲130 µA) doesn't starve the
+TLV431 cathode — `R_clpb` then sets ~1 mA of shunt current with the divider
+drawing only a fraction. ‡ ILC1-1/7's divider runs a bit hotter (516 µA) but it
+never actually clamps, so the ~0.5 mA left for the shunt is fine.
 
 > Clamp + disconnect **compound**: the clamp caps the *rate* (instantaneous
 > peak), the disconnect caps the *dwell* (time at temperature). With the
@@ -777,11 +813,14 @@ Recounted from the **shipping** netlist (`switch_demod=True,
 overpower_protect=True`) — this **supersedes** the BOM's "3 quads + 1
 comparator", which predates protection and still counts the removed `XU_log`.
 
-**OPA4277 op-amp channels (14):**
+**OPA4277 op-amp channels (16):**
 `XU_atten_buf1`(NEW), `XU_atten_buf, XU_vgain, XU_s2, XU_buf` (5) · `XU_buf_A,
 XU_buf_B, XU_demod_da` (3) · `XU_int, XU_aw_diff, XU_led_buf` (3) ·
-**over-power FWR `XA1op, XA2op`** (2) + **clamp −V_cl inverter `XU_cln`** (1, §8b)
-= **14 channels → 4 quad packages (U1–U4)** (16 ch, 2 spare), *up from 3 quads.*
+**clamp-window followers `XU_clh, XU_cll`** (2, §7) · **over-power FWR
+`XA1op, XA2op`** (2) + **clamp −V_cl inverter `XU_cln`** (1, §8b)
+= **16 channels → 4 quad packages (U1–U4)** (fully populated, 0 spare), *up from
+3 quads.* The clamp-window buffers take the last two channels — if you'd rather
+keep spares, generate the ±-window with shunt refs instead of buffered dividers.
 The **Wien op-amp is NOT an OPA4277** — it is a dedicated **NE5532 (U6) on
 ±15 V** (§2). Net change vs the original 3-quad BOM: −`XU_log` (removed by
 pre-log sensing), +`XU_atten_buf1` (2-stage divider), Wien moved to its own
@@ -842,8 +881,11 @@ only the bench-check carry-ins (j) remain open (they need hardware).
   (IV-18/IV-6/ILC1-1/7/ILC1-1/8). Still **re-confirm `t_relay`
   against the chosen latching relay's datasheet** and pick the TLV431 per-tube
   `V_cl` resistor (§8b) at PCB time.
-- **(i) Clamp-ref window — ✅ ADOPTED [−3 V, +6 V]** via LM4040 shunt refs
-  (§1), wider than sim −0.5/+4.0 for corner / low-power headroom.
+- **(i) Clamp-ref window — ✅ ADOPTED [−3 V, +6 V]** via **buffered ±10 V-rail
+  dividers** (§7: +6 V=100 k/150 k off VCC, −3 V=39 k/91 k off VEE, each on an
+  OPA4277 follower), wider than sim −0.5/+4.0 for corner / low-power headroom and
+  to clear the +3.7 V HIGH watchdog. *(The window values live in §7 now, not just
+  §1/§11 — that gap is what let a build use the sim −0.5/+4.0.)*
 - **(j) Bench-check carry-ins (unchanged):** Wien amplitude tempco / >60 °C
   death cliff (needs airflow/separation); H11F R(I_LED) at the real operating
   point; filament-R spread vs the constant-V assumption.
@@ -869,3 +911,70 @@ only the bench-check carry-ins (j) remain open (they need hardware).
 `v_int`→`v_int_buf`→(H11F LED)→ sets `R_h11f` → closes loop.
 Protection taps: `v_int` (supervisor), `v_bridge_top`/`v_osc_drive`
 (over-power). Rails: `vcc_buf`(+10), `vee_buf`(−10), `n_v_led`(+5).
+
+---
+
+## 13. Power budget & supply tree (USB-C bus-powered)
+
+**Input — USB-C, 5 V, passive sink (no PD).** Rd (5.1 kΩ) on CC1/CC2; VBUS = 5 V
+at **up to 3 A** per the source's Rp advertisement. No PD controller. (PD@20 V is
+reserved for the full multi-function VFD driver, where one high rail bucks down
+to everything and shrinks the anode-boost ratio — out of scope for this board.)
+
+### 13a. Rail tree
+
+| rail | source | feeds |
+|---|---|---|
+| **+5 V** | **VBUS direct** (ferrite + bulk cap; no converter) | logic (74HC), LM339 pull-ups, LM4040 ref, H11F LED, TLV3201 |
+| **+15 V** | **boost** from +5 V | NE5532 Wien; source for +12 / +10 LDOs |
+| **−15 V** | **inverting** buck-boost from +5 V | source for −10 LDO |
+| **+12 V** | **LDO** from +15 V | G5V-1 relay coil, LM339 |
+| **±10 V** | **LDO** from ±15 V | all 16 OPA4277 channels + the class-AB output stage |
+
+The negative rail is inherent to the bipolar signal chain, so the −15 inverter is
+unavoidable. The +15→±10 LDO drop is mildly wasteful (≈⅓ on that branch) but
+**chosen for simplicity** — at USB-C power levels it only costs heat (§13c), and
+it avoids re-tuning the Wien clamp that a direct-switched ±10 rail would force.
+
+### 13b. Measured ±10 rail current (per tube)
+
+From `rail_budget.py` — `regulator.py` instrumented (`R_sense_vcc/vee`), steady
+state, 16-channel board, **THD-validated** (ILC1-1/7 −35.2 dB ≈ the validated
+−34.7 dB → the operating point and hence these currents are the real ones; the
+`instrument_power` ammeters don't perturb the drive):
+
+| tube | THD | P_fil | +10 mean / peak | −10 mean / peak |
+|---|---|---|---|---|
+| IV-18 | −57 dB | 10 mW | 22 / 29 mA | 25 / 31 mA |
+| **IV-6** | −54 dB † | 50 mW | **40 / 85 mA** | **43 / 87 mA** |
+| ILC1-1/8 | −52 dB | 179 mW | 85 / 228 mA | 88 / 230 mA |
+| ILC1-1/7 | −35 dB | 1001 mW | 111 / 311 mA | 114 / 314 mA |
+
+The **peaks are the 1 kHz carrier** — sourced by the ±10 LDO output caps, not the
+converters (which see the mean). † IV-6's behavioural-demod run reads −54 dB; the
+shipping switched-demod (DG419) THD is the validated **−47.5 dB** (chopper-ripple
+floor) — same operating point, same currents.
+
+### 13c. VBUS budget & heat (per tube, G5V-1 relay = 150 mW)
+
+VBUS current at 5 V = boost-in (+15 branch) + inverter-in (−15 branch) + +5 direct
+(η_boost ≈ 0.88, η_inv ≈ 0.85). LDO heat = drop × branch current.
+
+| tube | **VBUS @ 5 V** | input power | ±10 LDO heat |
+|---|---|---|---|
+| IV-18 | ~0.28 A | ~1.4 W | ~0.2 W |
+| **IV-6 (this board)** | **~0.41 A** | **~2.0 W** | **~0.45 W** |
+| ILC1-1/8 | ~0.72 A | ~3.6 W | ~0.85 W |
+| ILC1-1/7 | ~0.90 A | ~4.5 W | ~1.1 W |
+
+**IV-6 sits at ~0.41 A (14 % of a 3 A port)** with ~0.45 W of linear heat — well
+within budget, no heatsinking of the LDOs needed. The boost (~64 mA / 1 W out)
+and inverter (~51 mA / 0.76 W out) are small, easy parts.
+
+> ⚠ **If this board is ever populated for ILC1-1/7**, the ±10 LDOs dissipate
+> ~1.1 W (and VBUS ~0.9 A) — there, switch +10 directly (a buck) or heatsink.
+> The low-V tubes (the realistic builds here) don't need it.
+
+Harnesses: `rail_budget.py` (per-tube measured rail current + THD),
+`clamp_refs_eseries.py` (TLV431 / clamp-window dividers), `safety_refs_eseries.py`
+(LM4040 threshold dividers).
